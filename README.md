@@ -1,131 +1,24 @@
-# MLB Telegram Alert Agent
+# MLB Stats Bot
 
-Bot Telegram sederhana untuk cek alert pre-game MLB: jadwal, probable pitcher, stats inti, persentase kemenangan, dan alasan singkat.
+MLB Stats Bot adalah bot Telegram untuk membantu membaca slate pertandingan MLB secara cepat. Bot ini mengambil data MLB, menghitung baseline prediction, lalu memberi ruang untuk Analyst Agent berbasis LLM agar membuat analisa final yang lebih kontekstual.
 
-## Setup
+Output utama bot:
 
-1. Buat bot lewat Telegram `@BotFather`, lalu ambil token.
-2. Isi minimal di `.env`:
+- Pre-game alert setiap pertandingan.
+- Persentase kemenangan tiap tim.
+- Alasan pick dari Analyst Agent.
+- Analisa "Will there be a run in the 1st inning?" atau YRFI/NRFI.
+- Post-game recap dan memory learning.
+- Tanya jawab interaktif di Telegram.
 
-```env
-TELEGRAM_BOT_TOKEN=isi_token_botfather
-TELEGRAM_CHAT_ID=isi_chat_id_opsional
-TIMEZONE=Asia/Jakarta
-```
+> Catatan: bot ini adalah alat analisa dan edukasi. Probabilitas yang ditampilkan adalah estimasi model, bukan kepastian hasil.
 
-Cara paling mudah dapat `TELEGRAM_CHAT_ID`: jalankan bot, kirim `/chatid` di Telegram.
+## Cara Kerja
 
-## Jalan
-
-```bash
-npm start
-```
-
-Untuk test sekali tanpa polling:
-
-```bash
-npm run once
-```
-
-Jika `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_CHAT_ID` diisi, mode `once` akan kirim alert ke Telegram. Kalau belum, output dicetak ke terminal.
-
-## Command Telegram
-
-- `/start` atau `/help` - lihat command.
-- `/today` - alert game hari ini.
-- `/deep` - alert hari ini dengan advanced stats.
-- `/date 2026-04-27` - alert tanggal tertentu.
-- `/game Yankees` - cari game tim tertentu hari ini.
-- `/ask kenapa Yankees dipilih?` - tanya Analyst Agent.
-- Pesan biasa tanpa slash juga dianggap pertanyaan ke Agent.
-- `/agent` - lihat status Analyst Agent.
-- `/skill` - lihat playbook analisa Agent.
-- `/postgame 2026-04-27` - cek hasil final, bandingkan pick, lalu update memory.
-- `/memory` - lihat akurasi dan learning terakhir.
-- `/subscribe` - chat ini akan menerima auto-alert.
-- `/unsubscribe` - berhenti auto-alert.
-- `/sendalert` - kirim alert hari ini ke semua subscriber.
-- `/chatid` - tampilkan chat id.
-
-## Auto Alert
-
-Aktifkan di `.env`:
-
-```env
-AUTO_ALERTS=true
-DAILY_ALERT_TIME=20:00
-```
-
-Bot akan mengirim alert harian sesuai `TIMEZONE`.
-
-## Interaktif Di Telegram
-
-Aktif secara default:
-
-```env
-INTERACTIVE_AGENT=true
-PRINT_ALERT_TO_TERMINAL=false
-```
-
-Contoh chat:
+Alur sederhana:
 
 ```text
-/ask game mana yang edge-nya paling kuat hari ini?
-/ask upset risk terbesar?
-/ask bandingkan Yankees vs Rangers
-kenapa Dodgers dipilih?
-```
-
-Terminal hanya dipakai untuk log. Kalau ingin debug dan mencetak alert ke terminal:
-
-```env
-PRINT_ALERT_TO_TERMINAL=true
-```
-
-## Post-game Recap & Memory
-
-Aktif secara default:
-
-```env
-POST_GAME_ALERTS=true
-POST_GAME_POLL_MINUTES=5
-MODEL_MEMORY=true
-```
-
-Cara kerjanya:
-
-1. Saat pre-game alert dibuat, pick disimpan ke `data/state.json`.
-2. Bot mengecek game yang sudah final setiap `POST_GAME_POLL_MINUTES`.
-3. Kalau hasil final tersedia, bot mengirim recap post-game.
-4. Jika pick salah, memory menyimpan error dan memberi adjustment kecil untuk prediksi berikutnya.
-
-Memory hanya dipakai sebagai bias kecil, bukan pengganti stats utama.
-
-## Detail Alert
-
-Default-nya ringkas. Untuk selalu menampilkan advanced stats:
-
-```env
-ALERT_DETAIL=full
-```
-
-Kalau tetap `compact`, kamu masih bisa pakai `/deep` dari Telegram kapan saja.
-
-## OpenAI Opsional
-
-Kalau ingin Analyst Agent membuat pick final:
-
-```env
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4.1-mini
-ANALYST_AGENT=true
-ANALYST_AGENT_MODE=local
-```
-
-Alurnya:
-
-```text
-MLB stats + standings + H2H + memory
+MLB StatsAPI
   -> baseline model
   -> Analyst Agent
   -> Telegram alert
@@ -133,27 +26,329 @@ MLB stats + standings + H2H + memory
   -> memory update
 ```
 
-Jika agent aktif, alert menampilkan `🤖 Agent` sebagai probabilitas final dan `📐 Baseline` sebagai pembanding. Post-game memory mengevaluasi pick agent.
+Data yang dianalisa:
 
-Agent memakai playbook `mlb-analyst-v1.0` di [docs/analyst-playbook.md](E:/AI/MLB/docs/analyst-playbook.md). Playbook ini menekankan process-over-results, run creation, run prevention, starter edge, H2H sebagai tie-breaker kecil, dan memory sebagai kalibrasi ringan.
+- Schedule, venue, probable pitcher.
+- Team batting dan pitching.
+- Standings, home/road, last 10, streak, run differential, expected W-L.
+- Head-to-head musim berjalan.
+- First inning scored/allowed profile.
+- Bullpen fatigue 3 hari terakhir.
+- Starting pitcher last 5 starts.
+- Splits vs LHP/RHP.
+- Post-game memory dari pick sebelumnya.
 
-Setiap game juga punya analisa:
+## Fitur Utama
+
+- Telegram bot command-based dan chat interaktif.
+- Analyst Agent dengan playbook `mlb-analyst-v1.0`.
+- Support OpenAI-compatible API key.
+- Support OpenRouter-style model seperti `openai/gpt-4o-mini`.
+- Auto-alert harian.
+- Post-game recap otomatis.
+- Memory learning untuk full-game pick dan YRFI/NRFI.
+- Terminal hanya untuk log, bukan output utama.
+
+## Requirements
+
+- Node.js `18.15+`
+- Git
+- Telegram bot token dari `@BotFather`
+- OpenAI/OpenRouter API key jika ingin memakai Analyst Agent
+
+Tidak perlu install dependency tambahan karena bot memakai Node.js built-in `fetch`.
+
+## Install Dari GitHub
+
+Clone repository:
+
+```bash
+git clone https://github.com/grahito12/MLB-Stats-Bot.git
+cd MLB-Stats-Bot
+```
+
+Cek versi Node:
+
+```bash
+node --version
+```
+
+Cek syntax project:
+
+```bash
+npm run check
+```
+
+## Setup Telegram Bot
+
+1. Buka Telegram.
+2. Chat ke `@BotFather`.
+3. Kirim command:
+
+```text
+/newbot
+```
+
+4. Ikuti instruksi sampai mendapat bot token.
+5. Copy `.env.example` menjadi `.env`.
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Linux/macOS:
+
+```bash
+cp .env.example .env
+```
+
+6. Isi token di `.env`:
+
+```env
+TELEGRAM_BOT_TOKEN=isi_token_botfather
+```
+
+7. Jalankan bot:
+
+```bash
+npm start
+```
+
+8. Buka bot Telegram kamu, kirim:
+
+```text
+/chatid
+```
+
+9. Copy angka chat id ke `.env`:
+
+```env
+TELEGRAM_CHAT_ID=123456789
+```
+
+10. Restart bot:
+
+```bash
+npm start
+```
+
+## Konfigurasi .env
+
+Minimal:
+
+```env
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TIMEZONE=Asia/Jakarta
+```
+
+Analyst Agent:
+
+```env
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
+OPENAI_MODEL=gpt-4.1-mini
+ANALYST_AGENT=true
+ANALYST_AGENT_MODE=local
+```
+
+Jika memakai OpenRouter:
+
+```env
+OPENAI_API_KEY=sk-or-...
+OPENAI_MODEL=openai/gpt-4o-mini
+```
+
+Auto-alert:
+
+```env
+AUTO_ALERTS=true
+DAILY_ALERT_TIME=20:00
+```
+
+Post-game learning:
+
+```env
+POST_GAME_ALERTS=true
+POST_GAME_POLL_MINUTES=5
+MODEL_MEMORY=true
+```
+
+Interaktif di Telegram:
+
+```env
+INTERACTIVE_AGENT=true
+PRINT_ALERT_TO_TERMINAL=false
+```
+
+Detail alert:
+
+```env
+ALERT_DETAIL=compact
+```
+
+atau:
+
+```env
+ALERT_DETAIL=full
+```
+
+## Menjalankan Bot
+
+Mode polling Telegram:
+
+```bash
+npm start
+```
+
+Test sekali:
+
+```bash
+npm run once
+```
+
+Validasi syntax:
+
+```bash
+npm run check
+```
+
+Jika `PRINT_ALERT_TO_TERMINAL=false`, terminal hanya menampilkan log ringkas. Output utama dikirim ke Telegram.
+
+## Command Telegram
+
+```text
+/start
+/help
+/today
+/deep
+/date 2026-04-27
+/game Yankees
+/ask game mana yang edge-nya paling kuat hari ini?
+/agent
+/skill
+/postgame 2026-04-27
+/memory
+/subscribe
+/unsubscribe
+/sendalert
+/chatid
+```
+
+Kamu juga bisa langsung bertanya tanpa slash:
+
+```text
+kenapa Dodgers dipilih?
+upset risk terbesar hari ini?
+bandingkan Yankees vs Rangers
+```
+
+## Contoh Output
+
+```text
+MLB Pre-game Alert
+2026-04-27
+
+━━━━━━━━━━━━━━━━━━━━
+
+Yankees @ Rangers
+
+────────────
+Probabilitas
+Agent: NYY 70% | TEX 30%
+Baseline: NYY 70% | TEX 30%
+
+────────────
+Pick Agent: New York Yankees
+
+────────────
+Context
+- NYY 18-10, L10 8-2, road 10-5
+- TEX 14-14, L10 5-5, home 6-6
+
+Bullpen
+- NYY bullpen fatigue high
+- TEX bullpen fatigue medium
+
+First Inning
+Will there be a run in the 1st? YES / YRFI 54%
+```
+
+## Analyst Agent
+
+Agent memakai playbook:
+
+```text
+mlb-analyst-v1.0
+```
+
+Playbook ada di:
+
+```text
+docs/analyst-playbook.md
+```
+
+Prinsip analisa:
+
+- Baseline model hanya prior.
+- Agent boleh override baseline jika data mendukung.
+- Pisahkan process vs noisy outcome.
+- Starter recent form penting.
+- Bullpen fatigue memengaruhi risk.
+- H2H dipakai hati-hati karena sample kecil.
+- First inning dianalisa terpisah dari full-game pick.
+- Memory adalah sinyal kecil, bukan penentu utama.
+
+## First Inning / YRFI-NRFI
+
+Setiap game punya pertanyaan:
 
 ```text
 Will there be a run in the 1st inning?
-YES / YRFI atau NO / NRFI
 ```
 
-Sinyalnya berasal dari riwayat team scored/allowed first inning, recent first-inning any-run, H2H first inning, dan starter hari itu.
+Verdict:
 
-Agent juga menerima sinyal tambahan:
+- `YES / YRFI`: ada kecenderungan run di inning pertama.
+- `NO / NRFI`: condong tidak ada run di inning pertama.
 
-- Bullpen fatigue 3 hari terakhir: pitch count, IP, back-to-back relievers, high-pitch relievers.
-- Starting pitcher recent form: last 5 starts, ERA, WHIP, K/BB, HR, average pitches.
-- Team splits vs handedness: record vs LHP/RHP dan home/road split sesuai starter lawan.
-- Dashboard memory: akurasi full-game pick, confidence bucket, dan YRFI/NRFI.
+Sinyal yang dipakai:
 
-Kalau kamu punya agent eksternal sendiri:
+- Team scored 1st inning.
+- Team allowed 1st inning.
+- Recent any-run first inning.
+- H2H first-inning run.
+- Starting pitcher hari itu.
+
+## Post-game Memory
+
+Saat game final:
+
+1. Bot membaca hasil akhir.
+2. Membandingkan pick agent vs winner aktual.
+3. Membandingkan YRFI/NRFI vs first inning aktual.
+4. Menyimpan hasil ke `data/state.json`.
+5. Mengirim post-game recap ke Telegram.
+
+Cek memory:
+
+```text
+/memory
+```
+
+Memory yang disimpan:
+
+- Full-game accuracy.
+- Accuracy per confidence bucket.
+- YRFI/NRFI accuracy.
+- Recent learning log.
+- Bias kecil per team.
+
+## External Agent Mode
+
+Jika kamu punya AI Agent sendiri lewat API:
 
 ```env
 ANALYST_AGENT_MODE=external
@@ -161,7 +356,16 @@ ANALYST_AGENT_URL=http://localhost:8000/mlb/analyze
 ANALYST_AGENT_API_KEY=
 ```
 
-Endpoint eksternal menerima JSON berisi `games`, `memory`, dan kontrak output. Balikan yang diharapkan:
+Endpoint akan menerima JSON berisi:
+
+- `task`
+- `skillVersion`
+- `analystPlaybook`
+- `memory`
+- `games`
+- `outputContract`
+
+Expected response:
 
 ```json
 {
@@ -174,17 +378,73 @@ Endpoint eksternal menerima JSON berisi `games`, `memory`, dan kontrak output. B
       "confidence": "medium",
       "reasons": ["..."],
       "risk": "...",
-      "memoryNote": "..."
+      "memoryNote": "...",
+      "firstInning": {
+        "pick": "YES",
+        "probability": 54,
+        "confidence": "medium",
+        "reasons": ["..."],
+        "risk": "..."
+      }
     }
   ]
 }
 ```
 
-## Sumber Data
+## File Penting
 
-- MLB schedule/probable pitcher/team stats/standings: `statsapi.mlb.com`
-- Telegram Bot API: `core.telegram.org/bots/api`
-- OpenAI Responses API: `platform.openai.com/docs/api-reference/responses`
-- Referensi endpoint GitHub: `github.com/toddrob99/MLB-StatsAPI/wiki/Endpoints`
+```text
+src/index.js          Bot Telegram, scheduler, command handler
+src/mlb.js            Data MLB, baseline model, formatter alert
+src/llm.js            Analyst Agent local/external
+src/storage.js        Memory dan state
+src/telegram.js       Telegram Bot API wrapper
+src/analystSkill.js   Analyst playbook prompt
+docs/analyst-playbook.md
+.env.example          Template konfigurasi
+```
 
-Stats tambahan yang dipakai: L10, home/road record, run differential, expected W-L, streak, H2H record/probability, first-inning scored/allowed/recent/H2H profile, bullpen fatigue, pitcher recent starts, splits vs LHP/RHP, post-game outcome memory, ISO, K%, BB%, pitching K-BB%, HR/9, SP ERA/WHIP.
+## Data Sources
+
+- MLB StatsAPI: schedule, standings, team stats, boxscore, linescore.
+- Telegram Bot API.
+- OpenAI-compatible API.
+- MLB-StatsAPI GitHub endpoint references.
+- FanGraphs/Statcast concepts for analyst playbook.
+
+## Security
+
+Jangan commit `.env`.
+
+File ini sudah di-ignore:
+
+```text
+.env
+data/*.json
+node_modules/
+*.log
+```
+
+Jika API key pernah terlanjur ter-upload, segera revoke key tersebut dan buat key baru.
+
+## Troubleshooting
+
+Bot tidak membalas:
+
+- Pastikan `npm start` masih berjalan.
+- Cek `TELEGRAM_BOT_TOKEN`.
+- Kirim `/chatid` dan isi `TELEGRAM_CHAT_ID`.
+- Pastikan chat id kamu ada di `ALLOWED_CHAT_IDS` jika fitur itu dipakai.
+
+Agent tidak muncul:
+
+- Pastikan `ANALYST_AGENT=true`.
+- Pastikan `OPENAI_API_KEY` terisi.
+- Pastikan model cocok dengan provider.
+
+Post-game tidak jalan:
+
+- Pastikan pre-game alert sudah dibuat sebelum game final.
+- Pastikan `POST_GAME_ALERTS=true`.
+- Cek `/postgame YYYY-MM-DD`.
+
