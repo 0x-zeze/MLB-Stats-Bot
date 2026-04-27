@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { loadConfig } from './config.js';
 import { ANALYST_SKILL_VERSION, buildAnalystSkillSummary } from './analystSkill.js';
 import {
@@ -23,6 +24,7 @@ function helpText() {
     '/deep - alert hari ini dengan advanced stats',
     '/date YYYY-MM-DD - alert tanggal tertentu',
     '/game TEAM - cek tim tertentu hari ini',
+    '/predict HOME | AWAY | odds_opsional - jalankan Python ML prediction',
     '/ask pertanyaan - tanya Analyst Agent',
     'Atau kirim pertanyaan biasa tanpa slash.',
     '/agent - lihat status Analyst Agent',
@@ -105,6 +107,111 @@ async function sendAlert(bot, chatId, dateYmd, options = {}) {
   const text = await buildAlert(dateYmd, options);
   await bot.sendMessage(chatId, text);
   console.log(`Alert ${dateYmd} sent to ${chatId}.`);
+}
+
+function predictionHelpText() {
+  return [
+    'Format: /predict HOME | AWAY | odds_opsional',
+    '',
+    'Contoh:',
+    '/predict Los Angeles Dodgers | New York Yankees',
+    '/predict Los Angeles Dodgers | New York Yankees | -120',
+    '/predict Los Angeles Dodgers | New York Yankees | decimal 1.91',
+    '',
+    'Catatan: command ini memakai Python ML engine dan sample CSV lokal di folder data/.'
+  ].join('\n');
+}
+
+function parsePredictCommand(text) {
+  const payload = text.replace(/^\/predict(?:@\S+)?\s*/i, '').trim();
+  if (!payload) return null;
+
+  const parts = payload
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length < 2) return null;
+
+  const [home, away, rawOdds] = parts;
+  let odds = '';
+  let oddsFormat = 'american';
+
+  if (rawOdds) {
+    const decimalMatch = rawOdds.match(/^(decimal|dec)\s+(.+)$/i);
+    if (decimalMatch) {
+      oddsFormat = 'decimal';
+      odds = decimalMatch[2].trim();
+    } else {
+      odds = rawOdds;
+    }
+  }
+
+  return { home, away, odds, oddsFormat };
+}
+
+function runPythonPrediction({ home, away, odds, oddsFormat }) {
+  return new Promise((resolve, reject) => {
+    const args = ['-m', 'src.predict', '--home', home, '--away', away];
+    if (odds) {
+      args.push('--home-odds', odds, '--odds-format', oddsFormat);
+    }
+
+    const child = spawn(config.pythonExecutable, args, {
+      cwd: process.cwd(),
+      env: process.env,
+      windowsHide: true
+    });
+
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('Python prediction timeout. Coba lagi atau cek PYTHON_BIN.'));
+    }, 20_000);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve(stdout.trim());
+        return;
+      }
+      reject(new Error((stderr || stdout || `Python exited with code ${code}`).trim()));
+    });
+  });
+}
+
+function formatPythonPredictionOutput(output) {
+  return [
+    '📊 MLB Python Prediction',
+    '',
+    output,
+    '',
+    '⚠️ Estimasi model, bukan jaminan hasil atau betting advice.'
+  ].join('\n');
+}
+
+async function sendPythonPrediction(bot, chatId, text) {
+  const request = parsePredictCommand(text);
+  if (!request) {
+    await bot.sendMessage(chatId, predictionHelpText());
+    return;
+  }
+
+  await bot.sendMessage(chatId, `Menjalankan Python prediction: ${request.away} @ ${request.home}...`);
+  const output = await runPythonPrediction(request);
+  await bot.sendMessage(chatId, formatPythonPredictionOutput(output));
+  console.log(`Python prediction handled for ${chatId}: ${request.away} @ ${request.home}.`);
 }
 
 async function sendAlertToAll(bot, dateYmd) {
@@ -370,6 +477,11 @@ async function handleMessage(bot, message) {
     }
 
     await sendAlert(bot, chatId, dateInTimezone(config.timezone), { teamFilter });
+    return;
+  }
+
+  if (command === '/predict') {
+    await sendPythonPrediction(bot, chatId, text);
     return;
   }
 

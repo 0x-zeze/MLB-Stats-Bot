@@ -241,6 +241,26 @@ Dengan odds market:
 python -m src.predict --home "Los Angeles Dodgers" --away "New York Yankees" --home-odds -120
 ```
 
+Jalankan dari Telegram:
+
+```text
+/predict Los Angeles Dodgers | New York Yankees
+/predict Los Angeles Dodgers | New York Yankees | -120
+/predict Los Angeles Dodgers | New York Yankees | decimal 1.91
+```
+
+Format Telegram:
+
+```text
+/predict HOME | AWAY | odds_home_opsional
+```
+
+Jika Python di mesin kamu bukan `python`, atur di `.env`:
+
+```env
+PYTHON_BIN=python
+```
+
 Output berisi:
 
 ```text
@@ -318,6 +338,8 @@ Catatan: ini bukan betting advice. MLB punya variance tinggi, dan probabilitas m
 /deep
 /date 2026-04-27
 /game Yankees
+/predict Los Angeles Dodgers | New York Yankees
+/predict Los Angeles Dodgers | New York Yankees | -120
 /ask game mana yang edge-nya paling kuat hari ini?
 /agent
 /skill

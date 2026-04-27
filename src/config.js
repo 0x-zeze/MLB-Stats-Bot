@@ -70,6 +70,7 @@ export function loadConfig() {
     interactiveAgent: boolFromEnv(process.env.INTERACTIVE_AGENT, true),
     printAlertToTerminal: boolFromEnv(process.env.PRINT_ALERT_TO_TERMINAL, false),
     maxGamesPerMessage: intFromEnv(process.env.MAX_GAMES_PER_MESSAGE, 8),
+    pythonExecutable: process.env.PYTHON_BIN || 'python',
     openai: {
       apiKey: process.env.OPENAI_API_KEY || '',
       baseUrl: process.env.OPENAI_BASE_URL || '',
