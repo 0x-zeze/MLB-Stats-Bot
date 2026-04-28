@@ -11,9 +11,10 @@ import { dateInTimezone } from './utils.js';
 
 const config = loadConfig();
 const storage = new Storage();
-const port = Number.parseInt(process.env.DASHBOARD_PORT || '3008', 10);
+const port = config.dashboard?.port || 3008;
 const rootDir = resolve(process.cwd(), 'dashboard');
 const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8'));
+let activeServer = null;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -362,7 +363,8 @@ function serveStatic(request, response, url) {
   createReadStream(filePath).pipe(response);
 }
 
-const server = createServer(async (request, response) => {
+function createDashboardServer() {
+  return createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
   if (url.pathname.startsWith('/api/')) {
     const handled = await routeApi(request, response, url);
@@ -372,9 +374,50 @@ const server = createServer(async (request, response) => {
 
   serveStatic(request, response, url);
 });
+}
 
-server.listen(port, () => {
-  const entry = fileURLToPath(import.meta.url);
-  console.log(`MLB dashboard running at http://localhost:${port}`);
-  console.log(`Server: ${entry}`);
-});
+export function startDashboard({ enabled = config.dashboard?.enabled !== false } = {}) {
+  if (!enabled) {
+    console.log('MLB dashboard disabled. Set DASHBOARD_ENABLED=true to enable it.');
+    return Promise.resolve(null);
+  }
+
+  if (activeServer) return Promise.resolve(activeServer);
+
+  activeServer = createDashboardServer();
+  return new Promise((resolveStart, rejectStart) => {
+    activeServer.once('error', (error) => {
+      activeServer = null;
+      rejectStart(error);
+    });
+    activeServer.listen(port, () => {
+      const entry = fileURLToPath(import.meta.url);
+      console.log(`MLB dashboard running at http://localhost:${port}`);
+      console.log(`Dashboard server: ${entry}`);
+      resolveStart(activeServer);
+    });
+  });
+}
+
+export function stopDashboard() {
+  if (!activeServer) return Promise.resolve();
+  return new Promise((resolveStop, rejectStop) => {
+    activeServer.close((error) => {
+      if (error) {
+        rejectStop(error);
+        return;
+      }
+      activeServer = null;
+      resolveStop();
+    });
+  });
+}
+
+const isDirectRun = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  startDashboard().catch((error) => {
+    console.error(`Dashboard failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+}

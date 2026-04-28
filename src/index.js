@@ -16,6 +16,7 @@ import {
 import { Storage } from './storage.js';
 import { TelegramBot } from './telegram.js';
 import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils.js';
+import { startDashboard } from './dashboard.js';
 
 const config = loadConfig();
 const storage = new Storage();
@@ -1291,6 +1292,10 @@ async function main() {
     await runOnce();
     return;
   }
+
+  await startDashboard({ enabled: config.dashboard.enabled }).catch((error) => {
+    console.error(`Dashboard tidak bisa start: ${error.message}`);
+  });
 
   const bot = new TelegramBot(config.telegramToken);
   startScheduler(bot);

@@ -244,7 +244,13 @@ Project ini juga punya dashboard lokal untuk memantau semua modul yang sudah dib
 - Knowledge base sabermetrics.
 - Status Telegram, OpenAI key, Analyst Agent, dan auto-alert.
 
-Jalankan:
+Secara default dashboard ikut menyala saat menjalankan bot:
+
+```bash
+npm start
+```
+
+Kalau hanya ingin menjalankan dashboard tanpa bot Telegram:
 
 ```bash
 npm run dashboard
@@ -265,7 +271,14 @@ http://IP-VPS-KAMU:3008
 Port bisa diganti di `.env`:
 
 ```env
+DASHBOARD_ENABLED=true
 DASHBOARD_PORT=3008
+```
+
+Untuk mematikan dashboard saat `npm start`:
+
+```env
+DASHBOARD_ENABLED=false
 ```
 
 Mode dashboard:

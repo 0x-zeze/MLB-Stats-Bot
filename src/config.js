@@ -71,6 +71,10 @@ export function loadConfig() {
     printAlertToTerminal: boolFromEnv(process.env.PRINT_ALERT_TO_TERMINAL, false),
     maxGamesPerMessage: intFromEnv(process.env.MAX_GAMES_PER_MESSAGE, 8),
     pythonExecutable: process.env.PYTHON_BIN || 'python',
+    dashboard: {
+      enabled: boolFromEnv(process.env.DASHBOARD_ENABLED, true),
+      port: intFromEnv(process.env.DASHBOARD_PORT, 3008)
+    },
     openai: {
       apiKey: process.env.OPENAI_API_KEY || '',
       baseUrl: process.env.OPENAI_BASE_URL || '',
