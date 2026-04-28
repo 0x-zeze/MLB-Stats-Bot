@@ -73,6 +73,7 @@ export function loadConfig() {
     pythonExecutable: process.env.PYTHON_BIN || 'python',
     dashboard: {
       enabled: boolFromEnv(process.env.DASHBOARD_ENABLED, true),
+      host: process.env.DASHBOARD_HOST || '0.0.0.0',
       port: intFromEnv(process.env.DASHBOARD_PORT, 3008)
     },
     openai: {

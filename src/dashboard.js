@@ -12,6 +12,7 @@ import { dateInTimezone } from './utils.js';
 const config = loadConfig();
 const storage = new Storage();
 const port = config.dashboard?.port || 3008;
+const host = config.dashboard?.host || '0.0.0.0';
 const rootDir = resolve(process.cwd(), 'dashboard');
 const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8'));
 let activeServer = null;
@@ -390,9 +391,10 @@ export function startDashboard({ enabled = config.dashboard?.enabled !== false }
       activeServer = null;
       rejectStart(error);
     });
-    activeServer.listen(port, () => {
+    activeServer.listen(port, host, () => {
       const entry = fileURLToPath(import.meta.url);
       console.log(`MLB dashboard running at http://localhost:${port}`);
+      console.log(`MLB dashboard network bind: http://${host}:${port}`);
       console.log(`Dashboard server: ${entry}`);
       resolveStart(activeServer);
     });

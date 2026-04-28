@@ -272,6 +272,7 @@ Port bisa diganti di `.env`:
 
 ```env
 DASHBOARD_ENABLED=true
+DASHBOARD_HOST=0.0.0.0
 DASHBOARD_PORT=3008
 ```
 
@@ -280,6 +281,23 @@ Untuk mematikan dashboard saat `npm start`:
 ```env
 DASHBOARD_ENABLED=false
 ```
+
+Jika `http://localhost:3008` berhasil di VPS tetapi `http://IP-VPS-KAMU:3008` loading terus, biasanya port belum terbuka ke publik. Cek:
+
+```bash
+ss -ltnp | grep 3008
+```
+
+Output yang benar harus mengarah ke `0.0.0.0:3008` atau `:::3008`, bukan hanya `127.0.0.1:3008`.
+
+Lalu buka firewall VPS:
+
+```bash
+sudo ufw allow 3008/tcp
+sudo ufw status
+```
+
+Jika memakai provider seperti AWS, DigitalOcean, Vultr, Hostinger, atau lainnya, pastikan inbound/security group juga membuka TCP port `3008`.
 
 Mode dashboard:
 
