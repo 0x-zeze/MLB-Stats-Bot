@@ -147,6 +147,8 @@ function compactGameForAgent(item) {
     injuries: item.injuries,
     injurySummary: item.injuryLine,
     injuryDetails: item.injuryDetailLines,
+    lineupSummary: item.lineupLine,
+    lineups: item.lineups,
     pitcherRecent: item.pitcherRecentLine,
     pitcherRecentDetail: item.pitcherRecent,
     advanced: item.advancedLine,

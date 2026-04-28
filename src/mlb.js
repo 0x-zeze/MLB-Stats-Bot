@@ -12,6 +12,39 @@ const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const GAME_SEPARATOR = '━━━━━━━━━━━━━━━━━━━━';
 const SECTION_SEPARATOR = '────────────';
 const TOTAL_RUN_LINES = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
+const DEFAULT_MARKET_TOTAL = 8.5;
+const PARK_FACTOR_BASELINES = new Map([
+  [108, { runFactor: 1.0, homeRunFactor: 1.02, label: 'Angel Stadium' }],
+  [109, { runFactor: 1.0, homeRunFactor: 1.02, label: 'Chase Field' }],
+  [110, { runFactor: 0.96, homeRunFactor: 0.94, label: 'Camden Yards' }],
+  [111, { runFactor: 1.06, homeRunFactor: 0.98, label: 'Fenway Park' }],
+  [112, { runFactor: 1.01, homeRunFactor: 1.04, label: 'Wrigley Field' }],
+  [113, { runFactor: 1.04, homeRunFactor: 1.14, label: 'Great American Ball Park' }],
+  [114, { runFactor: 0.98, homeRunFactor: 0.97, label: 'Progressive Field' }],
+  [115, { runFactor: 1.15, homeRunFactor: 1.12, label: 'Coors Field' }],
+  [116, { runFactor: 0.98, homeRunFactor: 0.96, label: 'Comerica Park' }],
+  [117, { runFactor: 0.99, homeRunFactor: 1.01, label: 'Daikin Park' }],
+  [118, { runFactor: 1.02, homeRunFactor: 0.96, label: 'Kauffman Stadium' }],
+  [119, { runFactor: 0.99, homeRunFactor: 1.02, label: 'Dodger Stadium' }],
+  [120, { runFactor: 1.0, homeRunFactor: 1.0, label: 'Nationals Park' }],
+  [121, { runFactor: 0.97, homeRunFactor: 0.98, label: 'Citi Field' }],
+  [133, { runFactor: 0.98, homeRunFactor: 0.98, label: 'Athletics home park' }],
+  [134, { runFactor: 0.99, homeRunFactor: 0.94, label: 'PNC Park' }],
+  [135, { runFactor: 0.96, homeRunFactor: 0.96, label: 'Petco Park' }],
+  [136, { runFactor: 0.94, homeRunFactor: 0.95, label: 'T-Mobile Park' }],
+  [137, { runFactor: 0.94, homeRunFactor: 0.9, label: 'Oracle Park' }],
+  [138, { runFactor: 0.98, homeRunFactor: 0.97, label: 'Busch Stadium' }],
+  [139, { runFactor: 0.98, homeRunFactor: 0.99, label: 'Tropicana Field' }],
+  [140, { runFactor: 1.02, homeRunFactor: 1.04, label: 'Globe Life Field' }],
+  [141, { runFactor: 1.0, homeRunFactor: 1.03, label: 'Rogers Centre' }],
+  [142, { runFactor: 0.99, homeRunFactor: 1.0, label: 'Target Field' }],
+  [143, { runFactor: 1.03, homeRunFactor: 1.08, label: 'Citizens Bank Park' }],
+  [144, { runFactor: 1.01, homeRunFactor: 1.04, label: 'Truist Park' }],
+  [145, { runFactor: 1.01, homeRunFactor: 1.05, label: 'Rate Field' }],
+  [146, { runFactor: 0.95, homeRunFactor: 0.93, label: 'loanDepot park' }],
+  [147, { runFactor: 1.01, homeRunFactor: 1.08, label: 'Yankee Stadium' }],
+  [158, { runFactor: 0.99, homeRunFactor: 1.02, label: 'American Family Field' }]
+]);
 const DEFAULTS = {
   rpg: 4.4,
   ops: 0.72,
@@ -109,6 +142,57 @@ function firstInningPickText(firstInning) {
   const probability = firstInning?.agent?.probability ?? firstInning?.baselineProbability ?? 50;
   const label = pick === 'YES' ? 'YES / YRFI' : 'NO / NRFI';
   return `${label} ${percent(probability)}`;
+}
+
+function totalProbabilityRows(label, probabilities) {
+  const first = TOTAL_RUN_LINES.slice(0, 3)
+    .map((line) => `${line} ${percent(probabilities?.[String(line)] || 0)}`)
+    .join(' | ');
+  const second = TOTAL_RUN_LINES.slice(3)
+    .map((line) => `${line} ${percent(probabilities?.[String(line)] || 0)}`)
+    .join(' | ');
+
+  return [`${label}: ${first}`, `${label}: ${second}`];
+}
+
+function signedOneDecimal(value) {
+  const parsed = toNumber(value, 0);
+  return `${parsed >= 0 ? '+' : ''}${parsed.toFixed(1)}`;
+}
+
+function totalRunSummaryLines(item) {
+  const totalRuns = item.totalRuns;
+  if (!totalRuns) return ['• Data total runs belum tersedia.'];
+
+  const awayAbbrev = item.away.abbreviation || item.away.name;
+  const homeAbbrev = item.home.abbreviation || item.home.name;
+  const delta = Number.isFinite(Number(totalRuns.marketDeltaRuns))
+    ? Number(totalRuns.marketDeltaRuns)
+    : totalRuns.projectedTotal - totalRuns.marketLine;
+  const deltaText = `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`;
+  const park = totalRuns.detail?.park;
+  const detail = totalRuns.detail || {};
+  const driverLine = [
+    `Off ${signedOneDecimal(toNumber(detail.homeOffense, 0) + toNumber(detail.awayOffense, 0))}`,
+    `SP ${signedOneDecimal(toNumber(detail.homeStarterAllowed, 0) + toNumber(detail.awayStarterAllowed, 0))}`,
+    `BP ${signedOneDecimal(toNumber(detail.homeBullpenAllowed, 0) + toNumber(detail.awayBullpenAllowed, 0))}`
+  ].join(' | ');
+  const contextAdjustmentLine = [
+    `Weather ${signedOneDecimal(detail.weather)}`,
+    `Lineup ${signedOneDecimal(toNumber(detail.homeLineupAdj, 0) + toNumber(detail.awayLineupAdj, 0))}`
+  ].join(' | ');
+
+  return [
+    `Projected: ${totalRuns.projectedTotal.toFixed(1)} | Market ${totalRuns.marketLine} (${deltaText} runs)`,
+    `Expected: ${awayAbbrev} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${homeAbbrev} ${totalRuns.homeExpectedRuns.toFixed(1)}`,
+    `Lean: ${totalRuns.bestLean} (${totalRuns.confidence})`,
+    `Drivers: ${driverLine}`,
+    `Context adj: ${contextAdjustmentLine}`,
+    ...totalProbabilityRows('Over', totalRuns.over),
+    ...totalProbabilityRows('Under', totalRuns.under),
+    `Park: ${park?.label || item.venue} run PF ${park?.runFactorPct || 100}, HR PF ${park?.homeRunFactorPct || 100}`,
+    `Lineup: ${item.lineupLine || 'belum tersedia'}`
+  ];
 }
 
 function splitInfoLine(value) {
@@ -322,6 +406,54 @@ async function fetchRecentTeamGames(teamIds, dateYmd, daysBack = 3) {
 
 async function fetchBoxscore(gamePk) {
   return fetchJson(`${MLB_BASE_URL}/game/${gamePk}/boxscore`);
+}
+
+function lineupPlayerName(player) {
+  return player?.person?.fullName || player?.person?.displayName || player?.person?.boxscoreName || null;
+}
+
+function battingOrderSlot(player) {
+  const raw = Number.parseInt(player?.battingOrder, 10);
+  if (!Number.isFinite(raw)) return 99;
+  return Math.floor(raw / 100) || raw;
+}
+
+function extractLineupProfile(boxTeam) {
+  const players = Object.values(boxTeam?.players || {});
+  const hitters = players
+    .filter((player) => player?.battingOrder)
+    .sort((a, b) => Number.parseInt(a.battingOrder, 10) - Number.parseInt(b.battingOrder, 10));
+  const slots = new Map();
+
+  for (const hitter of hitters) {
+    const slot = battingOrderSlot(hitter);
+    if (slot >= 1 && slot <= 9 && !slots.has(slot)) {
+      slots.set(slot, hitter);
+    }
+  }
+
+  const orderedHitters = [...slots.entries()]
+    .sort(([slotA], [slotB]) => slotA - slotB)
+    .map(([, hitter]) => hitter);
+  const topFive = orderedHitters
+    .slice(0, 5)
+    .map(lineupPlayerName)
+    .filter(Boolean);
+
+  return {
+    confirmed: orderedHitters.length >= 9,
+    count: orderedHitters.length,
+    topFive
+  };
+}
+
+async function fetchGameLineupProfile(gamePk) {
+  const boxscore = await fetchBoxscore(gamePk);
+
+  return {
+    away: extractLineupProfile(boxscore.teams?.away),
+    home: extractLineupProfile(boxscore.teams?.home)
+  };
 }
 
 async function fetchBullpenProfiles(teamIds, dateYmd) {
@@ -1146,6 +1278,7 @@ function weatherRunAdjustment(weather) {
   if (!weather) return 0;
 
   const temp = parseWeatherNumber(weather.temp || weather.temperature);
+  const weatherText = JSON.stringify(weather).toLowerCase();
   const windText = String(weather.wind || weather.windDirection || '').toLowerCase();
   const windSpeed = parseWeatherNumber(windText) || 0;
   const tempAdj = temp === null ? 0 : clamp((temp - 70) * 0.015, -0.35, 0.35);
@@ -1154,7 +1287,61 @@ function weatherRunAdjustment(weather) {
     : windText.includes('in')
       ? -clamp(windSpeed * 0.025, 0, 0.4)
       : 0;
-  return clamp(tempAdj + windAdj, -0.55, 0.55);
+  const roofMultiplier =
+    weatherText.includes('roof closed') || weatherText.includes('closed roof') || weatherText.includes('dome')
+      ? 0.2
+      : 1;
+  return clamp((tempAdj + windAdj) * roofMultiplier, -0.55, 0.55);
+}
+
+function parkFactorContext(homeTeam) {
+  const baseline = PARK_FACTOR_BASELINES.get(homeTeam?.id) || {
+    runFactor: 1,
+    homeRunFactor: 1,
+    label: homeTeam?.name || 'Neutral park'
+  };
+  const runAdjustment = clamp(
+    (baseline.runFactor - 1) * 3.8 + (baseline.homeRunFactor - 1) * 0.9,
+    -0.75,
+    0.85
+  );
+
+  return {
+    ...baseline,
+    runAdjustment,
+    runFactorPct: Math.round(baseline.runFactor * 100),
+    homeRunFactorPct: Math.round(baseline.homeRunFactor * 100)
+  };
+}
+
+function lineupRunAdjustment(lineup, injuries) {
+  if (!lineup) return 0;
+
+  const hitterInjuries = Array.isArray(injuries)
+    ? injuries.filter((injury) => injury.position !== 'P').length
+    : 0;
+
+  if (lineup.confirmed) {
+    return clamp(0.06 - hitterInjuries * 0.025, -0.2, 0.08);
+  }
+
+  if (lineup.count > 0) {
+    return clamp(-0.04 - Math.max(0, 9 - lineup.count) * 0.025, -0.25, 0.02);
+  }
+
+  return 0;
+}
+
+function lineupStatusLine(team, lineup) {
+  const label = team.abbreviation || team.name;
+  if (!lineup) return `${label}: lineup belum tersedia`;
+  if (lineup.confirmed) {
+    const topNames = lineup.topFive?.slice(0, 3) || [];
+    const top = topNames.length ? ` top: ${topNames.join(', ')}` : '';
+    return `${label}: confirmed ${lineup.count}/9${top}`;
+  }
+  if (lineup.count > 0) return `${label}: partial ${lineup.count}/9`;
+  return `${label}: lineup belum tersedia`;
 }
 
 function poissonCdf(mean, maxRuns) {
@@ -1182,6 +1369,43 @@ function totalConfidence(probability) {
   return 'low';
 }
 
+export function applyTotalRunMarket(totalRuns, marketLine = DEFAULT_MARKET_TOTAL, marketProbability = 50) {
+  if (!totalRuns) return null;
+
+  const safeLine = Number.isFinite(Number(marketLine)) ? Number(marketLine) : DEFAULT_MARKET_TOTAL;
+  const key = String(safeLine);
+  const overProbability =
+    totalRuns.over?.[key] ?? totalRunProbability(totalRuns.projectedTotal, safeLine, 'over') * 100;
+  const underProbability =
+    totalRuns.under?.[key] ?? totalRunProbability(totalRuns.projectedTotal, safeLine, 'under') * 100;
+  const lean =
+    totalRuns.projectedTotal >= safeLine + 0.25 && overProbability >= underProbability
+      ? `Over ${safeLine}`
+      : totalRuns.projectedTotal <= safeLine - 0.25 && underProbability > overProbability
+        ? `Under ${safeLine}`
+        : 'No clear lean';
+  const leanProbability = lean.startsWith('Under')
+    ? underProbability
+    : lean.startsWith('Over')
+      ? overProbability
+      : Math.max(overProbability, underProbability);
+  const safeMarketProbability = Number.isFinite(Number(marketProbability))
+    ? Number(marketProbability)
+    : 50;
+
+  return {
+    ...totalRuns,
+    marketLine: safeLine,
+    marketProbability: safeMarketProbability,
+    marketDeltaRuns: totalRuns.projectedTotal - safeLine,
+    overMarketProbability: overProbability,
+    underMarketProbability: underProbability,
+    modelEdge: leanProbability - safeMarketProbability,
+    bestLean: lean,
+    confidence: totalConfidence(leanProbability / 100)
+  };
+}
+
 function buildTotalRunProjection({
   away,
   home,
@@ -1195,9 +1419,16 @@ function buildTotalRunProjection({
   homeBullpen,
   awayInjuries,
   homeInjuries,
+  lineups,
   weather
 }) {
   const sharedWeather = weatherRunAdjustment(weather) / 2;
+  const park = parkFactorContext(home);
+  const sharedPark = park.runAdjustment / 2;
+  const homeLineup = lineups?.home || null;
+  const awayLineup = lineups?.away || null;
+  const homeLineupAdj = lineupRunAdjustment(homeLineup, homeInjuries);
+  const awayLineupAdj = lineupRunAdjustment(awayLineup, awayInjuries);
   const homeOffense = offenseRunAdjustment(homeProfile);
   const awayOffense = offenseRunAdjustment(awayProfile);
   const homeStarterAllowed = pitcherRunAdjustment(homePitcherStats);
@@ -1217,6 +1448,8 @@ function buildTotalRunProjection({
       awayBullpenAllowed +
       homeInjuryAdj +
       homeRecent +
+      homeLineupAdj +
+      sharedPark +
       sharedWeather,
     1.5,
     8.5
@@ -1228,6 +1461,8 @@ function buildTotalRunProjection({
       homeBullpenAllowed +
       awayInjuryAdj +
       awayRecent +
+      awayLineupAdj +
+      sharedPark +
       sharedWeather,
     1.5,
     8.5
@@ -1239,7 +1474,7 @@ function buildTotalRunProjection({
   const under = Object.fromEntries(
     TOTAL_RUN_LINES.map((line) => [String(line), totalRunProbability(projectedTotal, line, 'under') * 100])
   );
-  const marketLine = 8.5;
+  const marketLine = DEFAULT_MARKET_TOTAL;
   const overMarket = over[String(marketLine)];
   const underMarket = under[String(marketLine)];
   const lean =
@@ -1256,11 +1491,13 @@ function buildTotalRunProjection({
   if (homeStarterAllowed + awayStarterAllowed >= 0.35) factors.push('Starting pitcher run-prevention memberi risiko run lebih tinggi.');
   if (homeStarterAllowed + awayStarterAllowed <= -0.35) factors.push('Starting pitcher profile menekan total run.');
   if (homeBullpenAllowed + awayBullpenAllowed >= 0.25) factors.push('Bullpen fatigue/availability menaikkan risiko late runs.');
+  if (Math.abs(park.runAdjustment) >= 0.12) factors.push(park.runAdjustment > 0 ? `${park.label} cenderung hitter-friendly.` : `${park.label} cenderung pitcher-friendly.`);
+  if (homeLineup?.confirmed || awayLineup?.confirmed) factors.push('Confirmed lineup ikut dibaca untuk ekspektasi run.');
   if (homeInjuryAdj + awayInjuryAdj <= -0.2) factors.push('Injury hitter/roster mengurangi ekspektasi offense.');
   if (Math.abs(sharedWeather) >= 0.12) factors.push(sharedWeather > 0 ? 'Weather cenderung hitter-friendly.' : 'Weather cenderung pitcher-friendly.');
   if (factors.length === 0) factors.push('Total profile cukup seimbang tanpa edge ekstrem.');
 
-  return {
+  return applyTotalRunMarket({
     homeExpectedRuns,
     awayExpectedRuns,
     projectedTotal,
@@ -1279,9 +1516,16 @@ function buildTotalRunProjection({
       awayBullpenAllowed,
       homeInjuryAdj,
       awayInjuryAdj,
+      homeLineupAdj,
+      awayLineupAdj,
+      park,
+      lineups: {
+        away: awayLineup,
+        home: homeLineup
+      },
       weather: sharedWeather * 2
     }
-  };
+  });
 }
 
 function predictGame(
@@ -1295,6 +1539,7 @@ function predictGame(
   headToHead,
   firstInningProfiles,
   injuryProfiles,
+  lineupProfiles,
   modelMemory
 ) {
   const awayTeam = game.teams.away.team;
@@ -1317,6 +1562,9 @@ function predictGame(
   const homeBullpen = bullpenProfiles.get(homeTeam.id) || finalizeBullpenProfile({ teamId: homeTeam.id, games: 0, bullpenPitches: 0, bullpenOuts: 0, relieverAppearances: 0, relieverDates: new Map(), highPitchRelievers: 0 });
   const awayInjuries = injuryProfiles.get(awayTeam.id) || [];
   const homeInjuries = injuryProfiles.get(homeTeam.id) || [];
+  const gameLineups = lineupProfiles || {};
+  const awayLineup = gameLineups.away || null;
+  const homeLineup = gameLineups.home || null;
   const awayFirstInningProfile =
     firstInningProfiles.get(awayTeam.id) || defaultFirstInningProfile(awayTeam);
   const homeFirstInningProfile =
@@ -1446,6 +1694,10 @@ function predictGame(
     homeBullpen,
     awayInjuries,
     homeInjuries,
+    lineups: {
+      away: awayLineup,
+      home: homeLineup
+    },
     weather: game.weather
   });
   const firstInning = buildFirstInningProjection({
@@ -1475,6 +1727,11 @@ function predictGame(
       ...injuryDetailLines(away, awayInjuries),
       ...injuryDetailLines(home, homeInjuries)
     ],
+    lineupLine: `${lineupStatusLine(away, awayLineup)} | ${lineupStatusLine(home, homeLineup)}`,
+    lineups: {
+      away: awayLineup,
+      home: homeLineup
+    },
     injuries: {
       away: awayInjuries,
       home: homeInjuries
@@ -1583,6 +1840,17 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
     })
   );
 
+  const lineupProfiles = new Map();
+  await Promise.all(
+    games.map(async (game) => {
+      try {
+        lineupProfiles.set(game.gamePk, await fetchGameLineupProfile(game.gamePk));
+      } catch {
+        lineupProfiles.set(game.gamePk, { away: null, home: null });
+      }
+    })
+  );
+
   return games.map((game) =>
     predictGame(
       game,
@@ -1595,6 +1863,7 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       headToHeadStats.get(game.gamePk),
       firstInningProfiles,
       injuryProfiles,
+      lineupProfiles.get(game.gamePk),
       modelMemory
     )
   );
@@ -1741,7 +2010,13 @@ export function formatPredictions(
         '',
         ...splitInfoLine(`${item.firstInning.awayProfileLine} | ${item.firstInning.homeProfileLine}`),
         '',
-        ...firstInningReasonLines
+        ...firstInningReasonLines,
+        '',
+        SECTION_SEPARATOR,
+        '🏃 Total Runs / Over-Under',
+        ...totalRunSummaryLines(item),
+        '',
+        ...(item.totalRuns?.factors || []).slice(0, 3).map((factor) => `• ${factor}`)
       ]
         .filter((line) => line !== null)
         .join('\n')

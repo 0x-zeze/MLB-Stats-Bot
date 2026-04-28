@@ -276,7 +276,7 @@ Format Telegram:
 /predict HOME | AWAY | odds_home_opsional
 ```
 
-Jika `/predict` dikirim tanpa matchup, bot menampilkan semua game MLB dari MLB StatsAPI live schedule pada tanggal tersebut. Setelah tombol dipilih, bot memakai prediction model/Agent dari data live. Format manual tetap memakai Python ML engine dan CSV lokal.
+Jika `/predict` dikirim tanpa matchup, bot menampilkan semua game MLB dari MLB StatsAPI live schedule pada tanggal tersebut. Setelah tombol dipilih, bot memakai prediction model/Agent dari data live. Di bawah hasil prediction ada tombol `Total 6.5`, `Total 7.5`, `Total 8.5`, `Total 9.5`, `Total 10.5`, dan `Total 11.5` untuk membandingkan projected total dengan market total yang kamu pilih. Format manual tetap memakai Python ML engine dan CSV lokal.
 
 Output tombol `/predict` juga menampilkan total runs live:
 
@@ -284,8 +284,16 @@ Output tombol `/predict` juga menampilkan total runs live:
 Total Runs / Over-Under
 Projected total: 9.9 runs
 Expected: MIA 4.0 | LAD 5.9
+Market total: 8.5 (+1.4 runs vs model)
 Best lean: Over 8.5 (high)
-Over 8.5: 65% | Under 8.5: 35%
+Drivers: Off +0.3 | SP +0.4 | BP +0.2
+Context adj: Weather +0.0 | Lineup +0.1
+Over: 6.5 86% | 7.5 77% | 8.5 65%
+Over: 9.5 53% | 10.5 40% | 11.5 29%
+Under: 6.5 14% | 7.5 23% | 8.5 35%
+Under: 9.5 47% | 10.5 60% | 11.5 71%
+Park: Dodger Stadium run PF 99, HR PF 102
+Lineup: MIA confirmed 9/9 | LAD confirmed 9/9
 ```
 
 Jika Python di mesin kamu bukan `python`, atur di `.env`:
@@ -327,6 +335,8 @@ Total runs logic:
 - Market edge = model probability dikurangi implied probability dari odds market.
 - `Over 8.5: 56%` artinya model memperkirakan peluang total run selesai 9+ sekitar 56%.
 - Projected total bisa berbeda dari market total karena model memberi bobot ke SP, bullpen fatigue, cuaca, park factor, lineup, dan recent run form.
+- Untuk Telegram live, lineup diambil dari MLB boxscore jika sudah diumumkan. Jika belum ada, bot tetap memakai baseline offense/injury/recent form.
+- Park factor Telegram memakai baseline internal per ballpark agar tetap jalan tanpa API berbayar; file Python `src/park_factors.py` tetap bisa diganti dengan data park factor yang lebih baru.
 
 Baseline weight:
 
