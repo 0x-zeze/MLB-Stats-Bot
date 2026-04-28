@@ -453,6 +453,61 @@ Prinsip penting:
 - Rolling stats untuk backtest harus digeser sebelum game target agar tidak data leakage.
 - Market odds dipakai untuk edge, bukan untuk menjamin hasil.
 
+## Backtesting, Evaluation, And Calibration
+
+Project ini juga punya pipeline validasi model dari CSV lokal:
+
+```bash
+python -m src.backtest --season 2025 --market moneyline
+python -m src.backtest --season 2025 --market totals
+python -m src.backtest --start-date 2025-09-01 --end-date 2025-09-30 --market totals
+python -m src.evaluate --report
+```
+
+Output backtest disimpan ke:
+
+```text
+data/predictions_log.csv
+```
+
+Kolom log:
+
+- `game_id`, `date`, `home_team`, `away_team`
+- `predicted_winner`, `home_win_probability`, `away_win_probability`
+- `projected_total_runs`, `market_total`, `over_probability`, `under_probability`
+- `model_edge`, `confidence`, `final_lean`
+- `actual_home_score`, `actual_away_score`, `actual_total_runs`
+- `result`, `profit_loss`, `closing_line`, `closing_line_value`
+
+Metric evaluasi:
+
+- Accuracy dan win rate.
+- ROI per 1 unit stake.
+- Average model edge.
+- Average closing line value atau CLV.
+- Brier score dan log loss.
+- Calibration by probability bucket.
+- Calibration by confidence bucket.
+- Performance by market total range: `6.5 to 7.5`, `8.0 to 8.5`, `9.0 to 9.5`, `10.0+`.
+- Performance by confidence: `low`, `medium`, `high`.
+
+No-bet filter aktif saat:
+
+- Model edge di bawah 2%.
+- Selisih projected total vs market di bawah 0.4 run.
+- Probable pitcher hilang.
+- Lineup belum confirmed dan confidence low.
+- Weather hilang untuk outdoor game.
+- Odds stale atau market tidak tersedia.
+- Bullpen data incomplete.
+- Confidence di bawah threshold.
+
+Catatan anti data leakage:
+
+- Backtest hanya memakai fitur pre-game dari CSV/model input.
+- Final score hanya dipakai setelah prediksi dibuat untuk menentukan hasil.
+- Rolling stats historis harus digeser sebelum target game.
+
 Baseline weight:
 
 ```text
@@ -713,6 +768,10 @@ src/analystSkill.js   Analyst playbook prompt
 src/features.py       Formula sabermetric Python
 src/model.py          Baseline prediction dan optional sklearn models
 src/totals.py         Total runs dan over/under probabilities
+src/backtest.py       Backtest moneyline/totals dan tulis predictions log
+src/evaluate.py       Evaluasi ROI, CLV, Brier, log loss, calibration
+src/calibration.py    Confidence/probability calibration helpers
+src/reports.py        Formatter report evaluasi
 src/weather.py        Weather run adjustment
 src/park_factors.py   Park factor run adjustment
 src/lineup.py         Lineup availability adjustment
@@ -725,6 +784,7 @@ src/data_sources/     Optional pybaseball, MLB StatsAPI, Retrosheet, Statcast, o
 src/knowledge/        Local RAG-style baseball knowledge retriever
 docs/analyst-playbook.md
 data/knowledge/       Sabermetric, prediction, betting, dan over/under knowledge files
+data/predictions_log.csv Sample backtest prediction log
 .env.example          Template konfigurasi
 requirements.txt      Dependency Python opsional
 tests/                Unit tests Python

@@ -1,0 +1,4 @@
+game_id,date,home_team,away_team,predicted_winner,home_win_probability,away_win_probability,projected_total_runs,market_total,over_probability,under_probability,model_edge,confidence,final_lean,actual_home_score,actual_away_score,actual_total_runs,result,profit_loss,closing_line,closing_line_value
+2025-09-01-new york yankees-at-los angeles dodgers,2025-09-01,Los Angeles Dodgers,New York Yankees,,,,10.436,8.5,0.6864925998089961,0.3135074001910038,0.18649259980899613,high,Over 8.5,5,3,8,loss,-1.0,8.5,0.0
+2025-09-02-philadelphia phillies-at-atlanta braves,2025-09-02,Atlanta Braves,Philadelphia Phillies,,,,9.1227,8.0,0.6636028245570028,0.3363971754429972,0.04438066851079914,medium,Over 8.0,4,6,10,win,0.9523809523809523,8.0,0.0
+2025-09-03-houston astros-at-seattle mariners,2025-09-03,Seattle Mariners,Houston Astros,,,,7.873199999999999,7.5,0.5155193343924549,0.48448066560754505,0.015519334392454898,low,NO BET,3,2,5,no_bet,0.0,7.5,0.0

@@ -2,6 +2,7 @@
 node_modules/
 data/*.json
 data/cache/
+data/tmp_*.csv
 *.log
 __pycache__/
 *.pyc
