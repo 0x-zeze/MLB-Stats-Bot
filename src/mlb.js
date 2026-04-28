@@ -11,6 +11,7 @@ import {
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const GAME_SEPARATOR = '━━━━━━━━━━━━━━━━━━━━';
 const SECTION_SEPARATOR = '────────────';
+const TOTAL_RUN_LINES = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
 const DEFAULTS = {
   rpg: 4.4,
   ops: 0.72,
@@ -1094,6 +1095,195 @@ function buildModelReferenceLines({
   ];
 }
 
+function offenseRunAdjustment(profile) {
+  const hitting = profile?.hitting;
+  const advanced = profile?.hittingAdvanced;
+  const rpgAdj = (rpg(hitting) - DEFAULTS.rpg) * 0.45;
+  const opsAdj = (statOps(hitting) - DEFAULTS.ops) * 2.0;
+  const isoAdj = (statIso(advanced) - DEFAULTS.iso) * 1.3;
+  const bbAdj = (battingBbRate(advanced) - DEFAULTS.bbRate) * 1.4;
+  const kAdj = (DEFAULTS.kRate - battingKRate(advanced)) * 0.9;
+  return clamp(rpgAdj + opsAdj + isoAdj + bbAdj + kAdj, -1.2, 1.2);
+}
+
+function pitcherRunAdjustment(stats) {
+  if (!stats) return 0;
+
+  const eraAdj = (statEra(stats) - DEFAULTS.era) * 0.15;
+  const whipAdj = (statWhip(stats) - DEFAULTS.whip) * 0.75;
+  const hrAdj = (pitchingHr9(stats) - DEFAULTS.hr9) * 0.22;
+  const kbbAdj = (DEFAULTS.kMinusBb - pitchingKMinusBb(stats)) * 1.2;
+  return clamp(eraAdj + whipAdj + hrAdj + kbbAdj, -1.2, 1.2);
+}
+
+function bullpenRunAdjustment(bullpen) {
+  if (!bullpen) return 0;
+
+  const fatigue = Math.max(0, toNumber(bullpen.fatigueScore, 0) - 0.8) * 0.2;
+  const b2b = toNumber(bullpen.backToBackRelievers, 0) * 0.04;
+  const highPitch = toNumber(bullpen.highPitchRelievers, 0) * 0.03;
+  return clamp(fatigue + b2b + highPitch, 0, 0.85);
+}
+
+function injuryRunAdjustment(injuries) {
+  if (!Array.isArray(injuries) || injuries.length === 0) return 0;
+
+  const hitterInjuries = injuries.filter((injury) => injury.position !== 'P').length;
+  const pitcherInjuries = injuries.length - hitterInjuries;
+  return clamp(-(hitterInjuries * 0.08 + pitcherInjuries * 0.02), -0.7, 0);
+}
+
+function recentRunAdjustment(teamStanding, opponentStanding) {
+  return clamp((runDiffPerGame(teamStanding) - runDiffPerGame(opponentStanding)) * 0.08, -0.35, 0.35);
+}
+
+function parseWeatherNumber(value) {
+  const parsed = String(value || '').match(/-?\d+(\.\d+)?/);
+  return parsed ? Number.parseFloat(parsed[0]) : null;
+}
+
+function weatherRunAdjustment(weather) {
+  if (!weather) return 0;
+
+  const temp = parseWeatherNumber(weather.temp || weather.temperature);
+  const windText = String(weather.wind || weather.windDirection || '').toLowerCase();
+  const windSpeed = parseWeatherNumber(windText) || 0;
+  const tempAdj = temp === null ? 0 : clamp((temp - 70) * 0.015, -0.35, 0.35);
+  const windAdj = windText.includes('out')
+    ? clamp(windSpeed * 0.025, 0, 0.4)
+    : windText.includes('in')
+      ? -clamp(windSpeed * 0.025, 0, 0.4)
+      : 0;
+  return clamp(tempAdj + windAdj, -0.55, 0.55);
+}
+
+function poissonCdf(mean, maxRuns) {
+  const safeMean = Math.max(0.01, toNumber(mean, 0.01));
+  let probability = Math.exp(-safeMean);
+  let cumulative = probability;
+
+  for (let runs = 1; runs <= maxRuns; runs += 1) {
+    probability *= safeMean / runs;
+    cumulative += probability;
+  }
+
+  return clamp(cumulative, 0, 1);
+}
+
+function totalRunProbability(expectedTotal, line, side = 'over') {
+  const under = poissonCdf(expectedTotal, Math.floor(line));
+  return side === 'over' ? 1 - under : under;
+}
+
+function totalConfidence(probability) {
+  const edge = Math.abs(probability - 0.5);
+  if (edge >= 0.12) return 'high';
+  if (edge >= 0.06) return 'medium';
+  return 'low';
+}
+
+function buildTotalRunProjection({
+  away,
+  home,
+  awayProfile,
+  homeProfile,
+  awayStanding,
+  homeStanding,
+  awayPitcherStats,
+  homePitcherStats,
+  awayBullpen,
+  homeBullpen,
+  awayInjuries,
+  homeInjuries,
+  weather
+}) {
+  const sharedWeather = weatherRunAdjustment(weather) / 2;
+  const homeOffense = offenseRunAdjustment(homeProfile);
+  const awayOffense = offenseRunAdjustment(awayProfile);
+  const homeStarterAllowed = pitcherRunAdjustment(homePitcherStats);
+  const awayStarterAllowed = pitcherRunAdjustment(awayPitcherStats);
+  const homeBullpenAllowed = bullpenRunAdjustment(homeBullpen);
+  const awayBullpenAllowed = bullpenRunAdjustment(awayBullpen);
+  const homeInjuryAdj = injuryRunAdjustment(homeInjuries);
+  const awayInjuryAdj = injuryRunAdjustment(awayInjuries);
+  const homeRecent = recentRunAdjustment(homeStanding, awayStanding);
+  const awayRecent = recentRunAdjustment(awayStanding, homeStanding);
+
+  const homeExpectedRuns = clamp(
+    DEFAULTS.rpg +
+      0.1 +
+      homeOffense +
+      awayStarterAllowed +
+      awayBullpenAllowed +
+      homeInjuryAdj +
+      homeRecent +
+      sharedWeather,
+    1.5,
+    8.5
+  );
+  const awayExpectedRuns = clamp(
+    DEFAULTS.rpg +
+      awayOffense +
+      homeStarterAllowed +
+      homeBullpenAllowed +
+      awayInjuryAdj +
+      awayRecent +
+      sharedWeather,
+    1.5,
+    8.5
+  );
+  const projectedTotal = homeExpectedRuns + awayExpectedRuns;
+  const over = Object.fromEntries(
+    TOTAL_RUN_LINES.map((line) => [String(line), totalRunProbability(projectedTotal, line, 'over') * 100])
+  );
+  const under = Object.fromEntries(
+    TOTAL_RUN_LINES.map((line) => [String(line), totalRunProbability(projectedTotal, line, 'under') * 100])
+  );
+  const marketLine = 8.5;
+  const overMarket = over[String(marketLine)];
+  const underMarket = under[String(marketLine)];
+  const lean =
+    projectedTotal >= marketLine + 0.25 && overMarket >= underMarket
+      ? `Over ${marketLine}`
+      : projectedTotal <= marketLine - 0.25 && underMarket > overMarket
+        ? `Under ${marketLine}`
+        : 'No clear lean';
+  const leanProbability = lean.startsWith('Over') ? overMarket : lean.startsWith('Under') ? underMarket : Math.max(overMarket, underMarket);
+  const factors = [];
+
+  if (homeOffense + awayOffense >= 0.35) factors.push('Combined offense profile menaikkan proyeksi run.');
+  if (homeOffense + awayOffense <= -0.35) factors.push('Combined offense profile menekan proyeksi run.');
+  if (homeStarterAllowed + awayStarterAllowed >= 0.35) factors.push('Starting pitcher run-prevention memberi risiko run lebih tinggi.');
+  if (homeStarterAllowed + awayStarterAllowed <= -0.35) factors.push('Starting pitcher profile menekan total run.');
+  if (homeBullpenAllowed + awayBullpenAllowed >= 0.25) factors.push('Bullpen fatigue/availability menaikkan risiko late runs.');
+  if (homeInjuryAdj + awayInjuryAdj <= -0.2) factors.push('Injury hitter/roster mengurangi ekspektasi offense.');
+  if (Math.abs(sharedWeather) >= 0.12) factors.push(sharedWeather > 0 ? 'Weather cenderung hitter-friendly.' : 'Weather cenderung pitcher-friendly.');
+  if (factors.length === 0) factors.push('Total profile cukup seimbang tanpa edge ekstrem.');
+
+  return {
+    homeExpectedRuns,
+    awayExpectedRuns,
+    projectedTotal,
+    marketLine,
+    over,
+    under,
+    bestLean: lean,
+    confidence: totalConfidence(leanProbability / 100),
+    factors: factors.slice(0, 4),
+    detail: {
+      homeOffense,
+      awayOffense,
+      homeStarterAllowed,
+      awayStarterAllowed,
+      homeBullpenAllowed,
+      awayBullpenAllowed,
+      homeInjuryAdj,
+      awayInjuryAdj,
+      weather: sharedWeather * 2
+    }
+  };
+}
+
 function predictGame(
   game,
   teamStats,
@@ -1243,6 +1433,21 @@ function predictGame(
     homeRecentLog5,
     homeReferenceBlend
   });
+  const totalRuns = buildTotalRunProjection({
+    away,
+    home,
+    awayProfile,
+    homeProfile,
+    awayStanding,
+    homeStanding,
+    awayPitcherStats,
+    homePitcherStats,
+    awayBullpen,
+    homeBullpen,
+    awayInjuries,
+    homeInjuries,
+    weather: game.weather
+  });
   const firstInning = buildFirstInningProjection({
     away,
     home,
@@ -1276,6 +1481,7 @@ function predictGame(
     },
     modelReferenceLine: modelReferenceLines.join(' | '),
     modelReferenceLines,
+    totalRuns,
     modelReference: {
       awayPythagoreanPct: Math.round(awayPythagoreanPct * 100),
       homePythagoreanPct: Math.round(homePythagoreanPct * 100),

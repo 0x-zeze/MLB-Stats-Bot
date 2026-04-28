@@ -153,6 +153,7 @@ function compactGameForAgent(item) {
     modelReference: item.modelReference,
     modelReferenceLine: item.modelReferenceLine,
     modelReferenceLines: item.modelReferenceLines,
+    totalRuns: item.totalRuns,
     baselineReasons: item.reasons,
     firstInning: item.firstInning
       ? {

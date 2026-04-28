@@ -322,6 +322,17 @@ function formatLivePrediction(dateYmd, prediction) {
   const modelReferenceLines = prediction.modelReferenceLines?.length
     ? prediction.modelReferenceLines.map((line) => `• ${line}`)
     : [`• ${prediction.modelReferenceLine}`];
+  const totalRuns = prediction.totalRuns;
+  const totalRunLines = totalRuns
+    ? [
+        `Projected total: ${totalRuns.projectedTotal.toFixed(1)} runs`,
+        `Expected: ${prediction.away.abbreviation || prediction.away.name} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${prediction.home.abbreviation || prediction.home.name} ${totalRuns.homeExpectedRuns.toFixed(1)}`,
+        `Best lean: ${totalRuns.bestLean} (${totalRuns.confidence})`,
+        `Over 7.5: ${percent(totalRuns.over['7.5'])} | Over 8.5: ${percent(totalRuns.over['8.5'])} | Over 9.5: ${percent(totalRuns.over['9.5'])}`,
+        `Under 7.5: ${percent(totalRuns.under['7.5'])} | Under 8.5: ${percent(totalRuns.under['8.5'])} | Under 9.5: ${percent(totalRuns.under['9.5'])}`,
+        ...totalRuns.factors.slice(0, 3).map((factor) => `• ${factor}`)
+      ]
+    : ['Data total runs tidak tersedia.'];
 
   return [
     '📊 MLB Prediction',
@@ -358,6 +369,9 @@ function formatLivePrediction(dateYmd, prediction) {
     '',
     'First Inning',
     `Will there be a run in the 1st? ${firstLabel} ${percent(firstProbability)}`,
+    '',
+    '🏃 Total Runs / Over-Under',
+    ...totalRunLines,
     '',
     'Alasan:',
     ...reasons.slice(0, 3).map((reason) => `• ${reason}`),

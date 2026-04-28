@@ -278,6 +278,16 @@ Format Telegram:
 
 Jika `/predict` dikirim tanpa matchup, bot menampilkan semua game MLB dari MLB StatsAPI live schedule pada tanggal tersebut. Setelah tombol dipilih, bot memakai prediction model/Agent dari data live. Format manual tetap memakai Python ML engine dan CSV lokal.
 
+Output tombol `/predict` juga menampilkan total runs live:
+
+```text
+Total Runs / Over-Under
+Projected total: 9.9 runs
+Expected: MIA 4.0 | LAD 5.9
+Best lean: Over 8.5 (high)
+Over 8.5: 65% | Under 8.5: 35%
+```
+
 Jika Python di mesin kamu bukan `python`, atur di `.env`:
 
 ```env
