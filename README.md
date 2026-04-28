@@ -171,6 +171,17 @@ AUTO_ALERTS=true
 DAILY_ALERT_TIME=20:00
 ```
 
+Auto update juga bisa diatur langsung dari Telegram tanpa edit `.env`:
+
+```text
+/autoupdate on
+/autoupdate off
+/autoupdate time 20:00
+/autoupdate status
+```
+
+Setting ini disimpan per chat di `data/state.json`.
+
 Post-game learning:
 
 ```env
@@ -371,6 +382,8 @@ Catatan: ini bukan betting advice. MLB punya variance tinggi, dan probabilitas m
 /skill
 /postgame 2026-04-27
 /memory
+/autoupdate on
+/autoupdate time 20:00
 /subscribe
 /unsubscribe
 /sendalert
@@ -621,3 +634,9 @@ Post-game tidak jalan:
 - Pastikan pre-game alert sudah dibuat sebelum game final.
 - Pastikan `POST_GAME_ALERTS=true`.
 - Cek `/postgame YYYY-MM-DD`.
+
+Auto update tidak terkirim:
+
+- Cek `/autoupdate status`.
+- Pastikan jam memakai format `HH:mm`, contoh `/autoupdate time 20:00`.
+- Pastikan bot tetap berjalan dengan `npm start`.

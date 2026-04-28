@@ -19,6 +19,7 @@ import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils
 const config = loadConfig();
 const storage = new Storage();
 let postGameCheckRunning = false;
+let autoUpdateCheckRunning = false;
 const PREDICT_CALLBACK_PREFIX = 'predict_live:';
 const LEGACY_PREDICT_CALLBACK_PREFIX = 'predict:';
 
@@ -38,6 +39,7 @@ function helpText() {
     '/skill - lihat playbook analisa Agent',
     '/postgame YYYY-MM-DD - cek recap final dan update memory',
     '/memory - lihat performa memory model',
+    '/autoupdate on|off|time HH:mm|status - atur update otomatis',
     '/subscribe - aktifkan auto-alert di chat ini',
     '/unsubscribe - matikan auto-alert',
     '/sendalert - kirim alert hari ini ke subscriber',
@@ -96,6 +98,35 @@ function targetChatIds() {
   const chatIds = new Set(storage.listSubscriberIds());
   if (config.telegramChatId) chatIds.add(String(config.telegramChatId));
   return [...chatIds];
+}
+
+function isValidTime(value) {
+  if (!/^\d{2}:\d{2}$/.test(String(value || ''))) return false;
+  const [hour, minute] = String(value).split(':').map((item) => Number.parseInt(item, 10));
+  return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+}
+
+function targetAutoUpdateChats() {
+  const targets = new Map();
+  for (const target of storage.listAutoUpdateTargets(config.dailyAlertTime)) {
+    targets.set(String(target.chatId), target);
+  }
+
+  if (config.autoAlerts) {
+    for (const chatId of targetChatIds()) {
+      if (!targets.has(String(chatId))) {
+        targets.set(String(chatId), {
+          chatId: String(chatId),
+          title: String(chatId),
+          dailyTime: config.dailyAlertTime,
+          lastSentDate: storage.getLastAutoAlertDate(),
+          legacyEnv: true
+        });
+      }
+    }
+  }
+
+  return [...targets.values()];
 }
 
 async function sendTextToAll(bot, text) {
@@ -466,6 +497,85 @@ function formatAgentStatus() {
   ].join('\n');
 }
 
+function autoUpdateHelpText() {
+  return [
+    'Format auto update:',
+    '',
+    '/autoupdate on - aktifkan update harian untuk chat ini',
+    '/autoupdate off - matikan update harian',
+    '/autoupdate time HH:mm - ubah jam update',
+    '/autoupdate status - lihat status',
+    '',
+    `Timezone: ${config.timezone}`,
+    `Default time: ${config.dailyAlertTime}`
+  ].join('\n');
+}
+
+function formatAutoUpdateStatus(chatId) {
+  const status = storage.getAutoUpdate(chatId);
+  return [
+    '🔔 Auto Update MLB',
+    '',
+    `Status: ${status.enabled ? 'aktif' : 'mati'}`,
+    `Jam update: ${status.dailyTime || config.dailyAlertTime}`,
+    `Timezone: ${config.timezone}`,
+    `Terakhir terkirim: ${status.lastSentDate || '-'}`,
+    '',
+    'Command:',
+    '/autoupdate on',
+    '/autoupdate off',
+    '/autoupdate time 20:00'
+  ].join('\n');
+}
+
+async function handleAutoUpdateCommand(bot, chat, args) {
+  const chatId = chat.id;
+  const action = String(args[0] || 'status').toLowerCase();
+
+  if (action === 'help') {
+    await bot.sendMessage(chatId, autoUpdateHelpText());
+    return;
+  }
+
+  if (action === 'status') {
+    await bot.sendMessage(chatId, formatAutoUpdateStatus(chatId));
+    return;
+  }
+
+  if (action === 'on') {
+    const current = storage.getAutoUpdate(chatId);
+    storage.setAutoUpdate(chat, {
+      enabled: true,
+      dailyTime: current.dailyTime || config.dailyAlertTime
+    });
+    await bot.sendMessage(chatId, formatAutoUpdateStatus(chatId));
+    return;
+  }
+
+  if (action === 'off') {
+    storage.setAutoUpdate(chat, { enabled: false });
+    await bot.sendMessage(chatId, formatAutoUpdateStatus(chatId));
+    return;
+  }
+
+  if (action === 'time') {
+    const dailyTime = args[1];
+    if (!isValidTime(dailyTime)) {
+      await bot.sendMessage(chatId, 'Format jam salah. Contoh: /autoupdate time 20:00');
+      return;
+    }
+
+    storage.setAutoUpdate(chat, {
+      enabled: true,
+      dailyTime
+    });
+    await bot.sendMessage(chatId, formatAutoUpdateStatus(chatId));
+    return;
+  }
+
+  await bot.sendMessage(chatId, autoUpdateHelpText());
+}
+
 async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.timezone)) {
   if (!question.trim()) {
     await bot.sendMessage(
@@ -611,8 +721,13 @@ async function handleMessage(bot, message) {
   }
 
   if (command === '/subscribe') {
-    storage.addSubscriber(chat);
-    await bot.sendMessage(chatId, 'Auto-alert aktif untuk chat ini.');
+    storage.addSubscriber(chat, {
+      autoUpdate: {
+        enabled: true,
+        dailyTime: storage.getAutoUpdate(chatId).dailyTime || config.dailyAlertTime
+      }
+    });
+    await bot.sendMessage(chatId, formatAutoUpdateStatus(chatId));
     return;
   }
 
@@ -665,6 +780,11 @@ async function handleMessage(bot, message) {
 
   if (command === '/ask') {
     await askAgent(bot, chatId, args.join(' '));
+    return;
+  }
+
+  if (command === '/autoupdate') {
+    await handleAutoUpdateCommand(bot, chat, args);
     return;
   }
 
@@ -796,21 +916,50 @@ async function processPendingPostGames(bot) {
   }
 }
 
-function startScheduler(bot) {
-  if (config.autoAlerts) {
-    setInterval(async () => {
-      const today = dateInTimezone(config.timezone);
-      const now = timeInTimezone(config.timezone);
+async function processAutoUpdates(bot) {
+  if (autoUpdateCheckRunning) return;
 
-      if (now >= config.dailyAlertTime && storage.getLastAutoAlertDate() !== today) {
-        const sent = await sendAlertToAll(bot, today);
-        if (sent > 0) {
-          storage.setLastAutoAlertDate(today);
-          console.log(`Auto-alert ${today} terkirim ke ${sent} chat.`);
-        }
-      }
-    }, 60_000);
+  const today = dateInTimezone(config.timezone);
+  const now = timeInTimezone(config.timezone);
+  const targets = targetAutoUpdateChats().filter(
+    (target) => now >= target.dailyTime && target.lastSentDate !== today
+  );
+
+  if (targets.length === 0) return;
+
+  autoUpdateCheckRunning = true;
+  try {
+    const text = await buildAlert(today);
+    for (const target of targets) {
+      await bot
+        .sendMessage(target.chatId, text)
+        .then(() => {
+          if (target.legacyEnv) {
+            storage.setLastAutoAlertDate(today);
+          } else {
+            storage.setAutoUpdateLastSent(target.chatId, today);
+          }
+          console.log(`Auto-update ${today} terkirim ke ${target.chatId}.`);
+        })
+        .catch((error) => {
+          console.error(`Gagal auto-update ke ${target.chatId}:`, error.message);
+        });
+    }
+  } finally {
+    autoUpdateCheckRunning = false;
   }
+}
+
+function startScheduler(bot) {
+  processAutoUpdates(bot).catch((error) => {
+    console.error('Auto-update check error:', error.message);
+  });
+
+  setInterval(() => {
+    processAutoUpdates(bot).catch((error) => {
+      console.error('Auto-update check error:', error.message);
+    });
+  }, 60_000);
 
   if (config.postGameAlerts) {
     processPendingPostGames(bot).catch((error) => {

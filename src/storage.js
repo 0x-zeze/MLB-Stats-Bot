@@ -26,15 +26,36 @@ const DEFAULT_STATE = {
   }
 };
 
+const DEFAULT_AUTO_UPDATE = {
+  enabled: false,
+  dailyTime: '',
+  lastSentDate: ''
+};
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizeSubscriber(subscriber) {
+  return {
+    ...(subscriber || {}),
+    autoUpdate: {
+      ...DEFAULT_AUTO_UPDATE,
+      ...(subscriber?.autoUpdate || {})
+    }
+  };
 }
 
 function normalizeState(state) {
   return {
     ...DEFAULT_STATE,
     ...state,
-    subscribers: state?.subscribers || {},
+    subscribers: Object.fromEntries(
+      Object.entries(state?.subscribers || {}).map(([chatId, subscriber]) => [
+        chatId,
+        normalizeSubscriber(subscriber)
+      ])
+    ),
     predictions: state?.predictions || {},
     memory: {
       ...DEFAULT_STATE.memory,
@@ -143,12 +164,19 @@ export class Storage {
     this.save();
   }
 
-  addSubscriber(chat) {
-    this.state.subscribers[String(chat.id)] = {
+  addSubscriber(chat, options = {}) {
+    const key = String(chat.id);
+    const existing = this.state.subscribers[key] || {};
+    this.state.subscribers[key] = normalizeSubscriber({
+      ...existing,
       id: chat.id,
       title: chat.title || chat.username || chat.first_name || String(chat.id),
-      subscribedAt: new Date().toISOString()
-    };
+      subscribedAt: existing.subscribedAt || new Date().toISOString(),
+      autoUpdate: {
+        ...(existing.autoUpdate || {}),
+        ...(options.autoUpdate || {})
+      }
+    });
     this.save();
   }
 
@@ -159,6 +187,56 @@ export class Storage {
 
   listSubscriberIds() {
     return Object.keys(this.state.subscribers);
+  }
+
+  getSubscriber(chatId) {
+    return this.state.subscribers[String(chatId)] || null;
+  }
+
+  setAutoUpdate(chat, updates = {}) {
+    const key = String(chat.id);
+    if (!this.state.subscribers[key]) {
+      this.addSubscriber(chat);
+    }
+
+    const subscriber = this.state.subscribers[key];
+    subscriber.autoUpdate = {
+      ...DEFAULT_AUTO_UPDATE,
+      ...(subscriber.autoUpdate || {}),
+      ...updates
+    };
+    this.save();
+  }
+
+  getAutoUpdate(chatId) {
+    const subscriber = this.getSubscriber(chatId);
+    return {
+      ...DEFAULT_AUTO_UPDATE,
+      ...(subscriber?.autoUpdate || {})
+    };
+  }
+
+  listAutoUpdateTargets(defaultDailyTime = '20:00') {
+    return Object.values(this.state.subscribers)
+      .filter((subscriber) => subscriber.autoUpdate?.enabled)
+      .map((subscriber) => ({
+        chatId: String(subscriber.id),
+        title: subscriber.title || String(subscriber.id),
+        dailyTime: subscriber.autoUpdate.dailyTime || defaultDailyTime,
+        lastSentDate: subscriber.autoUpdate.lastSentDate || ''
+      }));
+  }
+
+  setAutoUpdateLastSent(chatId, dateYmd) {
+    const subscriber = this.state.subscribers[String(chatId)];
+    if (!subscriber) return;
+
+    subscriber.autoUpdate = {
+      ...DEFAULT_AUTO_UPDATE,
+      ...(subscriber.autoUpdate || {}),
+      lastSentDate: dateYmd
+    };
+    this.save();
   }
 
   getLastAutoAlertDate() {
