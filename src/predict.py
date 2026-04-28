@@ -7,7 +7,8 @@ Example:
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
+from dataclasses import asdict, replace
+from datetime import datetime, timezone
 
 from .data_loader import (
     PitcherStats,
@@ -28,7 +29,8 @@ from .odds import (
     decimal_odds_to_implied_probability,
 )
 from .park_factors import get_park_factor, load_park_factors
-from .totals import GameTotalContext, predict_total_runs
+from .quality_control import apply_confidence_downgrade, generate_quality_report
+from .totals import COMMON_TOTAL_LINES, GameTotalContext, predict_total_runs
 from .utils import clean_name, data_path, format_probability, safe_float
 from .weather import get_weather_context, load_weather_contexts
 
@@ -121,6 +123,73 @@ def _probability_for_total_side(total_result, market_total: float, side: str) ->
     return probabilities[nearest_line]
 
 
+def _stamp(payload: dict, timestamp: str) -> dict:
+    item = dict(payload)
+    if item.get("available") is not False:
+        item["data_timestamp"] = timestamp
+    return item
+
+
+def _market_payload(args: argparse.Namespace, market_row: dict[str, str] | None, market_total: float | None) -> dict:
+    row = market_row or {}
+    available = bool(row or args.home_odds or args.over_odds or args.under_odds or market_total)
+    return {
+        "available": available,
+        "home_moneyline": args.home_odds or row.get("home_moneyline"),
+        "away_moneyline": row.get("away_moneyline"),
+        "market_total": market_total or safe_float(row.get("market_total"), 0.0),
+        "opening_total": safe_float(row.get("opening_total"), 0.0),
+        "current_total": safe_float(row.get("current_total"), 0.0) or market_total,
+        "over_odds": args.over_odds or row.get("over_odds"),
+        "under_odds": args.under_odds or row.get("under_odds"),
+    }
+
+
+def _build_quality_context(
+    args: argparse.Namespace,
+    home_pitcher: PitcherStats | None,
+    away_pitcher: PitcherStats | None,
+    total_context: GameTotalContext,
+    market_payload: dict,
+) -> dict:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    home_pitcher_payload = asdict(home_pitcher) if home_pitcher else None
+    away_pitcher_payload = asdict(away_pitcher) if away_pitcher else None
+    if home_pitcher_payload:
+        home_pitcher_payload["confirmed"] = True
+    if away_pitcher_payload:
+        away_pitcher_payload["confirmed"] = True
+
+    return {
+        "probable_pitchers": {
+            "home": home_pitcher_payload,
+            "away": away_pitcher_payload,
+        },
+        "lineup": {
+            "home": asdict(total_context.home_lineup) if total_context.home_lineup else None,
+            "away": asdict(total_context.away_lineup) if total_context.away_lineup else None,
+        },
+        "weather": _stamp(
+            asdict(total_context.weather) if total_context.weather else {"available": False},
+            timestamp,
+        ),
+        "market": _stamp(market_payload, timestamp),
+        "bullpen": {
+            "home": _stamp(asdict(total_context.home_bullpen) if total_context.home_bullpen else {"available": False}, timestamp),
+            "away": _stamp(asdict(total_context.away_bullpen) if total_context.away_bullpen else {"available": False}, timestamp),
+        },
+        "park": asdict(total_context.park) | {"available": True} if total_context.park else {"available": False},
+        "injury_news": {
+            "available": total_context.home_lineup is not None or total_context.away_lineup is not None,
+            "source": "lineup injury fields",
+        },
+        "calibration": {
+            "supports_high_confidence": False,
+            "source": "no validated live calibration sample loaded",
+        },
+    }
+
+
 def main() -> None:
     args = parse_args()
     teams = load_team_stats(args.team_stats)
@@ -141,22 +210,13 @@ def main() -> None:
     )
 
     result = BaselinePredictionModel().predict(home_team, away_team, home_pitcher, away_pitcher)
-    print(f"Home Team: {result.home_team}")
-    print(f"Away Team: {result.away_team}")
-    print("")
-    print("Winner Prediction:")
-    print(f"{result.home_team} win probability: {format_probability(result.home_win_probability)}")
-    print(f"{result.away_team} win probability: {format_probability(result.away_win_probability)}")
-    print(f"Predicted winner: {result.predicted_winner}")
-    print(f"Confidence: {result.confidence}")
-
-    market_probability = _market_probability(args.home_odds, args.odds_format)
-    if market_probability is not None:
-        edge = calculate_edge(result.home_win_probability, market_probability)
-        print("")
-        print("Market Comparison:")
-        print(f"Home Market Implied Probability: {format_probability(market_probability)}")
-        print(f"Home Model Edge: {edge * 100:+.1f}%")
+    home_odds = args.home_odds or (market_row or {}).get("home_moneyline")
+    market_probability = _market_probability(home_odds, args.odds_format)
+    moneyline_edge = (
+        calculate_edge(result.home_win_probability, market_probability)
+        if market_probability is not None
+        else None
+    )
 
     market_total = args.market_total
     if market_total is None and market_row:
@@ -193,8 +253,85 @@ def main() -> None:
                     model_edge=calculate_edge(model_probability, market_side_probability),
                 )
 
+    quality_context = _build_quality_context(
+        args,
+        home_pitcher,
+        away_pitcher,
+        total_context,
+        _market_payload(args, market_row, market_total),
+    )
+    quality_report = generate_quality_report(quality_context)
+    moneyline_decision = apply_confidence_downgrade(
+        {
+            "confidence": result.confidence,
+            "model_edge": moneyline_edge,
+            "final_lean": result.predicted_winner,
+            "market_type": "moneyline",
+        },
+        quality_report,
+    )
+    total_decision = apply_confidence_downgrade(
+        {
+            "confidence": total_result.confidence,
+            "model_edge": total_result.model_edge,
+            "final_lean": total_result.best_total_lean,
+            "market_type": "totals",
+            "projected_total_runs": total_result.projected_total_runs,
+            "market_total": total_result.market_total,
+        },
+        quality_report,
+    )
+
+    print(f"Home Team: {result.home_team}")
+    print(f"Away Team: {result.away_team}")
     print("")
-    print(total_result.format())
+    print("Winner Prediction:")
+    print(f"{result.home_team} win probability: {format_probability(result.home_win_probability)}")
+    print(f"{result.away_team} win probability: {format_probability(result.away_win_probability)}")
+    print(f"Predicted winner: {result.predicted_winner}")
+    print(f"Confidence: {moneyline_decision['confidence']}")
+    print(f"Decision: {moneyline_decision['decision']}")
+
+    if market_probability is not None:
+        print("")
+        print("Market Comparison:")
+        print(f"Home Market Implied Probability: {format_probability(market_probability)}")
+        print(f"Home Model Edge: {moneyline_edge * 100:+.1f}%")
+
+    print("")
+    print("Total Runs Prediction:")
+    print(f"Home expected runs: {total_result.home_expected_runs:.1f}")
+    print(f"Away expected runs: {total_result.away_expected_runs:.1f}")
+    print(f"Projected total runs: {total_result.projected_total_runs:.1f}")
+    if total_result.market_total is not None:
+        print(f"Market total: {total_result.market_total:.1f}")
+
+    print("")
+    print("Over/Under Probability:")
+    for line in COMMON_TOTAL_LINES:
+        print(f"Over {line:.1f}: {format_probability(total_result.over_probabilities[line])}")
+    for line in COMMON_TOTAL_LINES:
+        print(f"Under {line:.1f}: {format_probability(total_result.under_probabilities[line])}")
+
+    print("")
+    print("Best Total Lean:")
+    print(f"Lean: {total_result.best_total_lean}")
+    print(f"Confidence: {total_decision['confidence']}")
+    if total_result.model_edge is not None:
+        print(f"Model edge: {total_result.model_edge * 100:+.1f}%")
+    print(f"Decision: {total_decision['decision']}")
+
+    print("")
+    print("Data Quality:")
+    print(f"Score: {quality_report['score']}/100")
+    print(f"Missing: {', '.join(quality_report['missing_fields'] or ['none'])}")
+    print(f"Stale: {', '.join(quality_report['stale_fields'] or ['none'])}")
+    adjustments = total_decision.get("confidence_adjustments") or moneyline_decision.get("confidence_adjustments")
+    print(f"Confidence adjustments: {', '.join(adjustments or ['none'])}")
+    print("")
+    print("Decision:")
+    print(f"Moneyline: {moneyline_decision['decision']} - {moneyline_decision['decision_reason']}")
+    print(f"Total: {total_decision['decision']} - {total_decision['decision_reason']}")
 
 
 if __name__ == "__main__":

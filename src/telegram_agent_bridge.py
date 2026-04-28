@@ -83,6 +83,7 @@ def moneyline(game_id: str) -> dict[str, Any]:
     result = predict_moneyline(game_id)
     market = result.get("market", {})
     edge = result.get("home_edge")
+    quality = result.get("quality_report", {})
     lines = [
         "Moneyline",
         result["matchup"],
@@ -90,11 +91,15 @@ def moneyline(game_id: str) -> dict[str, Any]:
         f"Home: {_pct(result['home_win_probability'])}",
         f"Away: {_pct(result['away_win_probability'])}",
         f"Confidence: {result['confidence']}",
+        f"Decision: {result.get('decision', '-')}",
+        f"Quality: {quality.get('score', 0)}/100",
     ]
     if market.get("available"):
         lines.append(f"Market ML: home {market.get('home_moneyline')} | away {market.get('away_moneyline')}")
     if edge is not None:
         lines.append(f"Home edge: {edge * 100:+.1f}%")
+    if result.get("confidence_adjustments"):
+        lines.append(f"Adjustment: {result['confidence_adjustments'][0]}")
     lines.append(f"No-bet: {'YES' if result['no_bet'] else 'NO'}")
     return {"text": "\n".join(lines)}
 
@@ -104,6 +109,7 @@ def total_runs(game_id: str) -> dict[str, Any]:
     over = result["over_probabilities"]
     under = result["under_probabilities"]
     market_total = result.get("market_total")
+    quality = result.get("quality_report", {})
     lines = [
         "Total Runs",
         result["matchup"],
@@ -130,9 +136,14 @@ def total_runs(game_id: str) -> dict[str, Any]:
             f"- Under 8.5: {_pct(under[8.5])}",
             f"- Under 9.5: {_pct(under[9.5])}",
             f"- Under 10.5: {_pct(under[10.5])}",
+            "",
+            f"Decision: {result.get('decision', '-')}",
+            f"Quality: {quality.get('score', 0)}/100",
             f"No-bet: {'YES' if result['no_bet'] else 'NO'}",
         ]
     )
+    if result.get("confidence_adjustments"):
+        lines.insert(-1, f"Adjustment: {result['confidence_adjustments'][0]}")
     return {"text": "\n".join(lines)}
 
 
@@ -154,6 +165,7 @@ def context(game_id: str) -> dict[str, Any]:
 def full(game_id: str) -> dict[str, Any]:
     ml = predict_moneyline(game_id)
     total = predict_total_runs(game_id)
+    quality = total.get("quality_report", ml.get("quality_report", {}))
     lines = [
         "MLB Game Analysis",
         ml["matchup"],
@@ -161,6 +173,8 @@ def full(game_id: str) -> dict[str, Any]:
         f"Home/Away: {_pct(ml['home_win_probability'])} / {_pct(ml['away_win_probability'])}",
         f"Total: {_fmt_number(total['projected_total_runs'])}",
         f"Lean: {total['best_total_lean']} ({total['confidence']})",
+        f"Decision: ML {ml.get('decision', '-')} | Total {total.get('decision', '-')}",
+        f"Quality: {quality.get('score', 0)}/100",
         "",
         "Factors:",
         *[f"- {factor}" for factor in (ml["main_factors"] + total["main_factors"])[:4]],

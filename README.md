@@ -453,6 +453,65 @@ Prinsip penting:
 - Rolling stats untuk backtest harus digeser sebelum game target agar tidak data leakage.
 - Market odds dipakai untuk edge, bukan untuk menjamin hasil.
 
+## Prediction Quality Control
+
+Sebelum agent memberi final betting lean, project menjalankan quality-control layer:
+
+- `src/data_freshness.py`: cek apakah data masih fresh, stale, atau missing.
+- `src/quality_control.py`: cek kelengkapan input, hitung data quality score, downgrade confidence, dan putuskan `BET / LEAN / NO BET`.
+
+Data yang dicek:
+
+- Probable pitcher.
+- Lineup confirmed/projected/missing.
+- Weather fresh/stale/missing.
+- Odds fresh/stale/missing.
+- Bullpen usage.
+- Park factor.
+- Market total dan market odds.
+- Injury/news context.
+- Calibration support untuk High confidence.
+
+Scoring quality:
+
+```text
+Probable pitchers confirmed: +20
+Lineup confirmed: +15
+Weather fresh: +10
+Odds fresh: +15
+Bullpen usage available: +15
+Park factor available: +10
+Market total available: +10
+Injury/news context available: +5
+```
+
+No-bet filter aktif saat:
+
+- Probable pitcher missing.
+- Model edge di bawah 2%.
+- Selisih projected total vs market total di bawah 0.4 run untuk totals.
+- Data quality score di bawah 60.
+- Market edge tidak tersedia.
+
+Confidence otomatis diturunkan saat:
+
+- Odds stale.
+- Weather stale untuk outdoor stadium.
+- Lineup belum confirmed.
+- Probable pitcher masih projected.
+- Data quality score belum cukup kuat.
+- Calibration belum mendukung High confidence.
+
+Output Telegram `/agenttools` dan command `/predict HOME | AWAY` sekarang menampilkan:
+
+```text
+Decision: BET / LEAN / NO BET
+Quality: 82/100
+No-bet: YES/NO
+```
+
+Prinsip penting: agent tidak boleh memberi `High` confidence jika lineup belum confirmed, probable pitcher missing/projected, odds stale, weather stale untuk outdoor stadium, atau calibration belum mendukung high confidence.
+
 ## Backtesting, Evaluation, And Calibration
 
 Project ini juga punya pipeline validasi model dari CSV lokal:
@@ -772,6 +831,8 @@ src/backtest.py       Backtest moneyline/totals dan tulis predictions log
 src/evaluate.py       Evaluasi ROI, CLV, Brier, log loss, calibration
 src/calibration.py    Confidence/probability calibration helpers
 src/reports.py        Formatter report evaluasi
+src/data_freshness.py Fresh/stale/missing checks untuk input prediction
+src/quality_control.py No-bet filter, data quality score, confidence downgrade
 src/weather.py        Weather run adjustment
 src/park_factors.py   Park factor run adjustment
 src/lineup.py         Lineup availability adjustment

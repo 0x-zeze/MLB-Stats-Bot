@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from .bullpen import get_bullpen_usage as find_bullpen_usage
@@ -25,6 +25,7 @@ from .model import BaselinePredictionModel
 from .odds import american_odds_to_implied_probability, calculate_edge
 from .park_factors import get_park_factor as find_park_factor
 from .park_factors import load_park_factors
+from .quality_control import apply_confidence_downgrade, generate_quality_report
 from .totals import COMMON_TOTAL_LINES, GameTotalContext
 from .totals import predict_total_runs as predict_total_runs_model
 from .utils import clean_name, data_path, format_probability, safe_float
@@ -43,6 +44,17 @@ def _local_state() -> dict[str, Any]:
         "lineups": load_lineups(),
         "retrosheet": load_game_logs(),
     }
+
+
+def _fresh_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _stamp(payload: dict[str, Any], timestamp: str) -> dict[str, Any]:
+    stamped = dict(payload)
+    if stamped.get("available") is not False:
+        stamped["data_timestamp"] = timestamp
+    return stamped
 
 
 def _game_key(game: GameRow) -> str:
@@ -120,22 +132,47 @@ def get_game_context(game_id: str | int) -> dict[str, Any]:
     away = _team(state["teams"], game.away_team)
     home_pitcher = _pitcher_for_game(game, "home", state["pitchers"])
     away_pitcher = _pitcher_for_game(game, "away", state["pitchers"])
+    timestamp = _fresh_timestamp()
+    home_lineup = get_lineup(state["lineups"], game.home_team)
+    away_lineup = get_lineup(state["lineups"], game.away_team)
+    home_bullpen = get_bullpen_usage(game.home_team)
+    away_bullpen = get_bullpen_usage(game.away_team)
+    market = get_market_odds(game_id)
+    weather = get_weather_context(game.home_team, away_team=game.away_team)
+    home_pitcher_payload = asdict(home_pitcher) if home_pitcher else None
+    away_pitcher_payload = asdict(away_pitcher) if away_pitcher else None
+    if home_pitcher_payload:
+        home_pitcher_payload["confirmed"] = True
+    if away_pitcher_payload:
+        away_pitcher_payload["confirmed"] = True
     return {
         "matchup": f"{game.away_team} @ {game.home_team}",
         "date": game.date,
         "home_team": asdict(home),
         "away_team": asdict(away),
         "probable_pitchers": {
-            "home": asdict(home_pitcher) if home_pitcher else None,
-            "away": asdict(away_pitcher) if away_pitcher else None,
+            "home": home_pitcher_payload,
+            "away": away_pitcher_payload,
         },
         "park": get_park_factor(game.home_team),
-        "weather": get_weather_context(game.home_team, away_team=game.away_team),
+        "weather": _stamp(weather, timestamp),
         "lineup": {
-            "home": asdict(get_lineup(state["lineups"], game.home_team)) if get_lineup(state["lineups"], game.home_team) else None,
-            "away": asdict(get_lineup(state["lineups"], game.away_team)) if get_lineup(state["lineups"], game.away_team) else None,
+            "home": asdict(home_lineup) if home_lineup else None,
+            "away": asdict(away_lineup) if away_lineup else None,
         },
-        "market": get_market_odds(game_id),
+        "bullpen": {
+            "home": _stamp(home_bullpen, timestamp),
+            "away": _stamp(away_bullpen, timestamp),
+        },
+        "market": _stamp(market, timestamp),
+        "injury_news": {
+            "available": home_lineup is not None or away_lineup is not None,
+            "source": "lineup injury fields",
+        },
+        "calibration": {
+            "supports_high_confidence": False,
+            "source": "no validated live calibration sample loaded",
+        },
     }
 
 
@@ -259,6 +296,7 @@ def predict_moneyline(game_id: str | int) -> dict[str, Any]:
     """Predict moneyline with model probability and market edge when available."""
     state = _local_state()
     game = _resolve_game(game_id, state["games"])
+    context = get_game_context(game_id)
     result = BaselinePredictionModel().predict(
         _team(state["teams"], game.home_team),
         _team(state["teams"], game.away_team),
@@ -267,29 +305,41 @@ def predict_moneyline(game_id: str | int) -> dict[str, Any]:
     )
     market = get_market_odds(game_id)
     home_market_probability = None
+    away_market_probability = None
     home_edge = None
+    away_edge = None
     if market.get("home_moneyline"):
         home_market_probability = american_odds_to_implied_probability(str(market["home_moneyline"]))
         home_edge = calculate_edge(result.home_win_probability, home_market_probability)
-    return {
+    if market.get("away_moneyline"):
+        away_market_probability = american_odds_to_implied_probability(str(market["away_moneyline"]))
+        away_edge = calculate_edge(result.away_win_probability, away_market_probability)
+    pick_edge = home_edge if result.predicted_winner == game.home_team else away_edge
+    prediction = {
         "matchup": f"{game.away_team} @ {game.home_team}",
         "home_win_probability": result.home_win_probability,
         "away_win_probability": result.away_win_probability,
         "predicted_winner": result.predicted_winner,
+        "final_lean": result.predicted_winner,
         "confidence": result.confidence,
         "components": result.components | {"defense": 0.0, "injuries_lineup": 0.0, "market_odds": 0.0},
         "market": market,
         "home_market_implied_probability": home_market_probability,
+        "away_market_implied_probability": away_market_probability,
         "home_edge": home_edge,
+        "away_edge": away_edge,
+        "model_edge": pick_edge,
+        "market_type": "moneyline",
         "main_factors": result.main_factors,
-        "no_bet": result.confidence == "Low" or (home_edge is not None and abs(home_edge) < 0.02),
     }
+    return apply_confidence_downgrade(prediction, generate_quality_report(context))
 
 
 def predict_total_runs(game_id: str | int) -> dict[str, Any]:
     """Predict total runs and common over/under probabilities."""
     state = _local_state()
     game = _resolve_game(game_id, state["games"])
+    quality_context = get_game_context(game_id)
     home_team = _team(state["teams"], game.home_team)
     away_team = _team(state["teams"], game.away_team)
     market = get_market_odds(game_id)
@@ -309,7 +359,7 @@ def predict_total_runs(game_id: str | int) -> dict[str, Any]:
         context,
         market_total=market.get("market_total") if market.get("available") else None,
     )
-    return {
+    prediction = {
         "matchup": f"{game.away_team} @ {game.home_team}",
         "home_expected_runs": result.home_expected_runs,
         "away_expected_runs": result.away_expected_runs,
@@ -318,11 +368,13 @@ def predict_total_runs(game_id: str | int) -> dict[str, Any]:
         "over_probabilities": result.over_probabilities,
         "under_probabilities": result.under_probabilities,
         "best_total_lean": result.best_total_lean,
+        "final_lean": result.best_total_lean,
         "confidence": result.confidence,
         "model_edge": result.model_edge,
+        "market_type": "totals",
         "main_factors": result.main_factors,
-        "no_bet": result.confidence == "Low",
     }
+    return apply_confidence_downgrade(prediction, generate_quality_report(quality_context))
 
 
 def explain_prediction(game_id: str | int) -> str:
@@ -331,23 +383,57 @@ def explain_prediction(game_id: str | int) -> str:
     moneyline = predict_moneyline(game_id)
     totals = predict_total_runs(game_id)
     market = context["market"]
+    quality = totals.get("quality_report") or moneyline.get("quality_report") or generate_quality_report(context)
+    pitchers = context["probable_pitchers"]
+    away_pitcher = (pitchers.get("away") or {}).get("pitcher", "Unknown")
+    home_pitcher = (pitchers.get("home") or {}).get("pitcher", "Unknown")
+    missing = ", ".join(quality.get("missing_fields") or ["none"])
+    stale = ", ".join(quality.get("stale_fields") or ["none"])
+    adjustments = ", ".join(quality.get("confidence_adjustments") or ["none"])
+    if moneyline.get("decision") == "BET" or totals.get("decision") == "BET":
+        decision = "BET"
+    elif moneyline.get("decision") == "LEAN" or totals.get("decision") == "LEAN":
+        decision = "LEAN"
+    else:
+        decision = "NO BET"
+    if decision == "BET":
+        decision_reason = (
+            totals.get("decision_reason")
+            if totals.get("decision") == "BET"
+            else moneyline.get("decision_reason")
+        )
+    elif decision == "LEAN":
+        decision_reason = (
+            totals.get("decision_reason")
+            if totals.get("decision") == "LEAN"
+            else moneyline.get("decision_reason")
+        )
+    else:
+        decision_reason = "; ".join(
+            reason
+            for reason in (moneyline.get("decision_reason"), totals.get("decision_reason"))
+            if reason
+        )
     lines = [
         "MLB Game Analysis:",
         f"- Matchup: {context['matchup']}",
         f"- Game time: {context['date']}",
         f"- Ballpark: {context['park'].get('park', 'Unknown')}",
         f"- Weather: {context['weather'].get('temperature', 'N/A')} F, wind {context['weather'].get('wind_speed', 'N/A')} mph {context['weather'].get('wind_direction', '')}",
-        f"- Probable pitchers: {context['probable_pitchers']['away']['pitcher']} vs {context['probable_pitchers']['home']['pitcher']}",
+        f"- Probable pitchers: {away_pitcher} vs {home_pitcher}",
         "",
         "Moneyline prediction:",
         f"- {context['home_team']['team']}: {format_probability(moneyline['home_win_probability'])}",
         f"- {context['away_team']['team']}: {format_probability(moneyline['away_win_probability'])}",
         f"- Predicted winner: {moneyline['predicted_winner']}",
+        f"- Decision: {moneyline['decision']}",
         "",
         "Total runs prediction:",
         f"- Projected total: {totals['projected_total_runs']:.1f}",
         f"- Home expected runs: {totals['home_expected_runs']:.1f}",
         f"- Away expected runs: {totals['away_expected_runs']:.1f}",
+        f"- Lean: {totals['raw_lean']}",
+        f"- Decision: {totals['decision']}",
     ]
     for total_line in (6.5, 7.5, 8.5, 9.5, 10.5):
         lines.append(
@@ -382,11 +468,19 @@ def explain_prediction(game_id: str | int) -> str:
         [
             "",
             f"- Confidence level: ML {moneyline['confidence']} | Total {totals['confidence']}",
+            "Data Quality:",
+            f"- Score: {quality.get('score', 0)}/100",
+            f"- Missing: {missing}",
+            f"- Stale: {stale}",
+            f"- Confidence adjustments: {adjustments}",
             "- Main supporting factors:",
             *[f"  - {factor}" for factor in (moneyline["main_factors"] + totals["main_factors"])[:5]],
             "- Risk factors:",
             *[f"  - {factor}" for factor in (risk_factors or ["Normal MLB variance"])],
+            "Decision:",
+            f"- Overall: {decision}",
             f"- Final lean: {'No bet' if no_bet else final_lean}",
+            f"- Reason: {decision_reason}",
             f"- No-bet flag: {'YES' if no_bet else 'NO'}",
         ]
     )
