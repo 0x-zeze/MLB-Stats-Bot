@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MLB Stats Bot Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">MLB Stats Bot</p>
+        <h1>Prediction Dashboard</h1>
+      </div>
+      <div class="topbar-actions">
+        <div class="segmented" aria-label="Data source">
+          <button id="sourceSample" class="active" type="button">Sample</button>
+          <button id="sourceLive" type="button">Live</button>
+        </div>
+        <label class="date-control">
+          <span>Date</span>
+          <input id="dateInput" type="date" />
+        </label>
+        <button id="refreshButton" class="primary" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="status-grid" aria-label="System overview">
+        <article class="metric">
+          <span>Telegram</span>
+          <strong id="telegramStatus">-</strong>
+          <small id="telegramDetail">Loading</small>
+        </article>
+        <article class="metric">
+          <span>Agent</span>
+          <strong id="agentStatus">-</strong>
+          <small id="agentDetail">Loading</small>
+        </article>
+        <article class="metric">
+          <span>Memory</span>
+          <strong id="memoryAccuracy">-</strong>
+          <small id="memoryDetail">Loading</small>
+        </article>
+        <article class="metric">
+          <span>Backtest</span>
+          <strong id="backtestRoi">-</strong>
+          <small id="backtestDetail">Loading</small>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <aside class="game-rail">
+          <div class="rail-header">
+            <div>
+              <h2>Games</h2>
+              <p id="gameCount">-</p>
+            </div>
+            <input id="gameSearch" type="search" placeholder="Search team" />
+          </div>
+          <div id="gameList" class="game-list"></div>
+        </aside>
+
+        <section class="analysis">
+          <div class="analysis-header">
+            <div>
+              <p class="eyebrow" id="selectedSource">Sample model</p>
+              <h2 id="matchupTitle">Select a game</h2>
+              <p id="matchupMeta">Moneyline, total runs, quality control, and agent context.</p>
+            </div>
+            <div class="tabbar" aria-label="Analysis view">
+              <button class="active" data-view="overview" type="button">Overview</button>
+              <button data-view="moneyline" type="button">Moneyline</button>
+              <button data-view="totals" type="button">Totals</button>
+              <button data-view="quality" type="button">Quality</button>
+            </div>
+          </div>
+
+          <div id="analysisBody" class="analysis-body empty-state">
+            <p>Choose a matchup from the left to inspect the model.</p>
+          </div>
+        </section>
+      </section>
+
+      <section class="lower-grid">
+        <section class="tool-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Backtest And Calibration</h2>
+              <p>Run sample backtests, then inspect ROI, CLV, and calibration output.</p>
+            </div>
+            <div class="compact-actions">
+              <select id="backtestMarket">
+                <option value="totals">Totals</option>
+                <option value="moneyline">Moneyline</option>
+              </select>
+              <input id="backtestSeason" type="number" value="2025" min="2000" max="2100" />
+              <button id="runBacktestButton" type="button">Run</button>
+            </div>
+          </div>
+          <pre id="evaluationReport" class="report-box">Loading evaluation report...</pre>
+        </section>
+
+        <section class="tool-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Knowledge Base</h2>
+              <p>Ask the sabermetrics and betting-market layer.</p>
+            </div>
+          </div>
+          <div class="knowledge-box">
+            <div class="quick-questions">
+              <button data-question="Why is wRC+ better than OPS for offense evaluation?" type="button">wRC+</button>
+              <button data-question="Why does FIP matter more than ERA for pitcher prediction?" type="button">FIP</button>
+              <button data-question="Why is bullpen fatigue important for totals?" type="button">Bullpen</button>
+              <button data-question="What does it mean if model total is 9.2 but market total is 8.5?" type="button">Market total</button>
+            </div>
+            <div class="ask-row">
+              <input id="knowledgeInput" type="text" placeholder="Ask a baseball model question" />
+              <button id="askButton" type="button">Ask</button>
+            </div>
+            <div id="knowledgeAnswer" class="answer-box">Pick a question or ask your own.</div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

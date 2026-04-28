@@ -231,6 +231,56 @@ npm run check
 
 Jika `PRINT_ALERT_TO_TERMINAL=false`, terminal hanya menampilkan log ringkas. Output utama dikirim ke Telegram.
 
+## Dashboard Web
+
+Project ini juga punya dashboard lokal untuk memantau semua modul yang sudah dibangun:
+
+- Schedule dan prediction slate.
+- Moneyline probability.
+- Total runs / over-under probability.
+- Data quality score dan no-bet decision.
+- Backtest, ROI, CLV, Brier, dan calibration report.
+- Agent memory summary.
+- Knowledge base sabermetrics.
+- Status Telegram, OpenAI key, Analyst Agent, dan auto-alert.
+
+Jalankan:
+
+```bash
+npm run dashboard
+```
+
+Buka:
+
+```text
+http://localhost:3008
+```
+
+Jika berjalan di VPS, akses lewat browser:
+
+```text
+http://IP-VPS-KAMU:3008
+```
+
+Port bisa diganti di `.env`:
+
+```env
+DASHBOARD_PORT=3008
+```
+
+Mode dashboard:
+
+- `Sample`: memakai CSV lokal dan Python prediction layer. Ini selalu bisa jalan tanpa API berbayar.
+- `Live`: memakai MLB StatsAPI live untuk slate dan prediction context. Mode ini butuh koneksi internet dari VPS.
+
+Fitur interaktif:
+
+- Pilih tanggal.
+- Pilih game.
+- Pindah tab `Overview`, `Moneyline`, `Totals`, dan `Quality`.
+- Jalankan backtest `moneyline` atau `totals`.
+- Tanya knowledge base langsung dari dashboard.
+
 ## Python ML Prediction Engine
 
 Selain bot Telegram, project ini punya engine Python lokal untuk eksperimen model MLB dari CSV.
@@ -819,6 +869,7 @@ Expected response:
 
 ```text
 src/index.js          Bot Telegram, scheduler, command handler
+src/dashboard.js      Web dashboard lokal untuk monitoring model, QC, backtest, dan knowledge
 src/mlb.js            Data MLB, baseline model, formatter alert
 src/llm.js            Analyst Agent local/external
 src/storage.js        Memory dan state
