@@ -1,0 +1,4 @@
+home_team,away_team,temperature,wind_speed,wind_direction,humidity,air_pressure,roof
+Los Angeles Dodgers,New York Yankees,78,8,out to center,48,29.88,open
+Atlanta Braves,Philadelphia Phillies,72,6,cross,55,29.95,open
+Seattle Mariners,Houston Astros,68,0,calm,52,29.92,closed

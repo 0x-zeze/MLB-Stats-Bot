@@ -1,0 +1,7 @@
+team,confirmed,missing_star_hitters,top5_strength,platoon_advantage,injured_hitters,key_rest_days
+Los Angeles Dodgers,true,0,118,0.18,1,0
+New York Yankees,true,1,112,0.08,1,0
+Atlanta Braves,false,0,115,0.10,0,1
+Philadelphia Phillies,false,1,108,-0.04,1,0
+Seattle Mariners,true,0,101,-0.06,0,0
+Houston Astros,true,1,104,0.02,1,1

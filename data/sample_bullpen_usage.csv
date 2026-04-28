@@ -1,0 +1,7 @@
+team,bullpen_innings_last_3_days,relievers_used_yesterday,closer_available,high_leverage_available,back_to_back_usage,bullpen_era_last_7
+Los Angeles Dodgers,8.2,3,true,true,1,3.40
+New York Yankees,11.1,5,true,false,2,4.25
+Atlanta Braves,9.0,4,true,true,1,3.88
+Philadelphia Phillies,12.0,6,false,false,3,4.80
+Seattle Mariners,7.0,3,true,true,0,3.70
+Houston Astros,13.0,6,false,true,2,5.10

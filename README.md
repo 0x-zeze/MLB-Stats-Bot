@@ -242,6 +242,12 @@ Dengan odds market:
 python -m src.predict --home "Los Angeles Dodgers" --away "New York Yankees" --home-odds -120
 ```
 
+Dengan total runs / over-under:
+
+```bash
+python -m src.predict --home "Los Angeles Dodgers" --away "New York Yankees" --market-total 8.5 --over-odds -110 --under-odds -110
+```
+
 Jalankan dari Telegram:
 
 ```text
@@ -293,6 +299,14 @@ Model logic:
 - Home field: edge kecil untuk home team.
 - Odds edge: model probability dikurangi implied probability market.
 
+Total runs logic:
+
+- Projected total = league average total runs + offense + starting pitcher + bullpen + park + weather + lineup + recent form + optional umpire adjustment.
+- Over/under probability dihitung dari projected total memakai Poisson dan negative binomial style over-dispersion.
+- Market edge = model probability dikurangi implied probability dari odds market.
+- `Over 8.5: 56%` artinya model memperkirakan peluang total run selesai 9+ sekitar 56%.
+- Projected total bisa berbeda dari market total karena model memberi bobot ke SP, bullpen fatigue, cuaca, park factor, lineup, dan recent run form.
+
 Baseline weight:
 
 ```text
@@ -325,6 +339,11 @@ Sample CSV:
 data/sample_games.csv
 data/sample_team_stats.csv
 data/sample_pitcher_stats.csv
+data/sample_weather.csv
+data/sample_park_factors.csv
+data/sample_bullpen_usage.csv
+data/sample_lineups.csv
+data/sample_market_totals.csv
 ```
 
 Test Python:
@@ -543,6 +562,11 @@ src/telegram.js       Telegram Bot API wrapper
 src/analystSkill.js   Analyst playbook prompt
 src/features.py       Formula sabermetric Python
 src/model.py          Baseline prediction dan optional sklearn models
+src/totals.py         Total runs dan over/under probabilities
+src/weather.py        Weather run adjustment
+src/park_factors.py   Park factor run adjustment
+src/lineup.py         Lineup availability adjustment
+src/bullpen.py        Bullpen fatigue adjustment
 src/predict.py        CLI Python prediction
 src/odds.py           Implied probability dan edge
 src/data_loader.py    Loader CSV lokal

@@ -1,7 +1,7 @@
-team,wins,losses,runs_scored,runs_allowed,ops,wrc_plus,runs_per_game,bullpen_era,bullpen_whip,bullpen_recent_usage,wins_last_10,games_last_10,run_diff_last_10
-Los Angeles Dodgers,98,64,820,650,0.785,118,5.06,3.55,1.18,0.35,7,10,18
-New York Yankees,92,70,780,690,0.760,112,4.81,3.85,1.24,0.45,6,10,9
-Atlanta Braves,95,67,805,670,0.775,115,4.97,3.70,1.22,0.42,6,10,12
-Philadelphia Phillies,90,72,765,700,0.748,108,4.72,3.95,1.27,0.55,5,10,2
-Seattle Mariners,88,74,710,650,0.720,103,4.38,3.45,1.16,0.40,6,10,8
-Houston Astros,86,76,735,705,0.735,105,4.54,3.90,1.26,0.58,4,10,-4
+team,wins,losses,runs_scored,runs_allowed,ops,wrc_plus,runs_per_game,woba,xwoba,xslg,barrel_rate,hard_hit_rate,strikeout_rate,walk_rate,ops_vs_lhp,ops_vs_rhp,wrc_plus_vs_lhp,wrc_plus_vs_rhp,bullpen_era,bullpen_fip,bullpen_whip,bullpen_recent_usage,bullpen_era_last_7,wins_last_10,games_last_10,run_diff_last_10,runs_last_5,runs_allowed_last_5,ops_last_7_days
+Los Angeles Dodgers,98,64,820,650,0.785,118,5.06,0.342,0.348,0.463,0.092,0.421,0.205,0.094,0.792,0.779,121,116,3.55,3.70,1.18,0.35,3.40,7,10,18,31,17,0.812
+New York Yankees,92,70,780,690,0.760,112,4.81,0.333,0.337,0.445,0.089,0.412,0.218,0.091,0.752,0.766,108,114,3.85,3.95,1.24,0.45,4.25,6,10,9,25,20,0.744
+Atlanta Braves,95,67,805,670,0.775,115,4.97,0.338,0.343,0.456,0.095,0.428,0.214,0.088,0.781,0.772,118,113,3.70,3.82,1.22,0.42,3.88,6,10,12,27,19,0.769
+Philadelphia Phillies,90,72,765,700,0.748,108,4.72,0.326,0.329,0.432,0.082,0.401,0.219,0.086,0.755,0.744,111,106,3.95,4.05,1.27,0.55,4.80,5,10,2,22,21,0.731
+Seattle Mariners,88,74,710,650,0.720,103,4.38,0.316,0.319,0.408,0.078,0.392,0.237,0.083,0.714,0.724,100,104,3.45,3.60,1.16,0.40,3.70,6,10,8,20,17,0.704
+Houston Astros,86,76,735,705,0.735,105,4.54,0.321,0.325,0.419,0.081,0.399,0.207,0.084,0.728,0.739,102,107,3.90,4.02,1.26,0.58,5.10,4,10,-4,18,26,0.690

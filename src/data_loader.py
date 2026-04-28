@@ -22,12 +22,28 @@ class TeamStats:
     ops: float | None = None
     wrc_plus: float | None = None
     runs_per_game: float | None = None
+    woba: float | None = None
+    xwoba: float | None = None
+    xslg: float | None = None
+    barrel_rate: float | None = None
+    hard_hit_rate: float | None = None
+    strikeout_rate: float | None = None
+    walk_rate: float | None = None
+    ops_vs_lhp: float | None = None
+    ops_vs_rhp: float | None = None
+    wrc_plus_vs_lhp: float | None = None
+    wrc_plus_vs_rhp: float | None = None
     bullpen_era: float | None = None
+    bullpen_fip: float | None = None
     bullpen_whip: float | None = None
     bullpen_recent_usage: float | None = None
+    bullpen_era_last_7: float | None = None
     wins_last_10: int = 0
     games_last_10: int = 0
     run_diff_last_10: float = 0.0
+    runs_last_5: float = 0.0
+    runs_allowed_last_5: float = 0.0
+    ops_last_7_days: float | None = None
 
     @property
     def win_pct(self) -> float:
@@ -45,12 +61,28 @@ class TeamStats:
             ops=safe_float(row.get("ops"), 0.0) or None,
             wrc_plus=safe_float(row.get("wrc_plus"), 0.0) or None,
             runs_per_game=safe_float(row.get("runs_per_game"), 0.0) or None,
+            woba=safe_float(row.get("woba"), 0.0) or None,
+            xwoba=safe_float(row.get("xwoba"), 0.0) or None,
+            xslg=safe_float(row.get("xslg"), 0.0) or None,
+            barrel_rate=safe_float(row.get("barrel_rate"), 0.0) or None,
+            hard_hit_rate=safe_float(row.get("hard_hit_rate"), 0.0) or None,
+            strikeout_rate=safe_float(row.get("strikeout_rate"), 0.0) or None,
+            walk_rate=safe_float(row.get("walk_rate"), 0.0) or None,
+            ops_vs_lhp=safe_float(row.get("ops_vs_lhp"), 0.0) or None,
+            ops_vs_rhp=safe_float(row.get("ops_vs_rhp"), 0.0) or None,
+            wrc_plus_vs_lhp=safe_float(row.get("wrc_plus_vs_lhp"), 0.0) or None,
+            wrc_plus_vs_rhp=safe_float(row.get("wrc_plus_vs_rhp"), 0.0) or None,
             bullpen_era=safe_float(row.get("bullpen_era"), 0.0) or None,
+            bullpen_fip=safe_float(row.get("bullpen_fip"), 0.0) or None,
             bullpen_whip=safe_float(row.get("bullpen_whip"), 0.0) or None,
             bullpen_recent_usage=safe_float(row.get("bullpen_recent_usage"), 0.0) or None,
+            bullpen_era_last_7=safe_float(row.get("bullpen_era_last_7"), 0.0) or None,
             wins_last_10=safe_int(row.get("wins_last_10")),
             games_last_10=safe_int(row.get("games_last_10")),
             run_diff_last_10=safe_float(row.get("run_diff_last_10")),
+            runs_last_5=safe_float(row.get("runs_last_5")),
+            runs_allowed_last_5=safe_float(row.get("runs_allowed_last_5")),
+            ops_last_7_days=safe_float(row.get("ops_last_7_days"), 0.0) or None,
         )
 
 
@@ -63,7 +95,18 @@ class PitcherStats:
     era: float
     whip: float
     fip: float | None = None
+    xfip: float | None = None
     k_bb_ratio: float | None = None
+    k_rate: float | None = None
+    bb_rate: float | None = None
+    hr_per_9: float | None = None
+    xwoba_allowed: float | None = None
+    hard_hit_rate_allowed: float | None = None
+    barrel_rate_allowed: float | None = None
+    pitch_count_last_start: float | None = None
+    days_rest: float | None = None
+    recent_3_start_era: float | None = None
+    recent_3_start_whip: float | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, str]) -> "PitcherStats":
@@ -73,7 +116,18 @@ class PitcherStats:
             era=safe_float(row.get("era"), 4.20),
             whip=safe_float(row.get("whip"), 1.30),
             fip=safe_float(row.get("fip"), 0.0) or None,
+            xfip=safe_float(row.get("xfip"), 0.0) or None,
             k_bb_ratio=safe_float(row.get("k_bb_ratio"), 0.0) or None,
+            k_rate=safe_float(row.get("k_rate"), 0.0) or None,
+            bb_rate=safe_float(row.get("bb_rate"), 0.0) or None,
+            hr_per_9=safe_float(row.get("hr_per_9"), 0.0) or None,
+            xwoba_allowed=safe_float(row.get("xwoba_allowed"), 0.0) or None,
+            hard_hit_rate_allowed=safe_float(row.get("hard_hit_rate_allowed"), 0.0) or None,
+            barrel_rate_allowed=safe_float(row.get("barrel_rate_allowed"), 0.0) or None,
+            pitch_count_last_start=safe_float(row.get("pitch_count_last_start"), 0.0) or None,
+            days_rest=safe_float(row.get("days_rest"), 0.0) or None,
+            recent_3_start_era=safe_float(row.get("recent_3_start_era"), 0.0) or None,
+            recent_3_start_whip=safe_float(row.get("recent_3_start_whip"), 0.0) or None,
         )
 
 

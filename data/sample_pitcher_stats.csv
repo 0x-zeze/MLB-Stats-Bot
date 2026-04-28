@@ -1,7 +1,7 @@
-pitcher,team,era,whip,fip,k_bb_ratio
-Yoshinobu Yamamoto,Los Angeles Dodgers,3.10,1.08,3.25,4.20
-Gerrit Cole,New York Yankees,3.50,1.15,3.45,4.00
-Spencer Strider,Atlanta Braves,3.30,1.10,3.05,5.10
-Zack Wheeler,Philadelphia Phillies,3.05,1.04,3.15,4.70
-Logan Gilbert,Seattle Mariners,3.40,1.12,3.55,3.70
-Framber Valdez,Houston Astros,3.75,1.25,3.90,2.80
+pitcher,team,era,whip,fip,xfip,k_bb_ratio,k_rate,bb_rate,hr_per_9,xwoba_allowed,hard_hit_rate_allowed,barrel_rate_allowed,pitch_count_last_start,days_rest,recent_3_start_era,recent_3_start_whip
+Yoshinobu Yamamoto,Los Angeles Dodgers,3.10,1.08,3.25,3.35,4.20,0.285,0.068,0.95,0.292,0.356,0.065,92,5,2.70,1.02
+Gerrit Cole,New York Yankees,3.50,1.15,3.45,3.55,4.00,0.275,0.069,1.05,0.302,0.368,0.071,96,5,3.20,1.12
+Spencer Strider,Atlanta Braves,3.30,1.10,3.05,3.28,5.10,0.322,0.063,0.98,0.295,0.360,0.068,101,5,3.60,1.18
+Zack Wheeler,Philadelphia Phillies,3.05,1.04,3.15,3.25,4.70,0.292,0.061,0.88,0.287,0.348,0.060,94,6,2.95,1.00
+Logan Gilbert,Seattle Mariners,3.40,1.12,3.55,3.68,3.70,0.255,0.069,1.12,0.306,0.372,0.075,90,5,3.85,1.20
+Framber Valdez,Houston Astros,3.75,1.25,3.90,3.82,2.80,0.225,0.081,0.92,0.318,0.388,0.070,98,4,4.20,1.32
