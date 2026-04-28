@@ -129,6 +129,20 @@ function compactGameForAgent(item) {
       baselineProbability: Math.round(item.home.winProbability)
     },
     baselinePick: item.winner.name,
+    deterministicPipeline: {
+      numericAuthority: 'model_only',
+      pickTeamId: item.winner.id,
+      pickTeamName: item.winner.name,
+      awayProbability: Math.round(item.away.winProbability),
+      homeProbability: Math.round(item.home.winProbability),
+      totalRuns: item.totalRuns,
+      rule: 'LLM may explain and flag risk, but must not invent probabilities or totals.'
+    },
+    signalPriority: {
+      tier1: ['probable pitchers', 'team offense', 'bullpen usage', 'park factor', 'market odds'],
+      tier2: ['weather', 'confirmed lineup', 'platoon splits', 'recent form'],
+      tier3: ['umpire tendency', 'public betting percentage', 'news sentiment', 'head-to-head trends']
+    },
     headToHead: {
       games: item.headToHead?.games || 0,
       awayWins: item.headToHead?.awayWins || 0,
@@ -186,6 +200,14 @@ function compactGameForAgent(item) {
 
 function normalizeProbability(value, fallback) {
   return clamp(Math.round(toNumber(value, fallback)), 20, 80);
+}
+
+function deterministicConfidenceFromProbability(value) {
+  const probability = normalizeProbability(value, 50);
+  const edge = Math.abs(probability - 50);
+  if (edge >= 12) return 'high';
+  if (edge >= 6) return 'medium';
+  return 'low';
 }
 
 function resolveTeamId(value, prediction) {
@@ -254,34 +276,29 @@ function sanitizeFirstInningAnalysis(prediction, raw) {
     null;
 
   const baseline = prediction.firstInning || {};
+  const deterministicPick = baseline.baselinePick || 'NO';
+  const deterministicProbability = clamp(
+    Math.round(toNumber(baseline.baselineProbability, 50)),
+    20,
+    80
+  );
   if (!source || typeof source !== 'object') {
     return {
-      pick: baseline.baselinePick || 'NO',
-      probability: Math.round(baseline.baselineProbability || 50),
-      confidence: baseline.confidence || 'low',
+      pick: deterministicPick,
+      probability: deterministicProbability,
+      confidence: deterministicConfidenceFromProbability(deterministicProbability),
       reasons: baseline.reasons || []
     };
   }
 
-  const pick = normalizeYesNo(
-    source.pick ?? source.verdict ?? source.answer ?? source.willThereBeRun,
-    baseline.baselinePick || 'NO'
-  );
-  const probability = clamp(
-    Math.round(toNumber(source.probability ?? source.yrfiProbability ?? source.runProbability, baseline.baselineProbability || 50)),
-    20,
-    80
-  );
   const reasons = Array.isArray(source.reasons)
     ? source.reasons.map((item) => String(item).trim()).filter(Boolean).slice(0, 3)
     : baseline.reasons || [];
 
   return {
-    pick,
-    probability,
-    confidence: ['low', 'medium', 'high'].includes(source.confidence)
-      ? source.confidence
-      : baseline.confidence || 'low',
+    pick: deterministicPick,
+    probability: deterministicProbability,
+    confidence: deterministicConfidenceFromProbability(deterministicProbability),
     reasons,
     risk: String(source.risk || '').slice(0, 180)
   };
@@ -290,36 +307,16 @@ function sanitizeFirstInningAnalysis(prediction, raw) {
 function sanitizeAnalysis(prediction, raw) {
   const awayId = prediction.away.id;
   const homeId = prediction.home.id;
-  const pickTeamId = resolveTeamId(
-    raw?.pickTeamId ?? raw?.pick_team_id ?? raw?.pick ?? raw?.winner ?? raw?.pickTeam ?? raw?.pickTeamName,
-    prediction
-  );
-  if (pickTeamId !== awayId && pickTeamId !== homeId) return null;
-
-  let awayProbability = normalizeProbability(
-    raw?.awayProbability ?? raw?.away_probability ?? probabilityFromObject(raw, prediction, 'away'),
-    prediction.away.winProbability
-  );
-  let homeProbability = normalizeProbability(
-    raw?.homeProbability ?? raw?.home_probability ?? probabilityFromObject(raw, prediction, 'home'),
-    prediction.home.winProbability
-  );
+  const pickTeamId = prediction.winner.id === awayId ? awayId : homeId;
+  const awayProbability = normalizeProbability(prediction.away.winProbability, 50);
+  const homeProbability = normalizeProbability(prediction.home.winProbability, 50);
   const total = awayProbability + homeProbability;
-
-  if (total > 0 && total !== 100) {
-    awayProbability = Math.round((awayProbability / total) * 100);
-    homeProbability = 100 - awayProbability;
-  }
-
-  if (pickTeamId === awayId && awayProbability <= homeProbability) {
-    awayProbability = 55;
-    homeProbability = 45;
-  }
-
-  if (pickTeamId === homeId && homeProbability <= awayProbability) {
-    homeProbability = 55;
-    awayProbability = 45;
-  }
+  const normalizedAwayProbability =
+    total > 0 && total !== 100 ? Math.round((awayProbability / total) * 100) : awayProbability;
+  const normalizedHomeProbability =
+    total > 0 && total !== 100 ? 100 - normalizedAwayProbability : homeProbability;
+  const pickProbability =
+    pickTeamId === awayId ? normalizedAwayProbability : normalizedHomeProbability;
 
   const reasons = Array.isArray(raw?.reasons)
     ? raw.reasons.map((item) => String(item).trim()).filter(Boolean).slice(0, 3)
@@ -329,9 +326,9 @@ function sanitizeAnalysis(prediction, raw) {
     gamePk: prediction.gamePk,
     pickTeamId,
     pickTeamName: pickTeamId === awayId ? prediction.away.name : prediction.home.name,
-    awayProbability,
-    homeProbability,
-    confidence: ['low', 'medium', 'high'].includes(raw?.confidence) ? raw.confidence : 'medium',
+    awayProbability: normalizedAwayProbability,
+    homeProbability: normalizedHomeProbability,
+    confidence: deterministicConfidenceFromProbability(pickProbability),
     reasons: reasons.length > 0 ? reasons : prediction.reasons.slice(0, 3),
     risk: String(raw?.risk || 'Tidak ada risk khusus yang dominan.').slice(0, 220),
     memoryNote: String(raw?.memoryNote || 'Memory dipakai sebagai sinyal kecil.').slice(0, 220),
@@ -424,7 +421,7 @@ async function analyzeWithExternalAgent(config, predictions, memorySummary) {
         games: predictions.map(compactGameForAgent),
         outputContract: {
           analyses:
-            'Array of { gamePk, pickTeamId, awayProbability, homeProbability, confidence, reasons, risk, memoryNote, firstInning: { pick: YES|NO, probability, confidence, reasons, risk } }'
+            'Array of { gamePk, reasons, risk, memoryNote, firstInning: { reasons, risk } }. Numeric probabilities, totals, confidence, and final pick are deterministic model fields; do not invent them.'
         }
       })
     });
@@ -448,18 +445,18 @@ async function analyzeWithLocalAgent(config, predictions, memorySummary) {
       analyses: [
         {
           gamePk: 'number',
-          pickTeamId: 'number, must be away.id or home.id',
-          awayProbability: 'integer',
-          homeProbability: 'integer',
-          confidence: 'low | medium | high',
+          pickTeamId: 'optional; if supplied, system may ignore it and keep deterministic model pick',
+          awayProbability: 'optional; copy deterministicPipeline.awayProbability exactly if supplied',
+          homeProbability: 'optional; copy deterministicPipeline.homeProbability exactly if supplied',
+          confidence: 'optional; system confidence comes from deterministic model and quality rules',
           reasons: ['2-3 alasan singkat bahasa Indonesia'],
           risk: 'risiko terbesar pick ini',
           memoryNote: 'bagaimana memory mempengaruhi analisa, atau netral',
           firstInning: {
             required: true,
-            pick: 'YES jika kemungkinan ada run di inning pertama, NO jika condong NRFI',
-            probability: 'integer 20-80',
-            confidence: 'low | medium | high',
+            pick: 'optional; system will keep deterministic firstInning baseline pick',
+            probability: 'optional; copy deterministic baseline if supplied',
+            confidence: 'optional; system confidence remains deterministic',
             reasons: ['2-3 alasan singkat dari riwayat first inning, starter, H2H'],
             risk: 'risiko terbesar untuk verdict first inning'
           }

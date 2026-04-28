@@ -562,6 +562,47 @@ No-bet: YES/NO
 
 Prinsip penting: agent tidak boleh memberi `High` confidence jika lineup belum confirmed, probable pitcher missing/projected, odds stale, weather stale untuk outdoor stadium, atau calibration belum mendukung high confidence.
 
+## Modular Agent Pipeline
+
+Agent sekarang memakai pipeline berlapis supaya tidak bingung oleh terlalu banyak sinyal:
+
+```text
+Data Collection
+  -> Feature Engineering
+  -> Prediction
+  -> Market Comparison
+  -> Quality Control
+  -> Explanation
+```
+
+Tanggung jawab tiap layer:
+
+- `src/data_collection.py`: hanya ambil schedule, pitcher, team stats, bullpen, weather, park, lineup, odds, dan historical data.
+- `src/feature_engineering_layer.py`: hanya ubah raw data menjadi fitur bersih seperti `pitcher_score`, `offense_score`, `bullpen_score`, adjustment park/weather/lineup, recent form, dan market implied probability.
+- `src/prediction_layer.py`: hanya menghasilkan moneyline probability, expected runs, projected total, dan over/under probabilities.
+- `src/market_comparison.py`: hanya menghitung edge, implied probability, dan line movement.
+- `src/quality_control.py`: hanya mengecek missing/stale data, downgrade confidence, dan `NO BET`.
+- `src/explanation_layer.py`: hanya menjelaskan hasil final dengan bahasa sederhana.
+- `src/prediction_pipeline.py`: orkestrasi urutan layer di atas.
+
+Signal priority:
+
+- Tier 1: probable pitchers, team offense, bullpen usage, park factor, market odds.
+- Tier 2: weather, confirmed lineup, platoon splits, recent form.
+- Tier 3: umpire tendency, public betting percentage, news sentiment, H2H trends.
+
+Aturan konservatif:
+
+- Tier 1 punya pengaruh terbesar.
+- Tier 2 hanya adjustment.
+- Tier 3 hanya context.
+- Recent form tidak boleh mendominasi model.
+- Umpire tendency tidak boleh override pitcher/offense/bullpen.
+- Jika Tier 1 penting hilang, confidence turun atau `NO BET`.
+- Jika model edge kecil, return `NO BET`.
+- Jika data quality rendah, return `NO BET`.
+- LLM tidak boleh mengarang probabilitas. Semua angka berasal dari deterministic Python/JS model atau trained ML model.
+
 ## Backtesting, Evaluation, And Calibration
 
 Project ini juga punya pipeline validasi model dari CSV lokal:
@@ -882,6 +923,12 @@ src/backtest.py       Backtest moneyline/totals dan tulis predictions log
 src/evaluate.py       Evaluasi ROI, CLV, Brier, log loss, calibration
 src/calibration.py    Confidence/probability calibration helpers
 src/reports.py        Formatter report evaluasi
+src/data_collection.py Raw data collection layer
+src/feature_engineering_layer.py Clean model feature layer
+src/prediction_layer.py Deterministic moneyline/totals prediction layer
+src/market_comparison.py Edge and line movement layer
+src/explanation_layer.py Simple final explanation layer
+src/prediction_pipeline.py Orchestrates the modular agent pipeline
 src/data_freshness.py Fresh/stale/missing checks untuk input prediction
 src/quality_control.py No-bet filter, data quality score, confidence downgrade
 src/weather.py        Weather run adjustment
