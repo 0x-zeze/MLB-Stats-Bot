@@ -282,18 +282,39 @@ Output tombol `/predict` juga menampilkan total runs live:
 
 ```text
 Total Runs / Over-Under
-Projected total: 9.9 runs
-Expected: MIA 4.0 | LAD 5.9
-Market total: 8.5 (+1.4 runs vs model)
-Best lean: Over 8.5 (high)
-Drivers: Off +0.3 | SP +0.4 | BP +0.2
-Context adj: Weather +0.0 | Lineup +0.1
-Over: 6.5 86% | 7.5 77% | 8.5 65%
-Over: 9.5 53% | 10.5 40% | 11.5 29%
-Under: 6.5 14% | 7.5 23% | 8.5 35%
-Under: 9.5 47% | 10.5 60% | 11.5 71%
-Park: Dodger Stadium run PF 99, HR PF 102
-Lineup: MIA confirmed 9/9 | LAD confirmed 9/9
+Projection
+• Projected total: 9.9 runs
+• Expected runs: MIA 4.0 | LAD 5.9
+• Market total: 8.5 (+1.4 runs vs model)
+• Best lean: Over 8.5 (high)
+
+Over Probability
+• Over 6.5: 86%
+• Over 7.5: 77%
+• Over 8.5: 65%
+• Over 9.5: 53%
+• Over 10.5: 40%
+• Over 11.5: 29%
+
+Under Probability
+• Under 6.5: 14%
+• Under 7.5: 23%
+• Under 8.5: 35%
+• Under 9.5: 47%
+• Under 10.5: 60%
+• Under 11.5: 71%
+
+Run Drivers
+• Offense: +0.3
+• Starting pitcher: +0.4
+• Bullpen: +0.2
+• Weather: +0.0
+• Lineup: +0.1
+
+Context
+• Park: Dodger Stadium (Run PF 99, HR PF 102)
+• MIA: confirmed 9/9
+• LAD: confirmed 9/9
 ```
 
 Jika Python di mesin kamu bukan `python`, atur di `.env`:

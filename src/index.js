@@ -338,14 +338,27 @@ function sumNumberValues(...values) {
 }
 
 function totalProbabilityLines(label, probabilities) {
-  const first = TOTAL_MARKET_BUTTONS.slice(0, 3)
-    .map((line) => `${line} ${percent(probabilities[String(line)] || 0)}`)
-    .join(' | ');
-  const second = TOTAL_MARKET_BUTTONS.slice(3)
-    .map((line) => `${line} ${percent(probabilities[String(line)] || 0)}`)
-    .join(' | ');
+  return TOTAL_MARKET_BUTTONS.map(
+    (line) => `• ${label} ${line}: ${percent(probabilities[String(line)] || 0)}`
+  );
+}
 
-  return [`${label}: ${first}`, `${label}: ${second}`];
+function totalDriverLines(totalDetail) {
+  return [
+    `• Offense: ${signedRuns(sumNumberValues(totalDetail.homeOffense, totalDetail.awayOffense))}`,
+    `• Starting pitcher: ${signedRuns(sumNumberValues(totalDetail.homeStarterAllowed, totalDetail.awayStarterAllowed))}`,
+    `• Bullpen: ${signedRuns(sumNumberValues(totalDetail.homeBullpenAllowed, totalDetail.awayBullpenAllowed))}`,
+    `• Weather: ${signedRuns(totalDetail.weather)}`,
+    `• Lineup: ${signedRuns(sumNumberValues(totalDetail.homeLineupAdj, totalDetail.awayLineupAdj))}`
+  ];
+}
+
+function lineupContextLines(lineupLine) {
+  const lines = String(lineupLine || '')
+    .split(' | ')
+    .filter(Boolean);
+
+  return lines.length ? lines.map((line) => `• ${line}`) : ['• Lineup: belum tersedia'];
 }
 
 function formatLivePrediction(dateYmd, prediction, options = {}) {
@@ -371,24 +384,29 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
     : [`• ${prediction.modelReferenceLine}`];
   const totalRuns = applyTotalRunMarket(prediction.totalRuns, options.marketLine);
   const totalDetail = totalRuns?.detail || {};
-  const totalRunDrivers = totalRuns
-    ? [
-        `Drivers: Off ${signedRuns(sumNumberValues(totalDetail.homeOffense, totalDetail.awayOffense))} | SP ${signedRuns(sumNumberValues(totalDetail.homeStarterAllowed, totalDetail.awayStarterAllowed))} | BP ${signedRuns(sumNumberValues(totalDetail.homeBullpenAllowed, totalDetail.awayBullpenAllowed))}`,
-        `Context adj: Weather ${signedRuns(totalDetail.weather)} | Lineup ${signedRuns(sumNumberValues(totalDetail.homeLineupAdj, totalDetail.awayLineupAdj))}`
-      ]
-    : [];
   const totalRunLines = totalRuns
     ? [
-        `Projected total: ${totalRuns.projectedTotal.toFixed(1)} runs`,
-        `Expected: ${prediction.away.abbreviation || prediction.away.name} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${prediction.home.abbreviation || prediction.home.name} ${totalRuns.homeExpectedRuns.toFixed(1)}`,
-        `Market total: ${totalRuns.marketLine} (${signedRuns(totalRuns.marketDeltaRuns)} runs vs model)`,
-        `Best lean: ${totalRuns.bestLean} (${totalRuns.confidence})`,
-        `Model edge: ${signedRuns(totalRuns.modelEdge)}% vs 50% baseline`,
-        ...totalRunDrivers,
+        '📌 Projection',
+        `• Projected total: ${totalRuns.projectedTotal.toFixed(1)} runs`,
+        `• Expected runs: ${prediction.away.abbreviation || prediction.away.name} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${prediction.home.abbreviation || prediction.home.name} ${totalRuns.homeExpectedRuns.toFixed(1)}`,
+        `• Market total: ${totalRuns.marketLine} (${signedRuns(totalRuns.marketDeltaRuns)} runs vs model)`,
+        `• Best lean: ${totalRuns.bestLean} (${totalRuns.confidence})`,
+        `• Model edge: ${signedRuns(totalRuns.modelEdge)}% vs 50% baseline`,
+        '',
+        '📈 Over Probability',
         ...totalProbabilityLines('Over', totalRuns.over),
+        '',
+        '📉 Under Probability',
         ...totalProbabilityLines('Under', totalRuns.under),
-        `Park: ${totalRuns.detail?.park?.label || prediction.venue} run PF ${totalRuns.detail?.park?.runFactorPct || 100}, HR PF ${totalRuns.detail?.park?.homeRunFactorPct || 100}`,
-        `Lineup: ${prediction.lineupLine || 'belum tersedia'}`,
+        '',
+        '⚙️ Run Drivers',
+        ...totalDriverLines(totalDetail),
+        '',
+        '🏟 Context',
+        `• Park: ${totalRuns.detail?.park?.label || prediction.venue} (Run PF ${totalRuns.detail?.park?.runFactorPct || 100}, HR PF ${totalRuns.detail?.park?.homeRunFactorPct || 100})`,
+        ...lineupContextLines(prediction.lineupLine),
+        '',
+        '🧾 Main Factors',
         ...totalRuns.factors.slice(0, 4).map((factor) => `• ${factor}`)
       ]
     : ['Data total runs tidak tersedia.'];

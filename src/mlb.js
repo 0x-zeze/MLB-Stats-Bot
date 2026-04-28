@@ -145,19 +145,22 @@ function firstInningPickText(firstInning) {
 }
 
 function totalProbabilityRows(label, probabilities) {
-  const first = TOTAL_RUN_LINES.slice(0, 3)
-    .map((line) => `${line} ${percent(probabilities?.[String(line)] || 0)}`)
-    .join(' | ');
-  const second = TOTAL_RUN_LINES.slice(3)
-    .map((line) => `${line} ${percent(probabilities?.[String(line)] || 0)}`)
-    .join(' | ');
-
-  return [`${label}: ${first}`, `${label}: ${second}`];
+  return TOTAL_RUN_LINES.map(
+    (line) => `• ${label} ${line}: ${percent(probabilities?.[String(line)] || 0)}`
+  );
 }
 
 function signedOneDecimal(value) {
   const parsed = toNumber(value, 0);
   return `${parsed >= 0 ? '+' : ''}${parsed.toFixed(1)}`;
+}
+
+function lineupContextLines(lineupLine) {
+  const lines = String(lineupLine || '')
+    .split(' | ')
+    .filter(Boolean);
+
+  return lines.length ? lines.map((line) => `• ${line}`) : ['• Lineup: belum tersedia'];
 }
 
 function totalRunSummaryLines(item) {
@@ -172,26 +175,33 @@ function totalRunSummaryLines(item) {
   const deltaText = `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`;
   const park = totalRuns.detail?.park;
   const detail = totalRuns.detail || {};
-  const driverLine = [
-    `Off ${signedOneDecimal(toNumber(detail.homeOffense, 0) + toNumber(detail.awayOffense, 0))}`,
-    `SP ${signedOneDecimal(toNumber(detail.homeStarterAllowed, 0) + toNumber(detail.awayStarterAllowed, 0))}`,
-    `BP ${signedOneDecimal(toNumber(detail.homeBullpenAllowed, 0) + toNumber(detail.awayBullpenAllowed, 0))}`
-  ].join(' | ');
-  const contextAdjustmentLine = [
-    `Weather ${signedOneDecimal(detail.weather)}`,
-    `Lineup ${signedOneDecimal(toNumber(detail.homeLineupAdj, 0) + toNumber(detail.awayLineupAdj, 0))}`
-  ].join(' | ');
+  const driverLines = [
+    `• Offense: ${signedOneDecimal(toNumber(detail.homeOffense, 0) + toNumber(detail.awayOffense, 0))}`,
+    `• Starting pitcher: ${signedOneDecimal(toNumber(detail.homeStarterAllowed, 0) + toNumber(detail.awayStarterAllowed, 0))}`,
+    `• Bullpen: ${signedOneDecimal(toNumber(detail.homeBullpenAllowed, 0) + toNumber(detail.awayBullpenAllowed, 0))}`,
+    `• Weather: ${signedOneDecimal(detail.weather)}`,
+    `• Lineup: ${signedOneDecimal(toNumber(detail.homeLineupAdj, 0) + toNumber(detail.awayLineupAdj, 0))}`
+  ];
 
   return [
-    `Projected: ${totalRuns.projectedTotal.toFixed(1)} | Market ${totalRuns.marketLine} (${deltaText} runs)`,
-    `Expected: ${awayAbbrev} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${homeAbbrev} ${totalRuns.homeExpectedRuns.toFixed(1)}`,
-    `Lean: ${totalRuns.bestLean} (${totalRuns.confidence})`,
-    `Drivers: ${driverLine}`,
-    `Context adj: ${contextAdjustmentLine}`,
+    '📌 Projection',
+    `• Projected total: ${totalRuns.projectedTotal.toFixed(1)} runs`,
+    `• Expected runs: ${awayAbbrev} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${homeAbbrev} ${totalRuns.homeExpectedRuns.toFixed(1)}`,
+    `• Market total: ${totalRuns.marketLine} (${deltaText} runs vs model)`,
+    `• Best lean: ${totalRuns.bestLean} (${totalRuns.confidence})`,
+    '',
+    '📈 Over Probability',
     ...totalProbabilityRows('Over', totalRuns.over),
+    '',
+    '📉 Under Probability',
     ...totalProbabilityRows('Under', totalRuns.under),
-    `Park: ${park?.label || item.venue} run PF ${park?.runFactorPct || 100}, HR PF ${park?.homeRunFactorPct || 100}`,
-    `Lineup: ${item.lineupLine || 'belum tersedia'}`
+    '',
+    '⚙️ Run Drivers',
+    ...driverLines,
+    '',
+    '🏟 Context',
+    `• Park: ${park?.label || item.venue} (Run PF ${park?.runFactorPct || 100}, HR PF ${park?.homeRunFactorPct || 100})`,
+    ...lineupContextLines(item.lineupLine)
   ];
 }
 
@@ -2016,6 +2026,7 @@ export function formatPredictions(
         '🏃 Total Runs / Over-Under',
         ...totalRunSummaryLines(item),
         '',
+        '🧾 Main Factors',
         ...(item.totalRuns?.factors || []).slice(0, 3).map((factor) => `• ${factor}`)
       ]
         .filter((line) => line !== null)
