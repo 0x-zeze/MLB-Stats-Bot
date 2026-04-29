@@ -72,6 +72,12 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertEqual("LEAN", decision)
         self.assertEqual("", reason)
 
+    def test_mock_today_includes_predicted_winner(self):
+        payload = get_today_dashboard(source="mock")
+
+        self.assertIn("predicted_winner", payload["games"][0])
+        self.assertIn("predicted_winner_probability", payload["games"][0])
+
     def test_history_prefers_telegram_state(self):
         original_path = dashboard_service._TELEGRAM_STATE_PATH
         state_path = Path("data/tmp_test_telegram_state.json")

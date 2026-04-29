@@ -119,6 +119,16 @@ def _status(value: Any, fallback: str = "Missing") -> str:
     return text if text else fallback
 
 
+def _winner_from_probabilities(game: dict[str, Any]) -> tuple[str | None, float | None]:
+    """Return predicted winner name and probability from a dashboard game."""
+    moneyline = game.get("moneyline") or {}
+    away_probability = safe_float(moneyline.get("away_probability"), 0.0)
+    home_probability = safe_float(moneyline.get("home_probability"), 0.0)
+    if home_probability >= away_probability:
+        return game.get("home_team"), home_probability
+    return game.get("away_team"), away_probability
+
+
 def _decision_from_game(game: dict[str, Any], settings: dict[str, Any]) -> tuple[str, str]:
     quality = safe_float(game.get("data_quality", {}).get("score"), 0.0)
     moneyline_edge = abs(safe_float(game.get("moneyline", {}).get("edge"), 0.0))
@@ -172,6 +182,9 @@ def _mock_today(settings: dict[str, Any], warning: str | None = None) -> dict[st
     games = []
     for raw_game in payload.get("games", []):
         game = dict(raw_game)
+        predicted_winner, predicted_probability = _winner_from_probabilities(game)
+        game["predicted_winner"] = game.get("predicted_winner") or predicted_winner
+        game["predicted_winner_probability"] = game.get("predicted_winner_probability") or predicted_probability
         decision, reason = _decision_from_game(game, settings)
         game["decision"] = decision
         game["no_bet_reason"] = reason
@@ -253,6 +266,9 @@ def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> d
         "main_factors": game.get("reasons") or total_runs.get("factors") or [],
         "risk_factors": [game.get("risk")] if game.get("risk") else quality.get("issues", []),
     }
+    predicted_winner, predicted_probability = _winner_from_probabilities(dashboard_game)
+    dashboard_game["predicted_winner"] = game.get("pick", {}).get("name") or predicted_winner
+    dashboard_game["predicted_winner_probability"] = _as_percent(game.get("pick", {}).get("probability")) or predicted_probability
     decision, reason = _decision_from_game(dashboard_game, settings)
     if dashboard_game["odds_status"] in {"Unavailable", "Missing"} and decision == "BET":
         decision = "LEAN"
@@ -366,6 +382,9 @@ def _sample_game_to_dashboard(game_id: int, pipeline: dict[str, Any], settings: 
         "main_factors": pipeline.get("supporting_factors") or moneyline.get("main_factors") or [],
         "risk_factors": quality.get("issues") or [moneyline.get("decision_reason", "")],
     }
+    predicted_winner, predicted_probability = _winner_from_probabilities(dashboard_game)
+    dashboard_game["predicted_winner"] = predicted_winner
+    dashboard_game["predicted_winner_probability"] = predicted_probability
     decision, reason = _decision_from_game(dashboard_game, settings)
     dashboard_game["decision"] = decision
     dashboard_game["no_bet_reason"] = reason or dashboard_game["no_bet_reason"]
