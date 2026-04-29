@@ -11,7 +11,7 @@ export default function Layout({ tabs, activeTab, onTabChange, lastUpdated, load
         loading={loading}
         onRefresh={onRefresh}
       />
-      <div className="mx-auto max-w-7xl px-4 py-5">{children}</div>
+      <div className="mx-auto max-w-6xl px-4 py-5">{children}</div>
     </main>
   );
 }

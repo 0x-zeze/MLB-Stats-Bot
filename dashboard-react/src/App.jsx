@@ -1,4 +1,4 @@
-import { CalendarDays, CircleAlert, CircleSlash, Gauge, Target, Trophy } from 'lucide-react';
+import { CalendarDays, Gauge, Target, Trophy } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api, exportUrl } from './api.js';
 import { lower, signed } from './utils.js';
@@ -165,13 +165,11 @@ function TodayView({ today, source, setSource, date, setDate, loadToday, loading
   );
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <SummaryCard label="Games Today" value={today?.summary?.total_games || 0} helper="Current slate" icon={CalendarDays} />
-        <SummaryCard label="BET" value={today?.summary?.bet_count || 0} helper="High edge + quality" icon={Trophy} />
-        <SummaryCard label="LEAN" value={today?.summary?.lean_count || 0} helper="Watchlist only" icon={Target} />
-        <SummaryCard label="NO BET" value={today?.summary?.no_bet_count || 0} helper="Protected by QC" icon={CircleSlash} />
-        <SummaryCard label="Avg Quality" value={`${today?.summary?.average_data_quality || 0}/100`} helper="Data trust score" icon={Gauge} />
-        <SummaryCard label="Highest Edge" value={signed(highestEdge, '%')} helper="Largest absolute edge" icon={CircleAlert} />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <SummaryCard label="Games" value={today?.summary?.total_games || 0} helper="today's slate" icon={CalendarDays} />
+        <SummaryCard label="Best Plays" value={today?.summary?.bet_count || 0} helper="strongest picks" icon={Trophy} />
+        <SummaryCard label="Leans" value={today?.summary?.lean_count || 0} helper={`${today?.summary?.no_bet_count || 0} no bet`} icon={Target} />
+        <SummaryCard label="Data Quality" value={`${today?.summary?.average_data_quality || 0}/100`} helper={`edge ${signed(highestEdge, '%')}`} icon={Gauge} />
       </div>
 
       <FilterToolbar
