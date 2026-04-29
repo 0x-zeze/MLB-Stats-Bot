@@ -1,5 +1,8 @@
+import json
 import unittest
+from pathlib import Path
 
+import src.dashboard_service as dashboard_service
 from src.dashboard_service import (
     DEFAULT_DASHBOARD_SETTINGS,
     _decision_from_game,
@@ -68,6 +71,79 @@ class DashboardServiceTests(unittest.TestCase):
 
         self.assertEqual("LEAN", decision)
         self.assertEqual("", reason)
+
+    def test_history_prefers_telegram_state(self):
+        original_path = dashboard_service._TELEGRAM_STATE_PATH
+        state_path = Path("data/tmp_test_telegram_state.json")
+        try:
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "predictions": {
+                            "1": {
+                                "gamePk": 1,
+                                "dateYmd": "2026-04-29",
+                                "matchup": "Away @ Home",
+                                "away": {"name": "Away"},
+                                "home": {"name": "Home"},
+                                "pick": {"name": "Home", "winProbability": 61, "confidence": "high"},
+                            }
+                        },
+                        "memory": {
+                            "learningLog": [
+                                {
+                                    "gamePk": 1,
+                                    "correct": True,
+                                    "score": "Away 2 - Home 4",
+                                    "note": "Pick benar",
+                                }
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dashboard_service._TELEGRAM_STATE_PATH = state_path
+            history = get_prediction_history()
+        finally:
+            dashboard_service._TELEGRAM_STATE_PATH = original_path
+            state_path.unlink(missing_ok=True)
+
+        self.assertEqual("telegram", history[0]["source"])
+        self.assertEqual("Home", history[0]["prediction"])
+        self.assertEqual("Win", history[0]["result"])
+        self.assertEqual(1.0, history[0]["profit_loss"])
+
+    def test_performance_prefers_telegram_memory(self):
+        original_path = dashboard_service._TELEGRAM_STATE_PATH
+        state_path = Path("data/tmp_test_telegram_state.json")
+        try:
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "predictions": {},
+                        "memory": {
+                            "totalPicks": 4,
+                            "correctPicks": 3,
+                            "wrongPicks": 1,
+                            "byConfidence": {"high": {"total": 4, "correct": 3}},
+                            "firstInning": {"totalPicks": 2, "correctPicks": 1},
+                            "learningLog": [],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dashboard_service._TELEGRAM_STATE_PATH = state_path
+            performance = get_model_performance()
+        finally:
+            dashboard_service._TELEGRAM_STATE_PATH = original_path
+            state_path.unlink(missing_ok=True)
+
+        self.assertEqual("telegram", performance["overall"]["source"])
+        self.assertEqual(4, performance["overall"]["bets_taken"])
+        self.assertEqual(75.0, performance["overall"]["win_rate"])
+        self.assertEqual(50.0, performance["overall"]["roi"])
 
 
 if __name__ == "__main__":

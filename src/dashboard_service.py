@@ -45,6 +45,7 @@ DEFAULT_DASHBOARD_SETTINGS: dict[str, Any] = {
 _ROOT_DIR = Path(__file__).resolve().parents[1]
 _SETTINGS_PATH = data_path("dashboard_settings.json")
 _MOCK_PATH = data_path("dashboard_mock.json")
+_TELEGRAM_STATE_PATH = data_path("state.json")
 
 
 def now_iso() -> str:
@@ -62,6 +63,11 @@ def _read_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
 def load_mock_dashboard() -> dict[str, Any]:
     """Load realistic mock data used when live APIs are unavailable."""
     return _read_json(_MOCK_PATH, {"today": {"games": []}, "history": [], "performance": {}, "backtest": {}})
+
+
+def load_telegram_state() -> dict[str, Any]:
+    """Load Telegram bot state so dashboard history/performance mirrors the bot."""
+    return _read_json(_TELEGRAM_STATE_PATH, {})
 
 
 def load_dashboard_settings() -> dict[str, Any]:
@@ -391,8 +397,154 @@ def get_today_dashboard(date_ymd: str | None = None, source: str = "live") -> di
         return _mock_today(settings, warning=f"Live data unavailable; showing mock data. Detail: {exc}")
 
 
+def _telegram_learning_by_game(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    memory = state.get("memory") or {}
+    logs = memory.get("learningLog") or []
+    return {str(item.get("gamePk")): item for item in logs if item.get("gamePk") is not None}
+
+
+def _telegram_history_row(prediction: dict[str, Any], outcome: dict[str, Any] | None = None) -> dict[str, Any]:
+    pick = prediction.get("pick") or {}
+    away = prediction.get("away") or {}
+    home = prediction.get("home") or {}
+    correct = outcome.get("correct") if outcome else None
+    result = "Pending" if correct is None else "Win" if correct else "Loss"
+    profit_loss = 0.0 if correct is None else 1.0 if correct else -1.0
+    prediction_name = pick.get("name") or pick.get("abbreviation") or "-"
+    probability = safe_float(pick.get("winProbability"), 0.0)
+    return {
+        "date": prediction.get("dateYmd"),
+        "matchup": prediction.get("matchup") or f"{away.get('name')} @ {home.get('name')}",
+        "market_type": "moneyline",
+        "prediction": prediction_name,
+        "decision": "BET",
+        "confidence": str(pick.get("confidence") or "model").title(),
+        "model_probability": probability,
+        "market_implied_probability": None,
+        "edge": 0.0,
+        "projected_total": None,
+        "market_total": None,
+        "closing_line": None,
+        "actual_result": outcome.get("score") if outcome else "",
+        "result": result,
+        "profit_loss": profit_loss,
+        "clv": 0.0,
+        "notes": outcome.get("note", "") if outcome else prediction.get("agentRisk", ""),
+        "source": "telegram",
+    }
+
+
+def get_telegram_prediction_history() -> list[dict[str, Any]]:
+    """Return rows from the Telegram bot's persisted state.json."""
+    state = load_telegram_state()
+    predictions = state.get("predictions") or {}
+    outcomes = _telegram_learning_by_game(state)
+    rows = [
+        _telegram_history_row(prediction, outcomes.get(str(game_pk)))
+        for game_pk, prediction in predictions.items()
+    ]
+    rows.sort(key=lambda row: (str(row.get("date") or ""), str(row.get("matchup") or "")), reverse=True)
+    return rows
+
+
+def _accuracy(correct: Any, total: Any) -> float:
+    parsed_total = safe_float(total, 0.0)
+    if parsed_total <= 0:
+        return 0.0
+    return round((safe_float(correct, 0.0) / parsed_total) * 100.0, 1)
+
+
+def _telegram_calibration_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
+    predictions = state.get("predictions") or {}
+    outcomes = _telegram_learning_by_game(state)
+    buckets: dict[str, dict[str, float]] = {}
+    for game_pk, prediction in predictions.items():
+        outcome = outcomes.get(str(game_pk))
+        if outcome is None:
+            continue
+        probability = safe_float((prediction.get("pick") or {}).get("winProbability"), 0.0)
+        if probability <= 0:
+            continue
+        bucket_floor = int(probability // 10) * 10
+        bucket = f"{bucket_floor}-{bucket_floor + 9}%"
+        if bucket not in buckets:
+            buckets[bucket] = {"predictions": 0, "expected": 0.0, "correct": 0.0}
+        buckets[bucket]["predictions"] += 1
+        buckets[bucket]["expected"] += probability
+        buckets[bucket]["correct"] += 1 if outcome.get("correct") else 0
+
+    return [
+        {
+            "bucket": bucket,
+            "predictions": int(values["predictions"]),
+            "expected": round(values["expected"] / values["predictions"], 1) if values["predictions"] else 0.0,
+            "actual": _accuracy(values["correct"], values["predictions"]),
+        }
+        for bucket, values in sorted(buckets.items())
+    ]
+
+
+def get_telegram_model_performance() -> dict[str, Any] | None:
+    """Return model performance from Telegram memory so it matches /memory."""
+    state = load_telegram_state()
+    memory = state.get("memory") or {}
+    total = safe_float(memory.get("totalPicks"), 0.0)
+    if total <= 0:
+        return None
+
+    correct = safe_float(memory.get("correctPicks"), 0.0)
+    wrong = safe_float(memory.get("wrongPicks"), 0.0)
+    win_rate = _accuracy(correct, total)
+    by_confidence = memory.get("byConfidence") or {}
+    first_inning = memory.get("firstInning") or {}
+    calibration = _telegram_calibration_rows(state)
+    if not calibration:
+        calibration = [
+            {
+                "bucket": str(label).title(),
+                "predictions": int(value.get("total", 0)),
+                "expected": 0.0,
+                "actual": _accuracy(value.get("correct", 0), value.get("total", 0)),
+            }
+            for label, value in by_confidence.items()
+        ]
+
+    return {
+        "overall": {
+            "total_predictions": int(total),
+            "bets_taken": int(total),
+            "wins": int(correct),
+            "losses": int(wrong),
+            "win_rate": win_rate,
+            "roi": round(((correct - wrong) / total) * 100.0, 1) if total else 0.0,
+            "average_edge": 0.0,
+            "average_clv": 0.0,
+            "brier_score": 0.0,
+            "log_loss": 0.0,
+            "clv_hit_rate": 0.0,
+            "source": "telegram",
+        },
+        "by_market": [
+            {"market": "moneyline", "bets": int(total), "win_rate": win_rate, "roi": round(((correct - wrong) / total) * 100.0, 1) if total else 0.0},
+            {
+                "market": "first inning",
+                "bets": int(safe_float(first_inning.get("totalPicks"), 0.0)),
+                "win_rate": _accuracy(first_inning.get("correctPicks", 0), first_inning.get("totalPicks", 0)),
+                "roi": 0.0,
+            },
+        ],
+        "by_total_range": [],
+        "calibration": calibration,
+        "recent_log": (memory.get("learningLog") or [])[:10],
+    }
+
+
 def get_prediction_history() -> list[dict[str, Any]]:
     """Return historical predictions from the log or mock data."""
+    telegram_rows = get_telegram_prediction_history()
+    if telegram_rows:
+        return telegram_rows
+
     rows = load_prediction_log()
     if not rows:
         return load_mock_dashboard().get("history", [])
@@ -425,6 +577,10 @@ def get_prediction_history() -> list[dict[str, Any]]:
 
 def get_model_performance() -> dict[str, Any]:
     """Return performance metrics from prediction logs or mock data."""
+    telegram_performance = get_telegram_model_performance()
+    if telegram_performance:
+        return telegram_performance
+
     rows = load_prediction_log()
     if not rows:
         return load_mock_dashboard().get("performance", {})
