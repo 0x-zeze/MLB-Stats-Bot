@@ -209,12 +209,26 @@ atau:
 ALERT_DETAIL=full
 ```
 
-## Menjalankan Bot
+## Menjalankan Bot Dan Dashboard
 
-Mode polling Telegram:
+Mode utama, cukup satu command untuk menjalankan Telegram bot, FastAPI API, dan React dashboard:
 
 ```bash
 npm start
+```
+
+Output:
+
+```text
+Telegram bot: src/index.js
+Dashboard Web: http://IP-VPS-KAMU:5173
+Dashboard API: http://IP-VPS-KAMU:8010
+```
+
+Kalau hanya ingin menjalankan bot Telegram tanpa dashboard baru:
+
+```bash
+npm run bot
 ```
 
 Test sekali:
@@ -244,13 +258,13 @@ Project ini juga punya dashboard lokal untuk memantau semua modul yang sudah dib
 - Knowledge base sabermetrics.
 - Status Telegram, OpenAI key, Analyst Agent, dan auto-alert.
 
-Secara default dashboard ikut menyala saat menjalankan bot:
+Dashboard baru ikut menyala saat menjalankan command utama:
 
 ```bash
 npm start
 ```
 
-Kalau hanya ingin menjalankan dashboard tanpa bot Telegram:
+Kalau hanya ingin menjalankan dashboard baru tanpa bot Telegram:
 
 ```bash
 npm run dashboard
@@ -259,45 +273,49 @@ npm run dashboard
 Buka:
 
 ```text
-http://localhost:3008
+http://localhost:5173
 ```
 
 Jika berjalan di VPS, akses lewat browser:
 
 ```text
-http://IP-VPS-KAMU:3008
+http://IP-VPS-KAMU:5173
 ```
 
-Port bisa diganti di `.env`:
+Port dashboard baru bisa diganti di `.env`:
 
 ```env
-DASHBOARD_ENABLED=true
-DASHBOARD_HOST=0.0.0.0
-DASHBOARD_PORT=3008
+DASHBOARD_API_HOST=0.0.0.0
+DASHBOARD_API_PORT=8010
+DASHBOARD_WEB_HOST=0.0.0.0
+DASHBOARD_WEB_PORT=5173
 ```
 
-Untuk mematikan dashboard saat `npm start`:
-
-```env
-DASHBOARD_ENABLED=false
-```
-
-Jika `http://localhost:3008` berhasil di VPS tetapi `http://IP-VPS-KAMU:3008` loading terus, biasanya port belum terbuka ke publik. Cek:
+Dashboard legacy lama masih tersedia kalau dibutuhkan:
 
 ```bash
-ss -ltnp | grep 3008
+npm run dashboard:legacy
 ```
 
-Output yang benar harus mengarah ke `0.0.0.0:3008` atau `:::3008`, bukan hanya `127.0.0.1:3008`.
+Saat `npm start`, dashboard legacy port `3008` otomatis dimatikan supaya tidak membingungkan. Kalau benar-benar ingin legacy ikut menyala juga, jalankan dengan `START_LEGACY_DASHBOARD=true`.
+
+Jika `http://localhost:5173` berhasil di VPS tetapi `http://IP-VPS-KAMU:5173` loading terus, biasanya port belum terbuka ke publik. Cek:
+
+```bash
+ss -ltnp | grep -E '5173|8010'
+```
+
+Output yang benar harus mengarah ke `0.0.0.0:5173` dan `0.0.0.0:8010`, bukan hanya `127.0.0.1`.
 
 Lalu buka firewall VPS:
 
 ```bash
-sudo ufw allow 3008/tcp
+sudo ufw allow 5173/tcp
+sudo ufw allow 8010/tcp
 sudo ufw status
 ```
 
-Jika memakai provider seperti AWS, DigitalOcean, Vultr, Hostinger, atau lainnya, pastikan inbound/security group juga membuka TCP port `3008`.
+Jika memakai provider seperti AWS, DigitalOcean, Vultr, Hostinger, atau lainnya, pastikan inbound/security group juga membuka TCP port `5173`. Port `8010` hanya perlu dibuka jika API ingin diakses langsung dari luar.
 
 Mode dashboard:
 
