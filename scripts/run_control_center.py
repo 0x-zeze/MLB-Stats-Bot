@@ -5,9 +5,12 @@ from __future__ import annotations
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class ManagedProcess:
     name: str
     command: list[str]
-    process: subprocess.Popen
+    process: subprocess.Popen | None = None
 
 
 def load_dotenv(path: Path = ROOT / ".env") -> None:
@@ -47,6 +50,124 @@ def start_process(name: str, command: list[str]) -> ManagedProcess:
     return ManagedProcess(name=name, command=command, process=process)
 
 
+def health_url(host: str, port: str) -> str:
+    url_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    return f"http://{url_host}:{port}/health"
+
+
+def dashboard_api_healthy(host: str, port: str) -> bool:
+    try:
+        with urllib.request.urlopen(health_url(host, port), timeout=1.5) as response:
+            return response.status == 200
+    except (OSError, urllib.error.URLError):
+        return False
+
+
+def port_is_open(host: str, port: str) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=1.5):
+            return True
+    except OSError:
+        return False
+
+
+def run_api_preflight() -> bool:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import fastapi, uvicorn; import src.dashboard_api; print('Dashboard API import OK')",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+
+    print("Dashboard API preflight failed.", file=sys.stderr, flush=True)
+    if result.stdout.strip():
+        print(result.stdout.strip(), file=sys.stderr, flush=True)
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr, flush=True)
+    print(
+        "Fix: run `python3 -m pip install -r requirements.txt` from the project root, "
+        "or set PYTHON_BIN to the Python that has FastAPI/Uvicorn installed.",
+        file=sys.stderr,
+        flush=True,
+    )
+    return False
+
+
+def stop_processes(processes: list[ManagedProcess]) -> None:
+    for managed in processes:
+        if managed.process is None:
+            continue
+        if managed.process.poll() is None:
+            if os.name == "nt":
+                managed.process.terminate()
+            else:
+                managed.process.send_signal(signal.SIGTERM)
+    for managed in processes:
+        if managed.process is None:
+            continue
+        try:
+            managed.process.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            managed.process.kill()
+
+
+def start_dashboard_api(api_host: str, api_port: str) -> ManagedProcess | None:
+    if dashboard_api_healthy(api_host, api_port):
+        print(f"Dashboard API already running at {health_url(api_host, api_port)}", flush=True)
+        return None
+
+    if port_is_open("127.0.0.1" if api_host == "0.0.0.0" else api_host, api_port):
+        print(
+            f"Port {api_port} is already in use, but {health_url(api_host, api_port)} is not healthy.",
+            file=sys.stderr,
+            flush=True,
+        )
+        print("Stop the process using that port or change DASHBOARD_API_PORT.", file=sys.stderr, flush=True)
+        return ManagedProcess("Dashboard API", [])
+
+    if not run_api_preflight():
+        return ManagedProcess("Dashboard API", [])
+
+    managed = start_process(
+        "Dashboard API",
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "src.dashboard_api:app",
+            "--host",
+            api_host,
+            "--port",
+            api_port,
+        ],
+    )
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        code = managed.process.poll() if managed.process else 1
+        if code is not None:
+            print(
+                f"Dashboard API exited before becoming healthy with code {code}.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return ManagedProcess("Dashboard API", [])
+        if dashboard_api_healthy(api_host, api_port):
+            print(f"Dashboard API health check passed: {health_url(api_host, api_port)}", flush=True)
+            return managed
+        time.sleep(0.5)
+
+    print(f"Dashboard API did not become healthy at {health_url(api_host, api_port)}", file=sys.stderr, flush=True)
+    stop_processes([managed])
+    return ManagedProcess("Dashboard API", [])
+
+
 def main() -> int:
     load_dotenv()
 
@@ -59,19 +180,10 @@ def main() -> int:
         print("npm is required for the React dashboard.", file=sys.stderr)
         return 1
 
-    api = start_process(
-        "Dashboard API",
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "src.dashboard_api:app",
-            "--host",
-            api_host,
-            "--port",
-            api_port,
-        ]
-    )
+    api = start_dashboard_api(api_host, api_port)
+    if api and api.process is None:
+        return 1
+
     web = start_process(
         "Dashboard web",
         [
@@ -85,17 +197,19 @@ def main() -> int:
             web_host,
             "--port",
             web_port,
-        ]
+        ],
     )
 
     print(f"Dashboard API: http://{api_host}:{api_port}")
     print(f"Dashboard Web: http://localhost:{web_port}")
 
-    processes = [api, web]
+    processes = [process for process in [api, web] if process is not None]
     exit_code = 0
     try:
         while True:
             for managed in processes:
+                if managed.process is None:
+                    continue
                 code = managed.process.poll()
                 if code is not None:
                     exit_code = code
@@ -107,17 +221,7 @@ def main() -> int:
     except RuntimeError as error:
         print(str(error), file=sys.stderr, flush=True)
     finally:
-        for managed in processes:
-            if managed.process.poll() is None:
-                if os.name == "nt":
-                    managed.process.terminate()
-                else:
-                    managed.process.send_signal(signal.SIGTERM)
-        for managed in processes:
-            try:
-                managed.process.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                managed.process.kill()
+        stop_processes(processes)
     return exit_code
 
 
