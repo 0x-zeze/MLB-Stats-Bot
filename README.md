@@ -352,13 +352,19 @@ Dashboard baru tersedia sebagai prediction control center profesional:
 Install dependency backend:
 
 ```bash
-python3 -m pip install -r requirements.txt
+npm run setup:python
 ```
 
 Install dependency frontend:
 
 ```bash
-npm --prefix dashboard-react install
+npm run setup:web
+```
+
+Atau install backend dan frontend sekaligus:
+
+```bash
+npm run setup
 ```
 
 Jalankan dashboard baru dengan satu command:
@@ -423,7 +429,7 @@ Selain bot Telegram, project ini punya engine Python lokal untuk eksperimen mode
 Install dependency Python:
 
 ```bash
-python3 -m pip install -r requirements.txt
+npm run setup:python
 ```
 
 Jalankan sample prediction:
