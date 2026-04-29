@@ -1,6 +1,8 @@
 import unittest
 
 from src.dashboard_service import (
+    DEFAULT_DASHBOARD_SETTINGS,
+    _decision_from_game,
     get_model_performance,
     get_prediction_history,
     get_today_dashboard,
@@ -30,6 +32,42 @@ class DashboardServiceTests(unittest.TestCase):
 
         self.assertIn("date", text)
         self.assertIn("2026-04-29", text)
+
+    def test_moneyline_edge_uses_moneyline_threshold(self):
+        settings = {
+            **DEFAULT_DASHBOARD_SETTINGS,
+            "minimum_moneyline_edge": 0.05,
+            "minimum_total_edge": 0.02,
+        }
+        game = {
+            "data_quality": {"score": 90},
+            "probable_pitchers": {"status": "Confirmed"},
+            "moneyline": {"edge": 3.0, "confidence": "Medium"},
+            "totals": {"edge": 0.0, "difference": 1.0},
+        }
+
+        decision, reason = _decision_from_game(game, settings)
+
+        self.assertEqual("NO BET", decision)
+        self.assertEqual("Model edge below minimum threshold", reason)
+
+    def test_total_edge_uses_total_threshold(self):
+        settings = {
+            **DEFAULT_DASHBOARD_SETTINGS,
+            "minimum_moneyline_edge": 0.05,
+            "minimum_total_edge": 0.02,
+        }
+        game = {
+            "data_quality": {"score": 90},
+            "probable_pitchers": {"status": "Confirmed"},
+            "moneyline": {"edge": 0.0, "confidence": "Medium"},
+            "totals": {"edge": 3.0, "difference": 1.0},
+        }
+
+        decision, reason = _decision_from_game(game, settings)
+
+        self.assertEqual("LEAN", decision)
+        self.assertEqual("", reason)
 
 
 if __name__ == "__main__":

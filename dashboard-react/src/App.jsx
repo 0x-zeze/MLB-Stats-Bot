@@ -252,7 +252,7 @@ function BacktestView({ backtest, setBacktest }) {
   }
   return (
     <section className="space-y-4">
-      <BacktestForm form={form} onChange={setForm} onRun={run} running={running} exportHref={exportUrl('backtest')} />
+      <BacktestForm form={form} onChange={setForm} onRun={run} running={running} exportHref={exportUrl('backtest', form)} />
       <BacktestTable result={backtest} />
     </section>
   );

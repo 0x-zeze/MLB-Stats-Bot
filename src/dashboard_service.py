@@ -120,6 +120,8 @@ def _decision_from_game(game: dict[str, Any], settings: dict[str, Any]) -> tuple
     total_diff = abs(safe_float(game.get("totals", {}).get("difference"), 0.0))
     confidence = str(game.get("moneyline", {}).get("confidence") or "Low").lower()
     no_bet_reason = game.get("no_bet_reason") or ""
+    minimum_moneyline_edge = safe_float(settings["minimum_moneyline_edge"], 0.02) * 100
+    minimum_total_edge = safe_float(settings["minimum_total_edge"], 0.02) * 100
 
     if no_bet_reason:
         return "NO BET", no_bet_reason
@@ -128,12 +130,12 @@ def _decision_from_game(game: dict[str, Any], settings: dict[str, Any]) -> tuple
     if game.get("probable_pitchers", {}).get("status") in {"Missing", "TBD"}:
         return "NO BET", "Missing probable pitcher"
     if total_diff and total_diff < safe_float(settings["minimum_projected_total_difference"], 0.4):
-        if moneyline_edge < safe_float(settings["minimum_moneyline_edge"], 0.02) * 100:
+        if moneyline_edge < minimum_moneyline_edge:
             return "NO BET", "Projected total difference below 0.4 runs and moneyline edge is small"
 
     if quality >= 85 and confidence == "high" and max(moneyline_edge, total_edge) >= 4.0:
         return "BET", ""
-    if max(moneyline_edge, total_edge) >= safe_float(settings["minimum_total_edge"], 0.02) * 100:
+    if moneyline_edge >= minimum_moneyline_edge or total_edge >= minimum_total_edge:
         return "LEAN", ""
     return "NO BET", "Model edge below minimum threshold"
 

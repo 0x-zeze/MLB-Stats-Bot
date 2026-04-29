@@ -222,7 +222,7 @@ Output:
 ```text
 Telegram bot: src/index.js
 Dashboard Web: http://IP-VPS-KAMU:5173
-Dashboard API: http://IP-VPS-KAMU:8010
+Dashboard API: http://127.0.0.1:8010
 ```
 
 Kalau hanya ingin menjalankan bot Telegram tanpa dashboard baru:
@@ -285,10 +285,13 @@ http://IP-VPS-KAMU:5173
 Port dashboard baru bisa diganti di `.env`:
 
 ```env
-DASHBOARD_API_HOST=0.0.0.0
+DASHBOARD_API_HOST=127.0.0.1
 DASHBOARD_API_PORT=8010
 DASHBOARD_WEB_HOST=0.0.0.0
 DASHBOARD_WEB_PORT=5173
+DASHBOARD_API_TOKEN=
+DASHBOARD_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+VITE_DASHBOARD_API_TOKEN=
 ```
 
 Dashboard legacy lama masih tersedia kalau dibutuhkan:
@@ -305,13 +308,12 @@ Jika `http://localhost:5173` berhasil di VPS tetapi `http://IP-VPS-KAMU:5173` lo
 ss -ltnp | grep -E '5173|8010'
 ```
 
-Output yang benar harus mengarah ke `0.0.0.0:5173` dan `0.0.0.0:8010`, bukan hanya `127.0.0.1`.
+Output normal adalah frontend di `0.0.0.0:5173` dan FastAPI di `127.0.0.1:8010`; browser cukup membuka frontend, lalu Vite meneruskan request API secara lokal.
 
 Lalu buka firewall VPS:
 
 ```bash
 sudo ufw allow 5173/tcp
-sudo ufw allow 8010/tcp
 sudo ufw status
 ```
 
@@ -350,7 +352,7 @@ Dashboard baru tersedia sebagai prediction control center profesional:
 Install dependency backend:
 
 ```bash
-python -m pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
 Install dependency frontend:
@@ -369,7 +371,7 @@ URL default:
 
 ```text
 Frontend: http://IP-VPS-KAMU:5173
-FastAPI:  http://IP-VPS-KAMU:8010
+FastAPI:  http://127.0.0.1:8010
 ```
 
 Jika ingin menjalankan terpisah:
@@ -410,8 +412,9 @@ Threshold bisa diubah dari tab `Settings`:
 Catatan VPS:
 
 - Buka port `5173/tcp` untuk frontend React.
-- Buka port `8010/tcp` untuk FastAPI jika ingin API diakses langsung.
+- Jangan buka port `8010/tcp` kecuali benar-benar ingin API diakses langsung.
 - Kalau hanya memakai Vite proxy dari frontend, browser cukup membuka port `5173`.
+- Jika membuka API langsung ke publik, set `DASHBOARD_API_TOKEN` di backend dan `VITE_DASHBOARD_API_TOKEN` di frontend.
 
 ## Python ML Prediction Engine
 
@@ -420,25 +423,25 @@ Selain bot Telegram, project ini punya engine Python lokal untuk eksperimen mode
 Install dependency Python:
 
 ```bash
-python -m pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
 Jalankan sample prediction:
 
 ```bash
-python -m src.predict --home "Los Angeles Dodgers" --away "New York Yankees"
+python3 -m src.predict --home "Los Angeles Dodgers" --away "New York Yankees"
 ```
 
 Dengan odds market:
 
 ```bash
-python -m src.predict --home "Los Angeles Dodgers" --away "New York Yankees" --home-odds -120
+python3 -m src.predict --home "Los Angeles Dodgers" --away "New York Yankees" --home-odds -120
 ```
 
 Dengan total runs / over-under:
 
 ```bash
-python -m src.predict --home "Los Angeles Dodgers" --away "New York Yankees" --market-total 8.5 --over-odds -110 --under-odds -110
+python3 -m src.predict --home "Los Angeles Dodgers" --away "New York Yankees" --market-total 8.5 --over-odds -110 --under-odds -110
 ```
 
 Jalankan dari Telegram:
@@ -502,7 +505,7 @@ Context
 Jika Python di mesin kamu bukan `python`, atur di `.env`:
 
 ```env
-PYTHON_BIN=python
+PYTHON_BIN=python3
 ```
 
 Output berisi:
@@ -740,10 +743,10 @@ Aturan konservatif:
 Project ini juga punya pipeline validasi model dari CSV lokal:
 
 ```bash
-python -m src.backtest --season 2025 --market moneyline
-python -m src.backtest --season 2025 --market totals
-python -m src.backtest --start-date 2025-09-01 --end-date 2025-09-30 --market totals
-python -m src.evaluate --report
+python3 -m src.backtest --season 2025 --market moneyline
+python3 -m src.backtest --season 2025 --market totals
+python3 -m src.backtest --start-date 2025-09-01 --end-date 2025-09-30 --market totals
+python3 -m src.evaluate --report
 ```
 
 Output backtest disimpan ke:

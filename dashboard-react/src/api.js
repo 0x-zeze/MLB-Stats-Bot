@@ -1,9 +1,15 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+const API_TOKEN = import.meta.env.VITE_DASHBOARD_API_TOKEN || '';
 
 async function request(path, options = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(API_TOKEN ? { 'X-Dashboard-Token': API_TOKEN } : {}),
+    ...(options.headers || {}),
+  };
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers,
   });
   if (!response.ok) {
     const text = await response.text();
@@ -30,6 +36,8 @@ export const api = {
 };
 
 export function exportUrl(kind, params = {}) {
-  const query = new URLSearchParams(params).toString();
+  const exportParams = { ...params };
+  if (API_TOKEN) exportParams.token = API_TOKEN;
+  const query = new URLSearchParams(exportParams).toString();
   return `${API_BASE}/api/export/${kind}${query ? `?${query}` : ''}`;
 }
