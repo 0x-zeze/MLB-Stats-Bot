@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import venv
@@ -46,10 +47,22 @@ def main() -> int:
     try:
         venv.EnvBuilder(with_pip=True, clear=False).create(VENV_DIR)
     except Exception as error:
-        print(f"Could not create virtualenv: {error}", file=sys.stderr, flush=True)
-        if os.name != "nt":
-            print("Ubuntu fix: sudo apt install -y python3-venv", file=sys.stderr, flush=True)
-        return 1
+        message = str(error)
+        if "are the same file" in message and VENV_DIR.exists():
+            print("Existing virtualenv is broken. Recreating .venv...", flush=True)
+            shutil.rmtree(VENV_DIR)
+            try:
+                venv.EnvBuilder(with_pip=True, clear=False).create(VENV_DIR)
+            except Exception as retry_error:
+                print(f"Could not recreate virtualenv: {retry_error}", file=sys.stderr, flush=True)
+                if os.name != "nt":
+                    print("Ubuntu fix: sudo apt install -y python3-venv", file=sys.stderr, flush=True)
+                return 1
+        else:
+            print(f"Could not create virtualenv: {error}", file=sys.stderr, flush=True)
+            if os.name != "nt":
+                print("Ubuntu fix: sudo apt install -y python3-venv", file=sys.stderr, flush=True)
+            return 1
 
     python = str(python_bin())
     try:
