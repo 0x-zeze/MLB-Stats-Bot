@@ -1,8 +1,10 @@
 .env
 node_modules/
 data/*.json
+!data/dashboard_mock.json
 data/cache/
 data/tmp_*.csv
+dashboard-react/dist/
 *.log
 __pycache__/
 *.pyc

@@ -418,7 +418,7 @@ function summarizeLivePrediction(prediction, meta = {}) {
   };
 }
 
-async function livePredictions(dateYmd) {
+export async function livePredictions(dateYmd) {
   const predictions = await getMlbPredictions(dateYmd, storage.getMemory());
   const fetchedAt = new Date().toISOString();
   return {

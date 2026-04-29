@@ -316,6 +316,82 @@ Fitur interaktif:
 - Jalankan backtest `moneyline` atau `totals`.
 - Tanya knowledge base langsung dari dashboard.
 
+## Dashboard Control Center FastAPI + React
+
+Dashboard baru tersedia sebagai prediction control center profesional:
+
+- Backend FastAPI: `src/dashboard_api.py`
+- Service/business logic: `src/dashboard_service.py`
+- Frontend React + Tailwind: `dashboard-react/`
+- Mock data: `data/dashboard_mock.json`
+- Settings threshold lokal: `data/dashboard_settings.json`
+
+Install dependency backend:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Install dependency frontend:
+
+```bash
+npm --prefix dashboard-react install
+```
+
+Jalankan dashboard baru dengan satu command:
+
+```bash
+npm run dashboard
+```
+
+URL default:
+
+```text
+Frontend: http://IP-VPS-KAMU:5173
+FastAPI:  http://IP-VPS-KAMU:8010
+```
+
+Jika ingin menjalankan terpisah:
+
+```bash
+npm run dashboard:api
+npm run dashboard:web
+```
+
+Live API:
+
+- Tab `Today` default memakai `source=live`.
+- FastAPI akan memanggil live prediction layer Node yang sudah ada (`src/dashboard.js` -> `getMlbPredictions`).
+- Jika live data gagal, dashboard otomatis menampilkan mock data dan memberi warning, bukan menyembunyikan error.
+- Pilihan source di UI: `Live`, `Sample`, dan `Mock`.
+
+Export CSV:
+
+```text
+GET /api/export/today
+GET /api/export/history
+GET /api/export/performance
+GET /api/export/backtest
+```
+
+Threshold bisa diubah dari tab `Settings`:
+
+- Minimum moneyline edge.
+- Minimum total edge.
+- Minimum projected total difference.
+- Minimum data quality score.
+- Odds stale threshold.
+- Weather stale threshold.
+- Auto-refresh interval.
+- Confidence thresholds.
+- Toggle weather, umpire, dan market movement adjustment.
+
+Catatan VPS:
+
+- Buka port `5173/tcp` untuk frontend React.
+- Buka port `8010/tcp` untuk FastAPI jika ingin API diakses langsung.
+- Kalau hanya memakai Vite proxy dari frontend, browser cukup membuka port `5173`.
+
 ## Python ML Prediction Engine
 
 Selain bot Telegram, project ini punya engine Python lokal untuk eksperimen model MLB dari CSV.
