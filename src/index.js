@@ -14,7 +14,7 @@ import {
   getMlbScheduleChoices
 } from './mlb.js';
 import { Storage } from './storage.js';
-import { TelegramBot } from './telegram.js';
+import { setupWebhook, TelegramBot } from './telegram.js';
 import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils.js';
 import { startDashboard } from './dashboard.js';
 
@@ -1166,6 +1166,29 @@ async function handleCallbackQuery(bot, callbackQuery) {
   });
 }
 
+async function processTelegramUpdate(bot, update) {
+  if (update.update_id !== undefined) {
+    storage.setLastUpdateId(update.update_id);
+  }
+
+  if (update.message) {
+    await handleMessage(bot, update.message).catch(async (error) => {
+      console.error(error);
+      await bot.sendMessage(update.message.chat.id, `Error: ${error.message}`).catch(() => {});
+    });
+  }
+
+  if (update.callback_query) {
+    await handleCallbackQuery(bot, update.callback_query).catch(async (error) => {
+      console.error(error);
+      const chatId = update.callback_query.message?.chat?.id;
+      if (chatId) {
+        await bot.sendMessage(chatId, `Error: ${error.message}`).catch(() => {});
+      }
+    });
+  }
+}
+
 async function poll(bot) {
   let offset = storage.getLastUpdateId() ? storage.getLastUpdateId() + 1 : undefined;
   console.log('Telegram bot polling aktif.');
@@ -1175,30 +1198,46 @@ async function poll(bot) {
       const updates = await bot.getUpdates({ offset, timeout: 30 });
       for (const update of updates) {
         offset = update.update_id + 1;
-        storage.setLastUpdateId(update.update_id);
-
-        if (update.message) {
-          await handleMessage(bot, update.message).catch(async (error) => {
-            console.error(error);
-            await bot.sendMessage(update.message.chat.id, `Error: ${error.message}`).catch(() => {});
-          });
-        }
-
-        if (update.callback_query) {
-          await handleCallbackQuery(bot, update.callback_query).catch(async (error) => {
-            console.error(error);
-            const chatId = update.callback_query.message?.chat?.id;
-            if (chatId) {
-              await bot.sendMessage(chatId, `Error: ${error.message}`).catch(() => {});
-            }
-          });
-        }
+        await processTelegramUpdate(bot, update);
       }
     } catch (error) {
       console.error('Polling error:', error.message);
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
+}
+
+async function startWebhookMode(bot) {
+  const webhook = await setupWebhook(bot, {
+    webhookUrl: config.telegramWebhook.url,
+    port: config.telegramWebhook.port,
+    secret: config.telegramWebhook.secret,
+    onUpdate: (update) => processTelegramUpdate(bot, update)
+  });
+
+  let shuttingDown = false;
+  const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} diterima. Menghapus Telegram webhook dan menutup server...`);
+    await webhook.close({ deleteWebhook: true });
+    process.exit(0);
+  };
+
+  process.once('SIGTERM', () => {
+    shutdown('SIGTERM').catch((error) => {
+      console.error('Graceful shutdown gagal:', error.message);
+      process.exit(1);
+    });
+  });
+  process.once('SIGINT', () => {
+    shutdown('SIGINT').catch((error) => {
+      console.error('Graceful shutdown gagal:', error.message);
+      process.exit(1);
+    });
+  });
+
+  await new Promise(() => {});
 }
 
 async function processPendingPostGames(bot) {
@@ -1307,6 +1346,15 @@ async function main() {
 
   const bot = new TelegramBot(config.telegramToken);
   startScheduler(bot);
+
+  if (config.telegramWebhook.enabled) {
+    await startWebhookMode(bot);
+    return;
+  }
+
+  await bot.deleteWebhook({ drop_pending_updates: false }).catch((error) => {
+    console.warn(`deleteWebhook fallback polling gagal/diabaikan: ${error.message}`);
+  });
   await poll(bot);
 }
 

@@ -137,6 +137,92 @@ TELEGRAM_CHAT_ID=123456789
 npm start
 ```
 
+## Telegram Webhook Mode
+
+Default bot tetap memakai polling. Untuk VPS production, kamu bisa mengaktifkan webhook agar Telegram mengirim update langsung ke server bot.
+
+Isi `.env`:
+
+```env
+TELEGRAM_WEBHOOK_MODE=true
+TELEGRAM_WEBHOOK_URL=https://domain-kamu.com/telegram/webhook
+TELEGRAM_WEBHOOK_PORT=8443
+TELEGRAM_WEBHOOK_SECRET=ganti_dengan_random_secret_panjang
+```
+
+Catatan:
+
+- `TELEGRAM_WEBHOOK_URL` adalah URL publik HTTPS yang bisa diakses Telegram.
+- Jika kamu memakai reverse proxy di port 443, URL cukup `https://domain-kamu.com/telegram/webhook`.
+- Jika kamu expose port 8443 langsung, URL harus memuat port: `https://domain-kamu.com:8443/telegram/webhook`.
+- Server Node bot mendengarkan HTTP lokal di `TELEGRAM_WEBHOOK_PORT`; SSL sebaiknya ditangani Nginx/Caddy di depan bot.
+- Header `X-Telegram-Bot-Api-Secret-Token` divalidasi memakai `TELEGRAM_WEBHOOK_SECRET`.
+
+### SSL Dengan Let's Encrypt
+
+Rekomendasi paling mudah adalah domain + Nginx + Let's Encrypt:
+
+```bash
+sudo apt update
+sudo apt install -y nginx certbot python3-certbot-nginx
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo certbot --nginx -d domain-kamu.com
+```
+
+Contoh Nginx reverse proxy:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name domain-kamu.com;
+
+    location /telegram/webhook {
+        proxy_pass http://127.0.0.1:8443;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+```
+
+Lalu jalankan:
+
+```bash
+npm start
+```
+
+### Port 8443
+
+Jika benar-benar ingin membuka 8443 ke publik:
+
+```bash
+sudo ufw allow 8443/tcp
+```
+
+Namun Telegram tetap membutuhkan HTTPS di URL publik. Untuk direct 8443, jalankan reverse proxy SSL di port 8443 dan arahkan ke bot di port internal lain, atau pakai 443 seperti contoh di atas.
+
+### Self-Signed SSL
+
+Self-signed hanya cocok untuk setup lanjutan. Telegram perlu endpoint HTTPS valid atau certificate self-signed yang di-upload saat `setWebhook`. Implementasi bot ini memakai request JSON sederhana, jadi jalur yang direkomendasikan adalah Let's Encrypt. Jika tetap memakai self-signed, letakkan Nginx/Caddy sebagai TLS terminator dan pastikan Telegram dapat memverifikasi sertifikatnya.
+
+### Verifikasi Webhook
+
+Cek webhook aktif:
+
+```bash
+curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo"
+```
+
+Jika ingin kembali ke polling:
+
+```env
+TELEGRAM_WEBHOOK_MODE=false
+```
+
+Saat polling aktif, bot akan mencoba `deleteWebhook` otomatis agar `getUpdates` bisa berjalan lagi.
+
 ## Konfigurasi .env
 
 Minimal:
@@ -180,7 +266,7 @@ Auto update juga bisa diatur langsung dari Telegram tanpa edit `.env`:
 /autoupdate status
 ```
 
-Setting ini disimpan per chat di `data/state.json`.
+Setting ini disimpan per chat di `data/state.sqlite`.
 
 Post-game learning:
 
@@ -984,7 +1070,7 @@ Saat game final:
 1. Bot membaca hasil akhir.
 2. Membandingkan pick agent vs winner aktual.
 3. Membandingkan YRFI/NRFI vs first inning aktual.
-4. Menyimpan hasil ke `data/state.json`.
+4. Menyimpan hasil ke `data/state.sqlite`.
 5. Mengirim post-game recap ke Telegram.
 
 Cek memory:

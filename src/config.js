@@ -61,6 +61,12 @@ export function loadConfig() {
     telegramToken: process.env.TELEGRAM_BOT_TOKEN || '',
     telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
     allowedChatIds: csv(process.env.ALLOWED_CHAT_IDS),
+    telegramWebhook: {
+      enabled: boolFromEnv(process.env.TELEGRAM_WEBHOOK_MODE, false),
+      url: process.env.TELEGRAM_WEBHOOK_URL || '',
+      port: intFromEnv(process.env.TELEGRAM_WEBHOOK_PORT, 8443),
+      secret: process.env.TELEGRAM_WEBHOOK_SECRET || ''
+    },
     timezone: process.env.TIMEZONE || 'Asia/Jakarta',
     autoAlerts: boolFromEnv(process.env.AUTO_ALERTS, false),
     dailyAlertTime: process.env.DAILY_ALERT_TIME || '20:00',
