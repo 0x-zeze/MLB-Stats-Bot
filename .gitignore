@@ -2,6 +2,12 @@
 node_modules/
 data/*.json
 !data/dashboard_mock.json
+data/*.db
+data/*.db-*
+data/*.sqlite
+data/*.sqlite3
+data/*.sqlite-*
+data/*.sqlite3-*
 data/cache/
 data/tmp_*.csv
 dashboard-react/dist/

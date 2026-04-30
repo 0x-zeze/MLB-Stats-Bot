@@ -5,18 +5,24 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node scripts/run_python.js scripts/start_all.py",
+    "prestart": "node scripts/prepare_start.js",
+    "start": "node scripts/start_all.mjs",
     "bot": "node src/index.js",
-    "dashboard": "node scripts/run_python.js scripts/run_control_center.py",
+    "predashboard": "node scripts/prepare_start.js",
+    "dashboard": "node scripts/run_control_center.mjs",
     "dashboard:legacy": "node src/dashboard.js",
-    "dashboard:api": "node scripts/run_python.js -m uvicorn src.dashboard_api:app --host 127.0.0.1 --port 8010",
+    "dashboard:api": "node scripts/run_api.mjs",
     "dashboard:web": "npm --prefix dashboard-react run dev -- --host 0.0.0.0 --port 5173",
     "dashboard:build": "npm --prefix dashboard-react run build",
     "setup:python": "node scripts/run_python.js scripts/setup_python.py",
     "setup:web": "npm --prefix dashboard-react install",
     "setup": "npm run setup:python && npm run setup:web",
+    "migrate:storage": "node scripts/migrate_state_to_sqlite.js",
     "once": "node src/index.js --once",
-    "check": "node --check src/index.js && node --check src/dashboard.js && node --check dashboard/app.js && node --check src/config.js && node --check src/telegram.js && node --check src/mlb.js && node --check src/storage.js && node --check src/llm.js && node --check src/analystSkill.js && node --check src/utils.js"
+    "check": "node --check src/index.js && node --check src/dashboard.js && node --check dashboard/app.js && node --check src/config.js && node --check src/telegram.js && node --check src/mlb.js && node --check src/storage.js && node --check src/llm.js && node --check src/analystSkill.js && node --check src/utils.js && node --check scripts/prepare_start.js && node --check scripts/process_runner.mjs && node --check scripts/start_all.mjs && node --check scripts/run_control_center.mjs && node --check scripts/run_api.mjs && node --check scripts/migrate_state_to_sqlite.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.9.1"
   },
   "engines": {
     "node": ">=18.15"
