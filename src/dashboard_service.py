@@ -157,6 +157,8 @@ def _decision_from_game(game: dict[str, Any], settings: dict[str, Any]) -> tuple
 
 
 def _summarize_today(games: list[dict[str, Any]], source: str, warning: str | None = None) -> dict[str, Any]:
+    if source == "live":
+        _log_evolution_trajectories(games)
     bet_count = sum(1 for game in games if game.get("decision") == "BET")
     lean_count = sum(1 for game in games if game.get("decision") == "LEAN")
     no_bet_count = sum(1 for game in games if game.get("decision") == "NO BET")
@@ -175,6 +177,17 @@ def _summarize_today(games: list[dict[str, Any]], source: str, warning: str | No
         },
         "games": games,
     }
+
+
+def _log_evolution_trajectories(games: list[dict[str, Any]]) -> None:
+    """Best-effort pre-game trajectory logging for generated dashboard predictions."""
+    try:
+        from .evolution.trajectory_logger import log_prediction_trajectory
+
+        for game in games:
+            log_prediction_trajectory(game, game)
+    except Exception:
+        return
 
 
 def _mock_today(settings: dict[str, Any], warning: str | None = None) -> dict[str, Any]:
@@ -631,6 +644,13 @@ def get_model_performance() -> dict[str, Any]:
             for key, value in by_confidence.items()
         ],
     }
+
+
+def get_evolution_dashboard(limit: int = 20) -> dict[str, Any]:
+    """Return read-only evolution engine state for the dashboard."""
+    from .evolution.evolution_report import build_evolution_summary
+
+    return build_evolution_summary(limit=limit)
 
 
 def run_dashboard_backtest(params: dict[str, Any]) -> dict[str, Any]:

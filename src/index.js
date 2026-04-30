@@ -17,7 +17,12 @@ import { Storage } from './storage.js';
 import { setupWebhook, TelegramBot } from './telegram.js';
 import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils.js';
 import { startDashboard } from './dashboard.js';
-import { configureLineMonitor, startLineMonitor } from './lineMovement.js';
+import {
+  checkLineMovement,
+  configureLineMonitor,
+  lineMonitorSettings,
+  startLineMonitor
+} from './lineMovement.js';
 
 const config = loadConfig();
 const storage = new Storage();
@@ -27,6 +32,75 @@ const PREDICT_CALLBACK_PREFIX = 'predict_live:';
 const LEGACY_PREDICT_CALLBACK_PREFIX = 'predict:';
 const AGENT_TOOL_CALLBACK_PREFIX = 'agent_tool:';
 const TOTAL_MARKET_BUTTONS = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
+const EVOLUTION_COMMANDS = {
+  summary: {
+    module: 'src.evolution.evolution_report',
+    args: ['--summary'],
+    label: 'Evolution summary'
+  },
+  logtoday: {
+    module: 'src.evolution.trajectory_logger',
+    args: ['--log-today'],
+    label: 'Log trajectory hari ini'
+  },
+  evaluate: {
+    module: 'src.evolution.evolution_engine',
+    args: ['--evaluate-yesterday'],
+    label: 'Evaluate yesterday'
+  },
+  lessons: {
+    module: 'src.evolution.evolution_engine',
+    args: ['--generate-lessons'],
+    label: 'Generate lessons'
+  },
+  loss: {
+    module: 'src.evolution.language_loss',
+    args: ['--generate'],
+    label: 'Generate language loss'
+  },
+  gradient: {
+    module: 'src.evolution.language_gradient',
+    args: ['--generate'],
+    label: 'Generate language gradients'
+  },
+  propose: {
+    module: 'src.evolution.symbolic_optimizer',
+    args: ['--propose-updates'],
+    label: 'Propose symbolic updates'
+  },
+  rules: {
+    module: 'src.evolution.evolution_engine',
+    args: ['--propose-rules'],
+    label: 'Propose rule candidates'
+  },
+  backtest: {
+    module: 'src.evolution.evolution_engine',
+    args: ['--backtest-candidates'],
+    label: 'Backtest candidates'
+  },
+  promote: {
+    module: 'src.evolution.evolution_engine',
+    args: ['--promote-approved'],
+    label: 'Promotion status'
+  }
+};
+const EVOLUTION_ALIASES = {
+  status: 'summary',
+  eval: 'evaluate',
+  yesterday: 'evaluate',
+  lesson: 'lessons',
+  losses: 'loss',
+  gradients: 'gradient',
+  candidate: 'propose',
+  candidates: 'propose',
+  update: 'propose',
+  updates: 'propose',
+  rule: 'rules',
+  approve: 'promote',
+  promotion: 'promote',
+  log: 'logtoday',
+  logtoday: 'logtoday'
+};
 
 function helpText() {
   return [
@@ -46,12 +120,30 @@ function helpText() {
     '/skill - lihat playbook analisa Agent',
     '/postgame YYYY-MM-DD - cek recap final dan update memory',
     '/memory - lihat performa memory model',
+    '/evolve - menu Agent Evolution Engine',
     '/autoupdate on|off|time HH:mm|status - atur update otomatis',
     '/subscribe - aktifkan auto-alert di chat ini',
     '/unsubscribe - matikan auto-alert',
     '/sendalert - kirim alert hari ini ke subscriber',
+    '/linecheck - cek line movement vs odds tersimpan',
     '/chatid - lihat chat id'
   ].join('\n');
+}
+
+function botCommandList() {
+  return [
+    { command: 'today', description: 'Alert MLB hari ini' },
+    { command: 'deep', description: 'Alert dengan advanced stats' },
+    { command: 'date', description: 'Alert tanggal tertentu' },
+    { command: 'game', description: 'Cek tim tertentu hari ini' },
+    { command: 'predict', description: 'Pilih game MLB dari tombol' },
+    { command: 'postgame', description: 'Recap final dan update memory' },
+    { command: 'linecheck', description: 'Cek line movement' },
+    { command: 'evolve', description: 'Agent Evolution Engine' },
+    { command: 'memory', description: 'Ringkasan memory model' },
+    { command: 'agent', description: 'Status Analyst Agent' },
+    { command: 'help', description: 'Daftar command' }
+  ];
 }
 
 function isAllowed(chatId) {
@@ -363,6 +455,46 @@ function runAgentBridge(action, args = []) {
   });
 }
 
+function runPythonModule(moduleName, args = [], options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(config.pythonExecutable, ['-m', moduleName, ...args], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PYTHONDONTWRITEBYTECODE: '1'
+      },
+      windowsHide: true
+    });
+
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(options.timeoutMessage || 'Evolution command timeout. Coba lagi sebentar.'));
+    }, options.timeoutMs || 60_000);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error((stderr || stdout || `Python exited with code ${code}`).trim()));
+        return;
+      }
+
+      resolve(stdout.trim());
+    });
+  });
+}
+
 function formatPythonPredictionOutput(output) {
   return [
     '📊 MLB Python Prediction',
@@ -371,6 +503,107 @@ function formatPythonPredictionOutput(output) {
     '',
     '⚠️ Estimasi model, bukan jaminan hasil atau betting advice.'
   ].join('\n');
+}
+
+function evolutionHelpText() {
+  return [
+    'MLB Agent Evolution Engine',
+    '',
+    'Pakai dari Telegram:',
+    '/evolve summary - ringkasan evolution',
+    '/evolve logtoday - simpan trajectory pre-game hari ini',
+    '/evolve evaluate - evaluasi game kemarin',
+    '/evolve lessons - cek lesson tersimpan',
+    '/evolve loss - generate language loss',
+    '/evolve gradient - generate language gradient',
+    '/evolve propose - propose symbolic update',
+    '/evolve rules - propose rule candidate',
+    '/evolve backtest - cek candidate yang perlu backtest',
+    '/evolve promote - cek status promotion gate',
+    '',
+    'Catatan: command ini tidak auto-ubah production. Semua candidate tetap butuh backtest dan promotion gate.'
+  ].join('\n');
+}
+
+function parseJsonOutput(output) {
+  try {
+    return JSON.parse(output || '{}');
+  } catch {
+    return { raw: output };
+  }
+}
+
+function formatEvolutionSummary(payload) {
+  const summary = payload.summary || {};
+  return [
+    'MLB Agent Evolution Summary',
+    '',
+    `Evaluated: ${summary.total_predictions_evaluated || 0}`,
+    `Lessons: ${summary.lessons_generated || 0}`,
+    `Language loss: ${summary.language_losses_generated || 0}`,
+    `Language gradient: ${summary.language_gradients_generated || 0}`,
+    `Candidates: ${summary.candidates_proposed || 0}`,
+    `Approved: ${summary.candidates_approved || 0}`,
+    `Rejected: ${summary.candidates_rejected || 0}`,
+    '',
+    'Active versions:',
+    `Prompt: ${summary.current_prompt_version || '-'}`,
+    `Rules: ${summary.current_rule_version || '-'}`,
+    `Weights: ${summary.current_weight_version || '-'}`,
+    '',
+    'Lihat detail di dashboard tab Evolution.'
+  ].join('\n');
+}
+
+function formatKeyValuePayload(title, payload) {
+  if (payload.raw) {
+    return [title, '', payload.raw].join('\n');
+  }
+
+  const lines = Object.entries(payload).map(([key, value]) => {
+    const label = key.replace(/_/g, ' ');
+    if (Array.isArray(value)) return `${label}: ${value.length}`;
+    if (value && typeof value === 'object') return `${label}: ${JSON.stringify(value)}`;
+    return `${label}: ${value}`;
+  });
+
+  return [title, '', ...(lines.length ? lines : ['Tidak ada perubahan.'])].join('\n');
+}
+
+function formatEvolutionResult(action, payload) {
+  if (action === 'summary') return formatEvolutionSummary(payload);
+  return formatKeyValuePayload(EVOLUTION_COMMANDS[action]?.label || 'Evolution command', payload);
+}
+
+async function handleEvolutionCommand(bot, chatId, args) {
+  const requested = String(args[0] || 'summary').toLowerCase();
+  if (requested === 'help' || requested === 'menu') {
+    await bot.sendMessage(chatId, evolutionHelpText());
+    return;
+  }
+
+  const action = EVOLUTION_COMMANDS[requested] ? requested : EVOLUTION_ALIASES[requested];
+  if (!action || !EVOLUTION_COMMANDS[action]) {
+    await bot.sendMessage(chatId, evolutionHelpText());
+    return;
+  }
+
+  const commandConfig = EVOLUTION_COMMANDS[action];
+  const commandArgs = [...commandConfig.args];
+  if (action === 'logtoday') {
+    const source = String(args[1] || 'live').toLowerCase();
+    if (['live', 'sample', 'mock'].includes(source)) {
+      commandArgs.push('--source', source);
+    }
+  }
+
+  await bot.sendMessage(chatId, `Menjalankan ${commandConfig.label}...`);
+  const output = await runPythonModule(commandConfig.module, commandArgs, {
+    timeoutMessage: 'Evolution command timeout. Coba lagi sebentar.',
+    timeoutMs: 90_000
+  });
+  const payload = parseJsonOutput(output);
+  await bot.sendMessage(chatId, formatEvolutionResult(action, payload));
 }
 
 function agentToolHomeKeyboard() {
@@ -731,6 +964,78 @@ async function sendAlertToAll(bot, dateYmd) {
   }
 
   return chatIds.length;
+}
+
+function formatLineCheckMovement(movement) {
+  const market =
+    movement.storageMarket === 'total'
+      ? 'Total'
+      : `Moneyline ${movement.teamLabel || ''}`.trim();
+  const delta =
+    movement.unit === 'runs'
+      ? `${movement.delta >= 0 ? '+' : ''}${movement.delta.toFixed(1)}`
+      : `${movement.delta >= 0 ? '+' : ''}${Math.round(movement.delta)}`;
+
+  return `- ${movement.matchup}: ${market} ${movement.oldText} -> ${movement.newText} (${delta} ${movement.unit})`;
+}
+
+function formatLineCheckSummary(dateYmd, result, { source = 'stored predictions' } = {}) {
+  const settings = lineMonitorSettings();
+
+  if (!result.hasOddsApiKey) {
+    return [
+      '📊 Linecheck MLB',
+      `Tanggal: ${dateYmd}`,
+      '',
+      'ODDS_API_KEY/THE_ODDS_API_KEY belum diisi, jadi odds live belum bisa dicek.'
+    ].join('\n');
+  }
+
+  if (result.checkedGames === 0) {
+    return ['📊 Linecheck MLB', `Tanggal: ${dateYmd}`, '', 'Tidak ada game aktif untuk dicek.'].join(
+      '\n'
+    );
+  }
+
+  const movementLines = result.movements.slice(0, 6).map(formatLineCheckMovement);
+  const hiddenMovements = Math.max(0, result.movements.length - movementLines.length);
+
+  return [
+    '📊 Linecheck MLB',
+    `Tanggal: ${dateYmd}`,
+    `Sumber game: ${source}`,
+    `Matched odds: ${result.matchedGames}/${result.checkedGames}`,
+    `Threshold: ML ${settings.moneylineThreshold} cents | Total ${settings.totalThreshold} runs`,
+    result.initializedSnapshots > 0
+      ? `Baseline odds tersimpan: ${result.initializedSnapshots} market`
+      : null,
+    '',
+    result.movements.length > 0
+      ? `Movement melewati threshold: ${result.movements.length} (${result.alertsSent} alert terkirim)`
+      : 'Belum ada movement yang melewati threshold.',
+    ...movementLines,
+    hiddenMovements > 0 ? `+ ${hiddenMovements} movement lain.` : null
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+async function loadLineCheckGames(dateYmd) {
+  const storedPredictions = storage.listPredictionsByDate(dateYmd);
+  if (storedPredictions.length > 0) {
+    return { games: storedPredictions, source: 'stored pre-game alert' };
+  }
+
+  const scheduleGames = await getMlbScheduleChoices(dateYmd);
+  return { games: scheduleGames, source: 'MLB live schedule' };
+}
+
+async function handleLineCheckCommand(bot, chatId) {
+  const dateYmd = dateInTimezone(config.timezone);
+  await bot.sendMessage(chatId, `Mengecek line movement MLB ${dateYmd}...`);
+  const { games, source } = await loadLineCheckGames(dateYmd);
+  const result = await checkLineMovement(games, chatId, { sendAlerts: true });
+  await bot.sendMessage(chatId, formatLineCheckSummary(dateYmd, result, { source }));
 }
 
 function formatMemorySummary() {
@@ -1114,6 +1419,16 @@ async function handleMessage(bot, message) {
     return;
   }
 
+  if (command === '/linecheck') {
+    await handleLineCheckCommand(bot, chatId);
+    return;
+  }
+
+  if (command === '/evolve' || command === '/evolution') {
+    await handleEvolutionCommand(bot, chatId, args);
+    return;
+  }
+
   if (command === '/postgame') {
     const maybeDate = args[0];
     const dateYmd = isValidDateYmd(maybeDate) ? maybeDate : dateInTimezone(config.timezone);
@@ -1366,6 +1681,9 @@ async function main() {
   });
 
   const bot = new TelegramBot(config.telegramToken);
+  await bot.setMyCommands(botCommandList()).catch((error) => {
+    console.warn(`setMyCommands gagal/diabaikan: ${error.message}`);
+  });
   configureLineMonitor({ bot, storage, config });
   startScheduler(bot);
 

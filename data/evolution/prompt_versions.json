@@ -1,0 +1,17 @@
+{
+  "active_version": "mlb-analyst-v1.0",
+  "versions": [
+    {
+      "backtest_result": null,
+      "changes": [],
+      "date_created": "2026-04-30T08:50:46.829040+00:00",
+      "previous_version": null,
+      "reason": "Initial analyst prompt version.",
+      "rollback_supported": true,
+      "source_gradients": [],
+      "source_losses": [],
+      "status": "active",
+      "version": "mlb-analyst-v1.0"
+    }
+  ]
+}

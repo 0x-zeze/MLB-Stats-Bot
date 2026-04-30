@@ -3,7 +3,7 @@ import { Button } from './ui/button.jsx';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card.jsx';
 import { Field, Input, Select } from './ui/form.jsx';
 
-export default function BacktestForm({ form, onChange, onRun, running, exportHref }) {
+export default function BacktestForm({ form, onChange, onRun, running, onExport }) {
   return (
     <Card>
       <CardHeader>
@@ -31,11 +31,9 @@ export default function BacktestForm({ form, onChange, onRun, running, exportHre
             <Play size={16} />
             {running ? 'Running...' : 'Run backtest'}
           </Button>
-          <Button asChild variant="secondary">
-            <a href={exportHref}>
-              <Download size={16} />
-              Export CSV
-            </a>
+          <Button variant="secondary" type="button" onClick={onExport}>
+            <Download size={16} />
+            Export CSV
           </Button>
         </div>
       </CardContent>

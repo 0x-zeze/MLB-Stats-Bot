@@ -5,10 +5,55 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
+import re
 from statistics import mean
 from typing import Any
 
 from .utils import clamp, safe_float, safe_int
+
+
+OPENER_NOTE_RE = re.compile(r"\b(opener|bulk|piggyback)\b|opener\s*/\s*bulk", re.IGNORECASE)
+OPENER_NOTE_KEYS = {
+    "note",
+    "notes",
+    "description",
+    "game_note",
+    "game_notes",
+    "gamenote",
+    "gamenotes",
+    "probable_pitcher_note",
+    "probable_pitcher_notes",
+    "probablepitchernote",
+    "probablepitchernotes",
+    "summary",
+    "role",
+    "pitcher_role",
+    "pitcherrole",
+    "type",
+}
+START_KEYS = {
+    "gs",
+    "starts",
+    "gamesstarted",
+    "games_started",
+    "careerstarts",
+    "career_starts",
+    "careergamesstarted",
+    "career_games_started",
+}
+APPEARANCE_KEYS = {
+    "g",
+    "games",
+    "appearances",
+    "gamespitched",
+    "games_pitched",
+    "careerappearances",
+    "career_appearances",
+    "careergames",
+    "career_games",
+    "careergamespitched",
+    "career_games_pitched",
+}
 
 
 def pythagorean_win_pct(
@@ -82,6 +127,120 @@ def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
         if key in mapping and mapping[key] not in (None, ""):
             return mapping[key]
     return None
+
+
+def _normalized_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _walk_values(value: Any) -> list[tuple[str, Any]]:
+    if isinstance(value, dict):
+        items: list[tuple[str, Any]] = []
+        for key, nested in value.items():
+            items.append((str(key), nested))
+            items.extend(_walk_values(nested))
+        return items
+    if isinstance(value, (list, tuple, set)):
+        items = []
+        for nested in value:
+            items.extend(_walk_values(nested))
+        return items
+    return []
+
+
+def _note_text(probable_pitcher_data: dict[str, Any]) -> str:
+    strings: list[str] = []
+    for key, value in _walk_values(probable_pitcher_data):
+        if _normalized_key(key) not in OPENER_NOTE_KEYS:
+            continue
+        if isinstance(value, str):
+            strings.append(value)
+        elif isinstance(value, (list, tuple, set)):
+            strings.extend(str(item) for item in value if item not in (None, ""))
+
+    return " ".join(strings)
+
+
+def _first_numeric_by_key(probable_pitcher_data: dict[str, Any], keys: set[str]) -> float | None:
+    for key, value in _walk_values(probable_pitcher_data):
+        if _normalized_key(key) not in keys:
+            continue
+        parsed = safe_float(value, -1.0)
+        if parsed >= 0:
+            return parsed
+    return None
+
+
+def _career_start_ratio(probable_pitcher_data: dict[str, Any]) -> float | None:
+    starts = _first_numeric_by_key(probable_pitcher_data, START_KEYS)
+    appearances = _first_numeric_by_key(probable_pitcher_data, APPEARANCE_KEYS)
+    if starts is None or appearances is None or appearances <= 0:
+        return None
+    return clamp(starts / appearances, 0.0, 1.0)
+
+
+def _role_from_text(text: str) -> str:
+    lowered = text.lower()
+    if "bulk" in lowered and "opener" not in lowered:
+        return "bulk"
+    if "opener" in lowered or "piggyback" in lowered or "bulk" in lowered:
+        return "opener"
+    return "starter"
+
+
+def detect_opener_situation(
+    game_pk: str | int | None,
+    probable_pitcher_data: Any,
+) -> dict[str, Any]:
+    """Detect opener/bulk uncertainty from StatsAPI notes and pitcher usage history.
+
+    The detector is conservative: explicit notes or role labels are the strongest
+    signal, while low career start share is a medium-confidence fallback.
+    """
+    data = _as_mapping(probable_pitcher_data)
+    if not data:
+        return {
+            "is_opener": False,
+            "pitcher_role": "starter",
+            "confidence": "low",
+            "game_pk": game_pk,
+        }
+
+    text = _note_text(data)
+    note_match = OPENER_NOTE_RE.search(text or "")
+    start_ratio = _career_start_ratio(data)
+    low_start_share = start_ratio is not None and start_ratio < 0.30
+    enough_history = safe_float(_first_numeric_by_key(data, APPEARANCE_KEYS), 0.0) >= 10
+    explicit_role = _role_from_text(text)
+
+    if note_match:
+        confidence = "high" if low_start_share or explicit_role in {"opener", "bulk"} else "medium"
+        return {
+            "is_opener": True,
+            "pitcher_role": explicit_role,
+            "confidence": confidence,
+            "game_pk": game_pk,
+            "career_gs_pct": round(start_ratio, 3) if start_ratio is not None else None,
+            "note": text.strip(),
+        }
+
+    if low_start_share and enough_history:
+        return {
+            "is_opener": True,
+            "pitcher_role": "opener",
+            "confidence": "medium",
+            "game_pk": game_pk,
+            "career_gs_pct": round(start_ratio, 3),
+            "note": "Career GS% below opener threshold.",
+        }
+
+    return {
+        "is_opener": False,
+        "pitcher_role": "starter",
+        "confidence": "low",
+        "game_pk": game_pk,
+        "career_gs_pct": round(start_ratio, 3) if start_ratio is not None else None,
+    }
 
 
 def _parse_date(value: Any) -> date | None:

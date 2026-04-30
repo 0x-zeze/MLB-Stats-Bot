@@ -68,6 +68,30 @@ class QualityControlTests(unittest.TestCase):
         self.assertEqual(checks["probable_pitchers"], "Confirmed")
         self.assertEqual(calculate_data_quality_score(context), 100)
 
+    def test_high_confidence_opener_reduces_quality_score(self) -> None:
+        context = _context()
+        context["opener_situation"] = {
+            "away": {"is_opener": True, "pitcher_role": "opener", "confidence": "high"},
+            "home": {"is_opener": False, "pitcher_role": "starter", "confidence": "low"},
+        }
+
+        report = generate_quality_report(context)
+
+        self.assertEqual(report["score"], 90)
+        self.assertEqual(report["opener_situation"], "high")
+        self.assertIn("opener_situation", report["no_bet_considerations"])
+
+    def test_medium_confidence_opener_reduces_quality_score(self) -> None:
+        context = _context()
+        context["opener_situation"] = {
+            "away": {"is_opener": True, "pitcher_role": "opener", "confidence": "medium"},
+        }
+
+        report = generate_quality_report(context)
+
+        self.assertEqual(report["score"], 95)
+        self.assertEqual(report["opener_situation"], "medium")
+
     def test_missing_probable_pitcher_returns_no_bet(self) -> None:
         context = _context()
         context["probable_pitchers"]["away"] = None

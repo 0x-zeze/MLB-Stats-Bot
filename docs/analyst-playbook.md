@@ -100,6 +100,17 @@ Prinsip praktis untuk agent:
 - `61-66%`: edge kuat
 - `67-70%`: edge dominan
 
+## Opener/Bulk Pitcher Situations
+
+Jika probable pitcher terdeteksi sebagai opener atau ada rencana bulk/piggyback, jangan memperlakukan stat pitcher tersebut seperti starter utama. Model harus menetralkan sinyal SP dan quality control harus menandai situasi ini sebagai risiko no-bet.
+
+Untuk YRFI/NRFI:
+
+- Opener biasanya menaikkan risiko YRFI karena peran pitcher utama belum jelas, matchup pertama bisa lebih taktis, dan bulk pitcher dapat masuk lebih awal dari ekspektasi.
+- Jika opener adalah reliever elite, jangan otomatis overreact; tetap cek offense top/bottom 1st, lineup confirmed, bullpen fatigue, dan park/weather.
+- Jika bulk pitcher TBD, confidence YRFI harus konservatif. Lean YES boleh naik hanya jika offense 1st-inning profile, lineup, park/weather, dan bullpen context mendukung.
+- Hindari menjual pick sebagai starter-vs-starter tradisional saat opener flag aktif. Jelaskan bahwa primary pitcher uncertainty adalah risk utama.
+
 ## Sources
 
 - FanGraphs Sabermetrics Library: wOBA, wRC+, DIPS, BABIP, process vs outcome, context.

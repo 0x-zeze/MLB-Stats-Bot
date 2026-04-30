@@ -54,6 +54,12 @@ function intFromEnv(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function numberFromEnv(value, fallback) {
+  if (value === undefined || value === '') return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export function loadConfig() {
   loadDotEnv();
 
@@ -83,7 +89,10 @@ export function loadConfig() {
       port: intFromEnv(process.env.DASHBOARD_PORT, 3008)
     },
     lineMonitor: {
+      enabled: boolFromEnv(process.env.LINE_MOVEMENT_ALERTS, true),
       intervalMinutes: intFromEnv(process.env.LINE_MONITOR_INTERVAL_MINUTES, 10),
+      moneylineThreshold: numberFromEnv(process.env.LINE_MOVEMENT_THRESHOLD_ML, 15),
+      totalThreshold: numberFromEnv(process.env.LINE_MOVEMENT_THRESHOLD_TOTAL, 0.5),
       oddsApiKey: process.env.ODDS_API_KEY || process.env.THE_ODDS_API_KEY || ''
     },
     openai: {

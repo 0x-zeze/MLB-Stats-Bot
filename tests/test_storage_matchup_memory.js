@@ -118,3 +118,54 @@ test('line snapshots persist last seen market values by game and market', () => 
     rmSync(`${storage.dbPath}-shm`, { force: true });
   }
 });
+
+test('line alert reservations suppress duplicate movement alerts', () => {
+  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  mkdirSync(tempDir, { recursive: true });
+  const statePath = resolve(tempDir, `line-alert-state-${Date.now()}.json`);
+  const storage = new Storage(statePath);
+  const movement = {
+    gamePk: '12345',
+    storageMarket: 'total',
+    market: 'total',
+    previousValue: 6.5,
+    currentValue: 7.0,
+    bookmaker: 'FanDuel'
+  };
+
+  try {
+    assert.equal(
+      storage.reserveLineAlert(
+        'line-move:chat:12345:total:FanDuel:6.500:7.000',
+        movement,
+        'chat',
+        '2026-04-30T10:00:00.000Z'
+      ),
+      true
+    );
+    assert.equal(
+      storage.reserveLineAlert(
+        'line-move:chat:12345:total:FanDuel:6.500:7.000',
+        movement,
+        'chat',
+        '2026-04-30T10:01:00.000Z'
+      ),
+      false
+    );
+    assert.equal(
+      storage.reserveLineAlert(
+        'line-move:chat:12345:total:FanDuel:7.000:7.500',
+        { ...movement, previousValue: 7.0, currentValue: 7.5 },
+        'chat',
+        '2026-04-30T10:02:00.000Z'
+      ),
+      true
+    );
+  } finally {
+    storage.close();
+    rmSync(statePath, { force: true });
+    rmSync(storage.dbPath, { force: true });
+    rmSync(`${storage.dbPath}-wal`, { force: true });
+    rmSync(`${storage.dbPath}-shm`, { force: true });
+  }
+});

@@ -275,6 +275,16 @@ function compactPrediction(prediction, dateYmd) {
           reasons: prediction.firstInning.agent?.reasons || prediction.firstInning.reasons || []
         }
       : null,
+    totalRuns: prediction.totalRuns
+      ? {
+          projectedTotal: prediction.totalRuns.projectedTotal,
+          marketLine: prediction.totalRuns.marketLine,
+          marketDeltaRuns: prediction.totalRuns.marketDeltaRuns,
+          modelEdge: prediction.totalRuns.modelEdge,
+          bestLean: prediction.totalRuns.bestLean,
+          confidence: prediction.totalRuns.confidence
+        }
+      : null,
     agentRisk: agent?.risk || '',
     agentMemoryNote: agent?.memoryNote || '',
     savedAt: new Date().toISOString()
@@ -424,10 +434,20 @@ export class Storage {
         PRIMARY KEY (game_pk, market)
       );
 
+      CREATE TABLE IF NOT EXISTS line_alerts (
+        alert_key TEXT PRIMARY KEY,
+        game_pk TEXT NOT NULL,
+        market TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        timestamp TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_picks_date ON picks(date_ymd);
       CREATE INDEX IF NOT EXISTS idx_picks_post_game ON picks(post_game_processed);
       CREATE INDEX IF NOT EXISTS idx_yrfi_date ON yrfi_results(date_ymd);
       CREATE INDEX IF NOT EXISTS idx_line_snapshots_timestamp ON line_snapshots(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_line_alerts_timestamp ON line_alerts(timestamp);
     `);
 
     const now = new Date().toISOString();
@@ -929,6 +949,13 @@ export class Storage {
     return row ? this.predictionFromRow(row) : null;
   }
 
+  listPredictionsByDate(dateYmd) {
+    return this.db
+      .prepare('SELECT * FROM picks WHERE date_ymd = ? ORDER BY game_pk')
+      .all(String(dateYmd || ''))
+      .map((row) => this.predictionFromRow(row));
+  }
+
   getLineSnapshot(gamePk, market) {
     const row = this.db
       .prepare(
@@ -954,6 +981,30 @@ export class Storage {
            timestamp = excluded.timestamp`
       )
       .run(String(gamePk), String(market), parsedValue, timestamp);
+  }
+
+  reserveLineAlert(alertKey, movement, chatId, timestamp = new Date().toISOString(), ttlHours = 18) {
+    const key = String(alertKey || '');
+    if (!key) return false;
+
+    const cutoff = new Date(Date.now() - Math.max(1, Number(ttlHours) || 18) * 60 * 60 * 1000).toISOString();
+    this.db.prepare('DELETE FROM line_alerts WHERE timestamp < ?').run(cutoff);
+
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO line_alerts (alert_key, game_pk, market, chat_id, payload, timestamp)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        key,
+        String(movement?.gamePk || ''),
+        String(movement?.storageMarket || movement?.market || ''),
+        String(chatId || ''),
+        toJson(movement || {}),
+        timestamp
+      );
+
+    return result.changes === 1;
   }
 
   listPendingPredictionDates() {

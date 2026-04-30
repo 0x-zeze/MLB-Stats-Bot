@@ -93,6 +93,10 @@ export class TelegramBot {
     return this.request('getWebhookInfo');
   }
 
+  setMyCommands(commands) {
+    return this.request('setMyCommands', { commands });
+  }
+
   answerCallbackQuery(callbackQueryId, options = {}) {
     return this.request('answerCallbackQuery', {
       callback_query_id: callbackQueryId,

@@ -376,8 +376,10 @@ DASHBOARD_API_HOST=127.0.0.1
 DASHBOARD_API_PORT=8010
 DASHBOARD_WEB_HOST=0.0.0.0
 DASHBOARD_WEB_PORT=5173
+# Required in production. Generate with: openssl rand -hex 32
 DASHBOARD_API_TOKEN=
 DASHBOARD_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+# Optional dev-mode pre-fill for the React login field.
 VITE_DASHBOARD_API_TOKEN=
 ```
 
@@ -507,7 +509,106 @@ Catatan VPS:
 - Buka port `5173/tcp` untuk frontend React.
 - Jangan buka port `8010/tcp` kecuali benar-benar ingin API diakses langsung.
 - Kalau hanya memakai Vite proxy dari frontend, browser cukup membuka port `5173`.
-- Jika membuka API langsung ke publik, set `DASHBOARD_API_TOKEN` di backend dan `VITE_DASHBOARD_API_TOKEN` di frontend.
+- Di production, set `DASHBOARD_API_TOKEN` di backend; `VITE_DASHBOARD_API_TOKEN` hanya untuk pre-fill login saat development.
+
+## MLB Agent Evolution Engine
+
+The MLB Agent Evolution Engine is a lightweight, auditable learning layer for the prediction agent. It is inspired by self-evaluation and symbolic learning systems, but it is intentionally conservative: it records what happened, generates lessons, proposes improvements, and requires validation before anything can be promoted.
+
+Important warning: this system is for analytics and education. It does not guarantee betting profit or sports prediction accuracy.
+
+What it does:
+
+- Logs pre-game prediction trajectories with model, prompt, rule, weight, data, tool, and decision context.
+- Evaluates settled games against final results.
+- Converts numeric misses and wins into structured language loss.
+- Converts language loss into language gradients for prompt, rule, tool, threshold, and weighting candidates.
+- Generates lessons and self-questions for review.
+- Proposes symbolic update candidates without applying them directly.
+- Requires backtest metrics and a promotion gate before approved changes are versioned.
+- Shows the state in the dashboard `Evolution` tab.
+
+What it does not do:
+
+- It does not run heavy reinforcement learning.
+- It does not overwrite production prompts, rules, or weights directly.
+- It does not remove NO BET protections automatically.
+- It does not train from unfinished games.
+- It does not allow memory to override current validated game data.
+
+Core flow:
+
+```text
+prediction trajectory
+-> final result
+-> numeric evaluation
+-> language loss
+-> language gradient
+-> lesson
+-> symbolic update candidate
+-> backtest
+-> promotion gate
+-> versioned improvement
+```
+
+Trajectory logging means the bot stores only information available before the game: teams, market, probable pitcher status, lineup status, weather status, odds status, bullpen status, park factor status, data quality, tool calls, model features, probabilities, market lines, edge, lean, confidence, risk factors, and active prompt/rule/weight/model versions. Final score data is intentionally stripped from pre-game trajectories.
+
+Language loss is a structured explanation of what went right or wrong, such as `overconfidence`, `weak_edge`, `lineup_misread`, `good_no_bet`, `bad_no_bet`, `weather_misread`, or `totals_projection_error`. Numeric facts come from deterministic evaluation; language is only used to summarize.
+
+Language gradients turn those losses into improvement pressure, for example: cap confidence when totals edge is small and lineups are projected, require weather checks before outdoor totals picks, or clarify explanation style when uncertainty is high.
+
+Lessons are stored in `data/evolution/lessons.jsonl`. They include the game, market, result, lesson type, summary, suggested adjustment, supporting numeric context, and diagnostic self-questions such as whether the model ignored bullpen fatigue or should have returned NO BET.
+
+Symbolic updates are proposed rule, prompt, threshold, confidence, tool-order, explanation, data-quality, or weighting candidates. They are stored as pending candidates and are not production changes.
+
+Backtesting protects the model by requiring before/after metrics before promotion. The promotion gate checks sample size, ROI or loss improvement, Brier score, log loss, calibration, NO BET quality, CLV, drawdown, safety-rule preservation, and high-confidence risk.
+
+Prompt, rule, and weight versioning:
+
+- Active prompt versions live in `data/evolution/prompt_versions.json`.
+- Active rule version metadata lives in `data/evolution/approved_rules.json`.
+- Active weight versions live in `data/evolution/weight_versions.json`.
+- Candidate versions are appended instead of overwriting active versions.
+- Rollback metadata is kept for approved versions.
+
+Evolution storage:
+
+```text
+data/evolution/prediction_outcomes.csv
+data/evolution/lessons.jsonl
+data/evolution/rule_candidates.jsonl
+data/evolution/approved_rules.json
+data/evolution/rejected_rules.json
+data/evolution/weight_versions.json
+data/evolution/evolution_log.jsonl
+data/evolution/trajectories.jsonl
+data/evolution/language_losses.jsonl
+data/evolution/language_gradients.jsonl
+data/evolution/prompt_versions.json
+data/evolution/tool_usage_reports.jsonl
+data/evolution/symbolic_updates.jsonl
+```
+
+Telegram commands:
+
+```text
+/evolve summary   ringkasan evolution
+/evolve logtoday  simpan trajectory pre-game hari ini
+/evolve evaluate  evaluasi game kemarin
+/evolve lessons   cek lesson tersimpan
+/evolve loss      generate language loss
+/evolve gradient  generate language gradient
+/evolve propose   propose symbolic update
+/evolve rules     propose rule candidate
+/evolve backtest  cek candidate yang perlu backtest
+/evolve promote   cek status promotion gate
+```
+
+Kamu tidak perlu menjalankan command evolution dari terminal VPS. Bot Telegram menjalankan module Python yang sesuai di background, lalu mengirim hasilnya kembali ke chat.
+
+To view the Evolution tab, run the dashboard and open `http://localhost:5173`, then select `Evolution`. The tab shows summary counts, recent trajectories, lessons, language losses, language gradients, symbolic candidates, approved changes, and risk warnings.
+
+Rollback is supported through version metadata. A prompt rollback can be performed with `rollback_prompt_version()` in `src.evolution.prompt_versioning`; approved rule and weight records keep previous versions so a future operator can restore a known-good version deliberately.
 
 ## Python ML Prediction Engine
 
@@ -1207,6 +1308,8 @@ node_modules/
 Jika API key pernah terlanjur ter-upload, segera revoke key tersebut dan buat key baru.
 
 ## Troubleshooting
+
+- Dashboard shows login page — set `DASHBOARD_API_TOKEN` in `.env` and restart.
 
 Bot tidak membalas:
 

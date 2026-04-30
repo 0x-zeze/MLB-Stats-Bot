@@ -1,6 +1,7 @@
 import unittest
 
 from src.features import (
+    detect_opener_situation,
     get_pitcher_rest_days,
     get_team_schedule_fatigue,
     log5_probability,
@@ -68,6 +69,42 @@ class FeatureFormulaTests(unittest.TestCase):
         self.assertEqual(fatigue["road_streak"], 0)
         self.assertEqual(fatigue["recent_game_count"], 2)
         self.assertEqual(fatigue["fatigue_level"], "low")
+
+    def test_detect_opener_from_statsapi_note_and_low_start_share(self) -> None:
+        pitcher = {
+            "fullName": "Tampa Bay Rays Opener",
+            "game_note": "Rays expected to use opener/bulk arrangement tonight.",
+            "career": {"gamesStarted": 4, "gamesPitched": 80},
+        }
+
+        result = detect_opener_situation(12345, pitcher)
+
+        self.assertTrue(result["is_opener"])
+        self.assertEqual(result["pitcher_role"], "opener")
+        self.assertEqual(result["confidence"], "high")
+
+    def test_detect_likely_opener_from_career_start_share(self) -> None:
+        pitcher = {
+            "fullName": "Rays Relief Starter",
+            "stats": {"gamesStarted": 5, "gamesPitched": 50},
+        }
+
+        result = detect_opener_situation(12345, pitcher)
+
+        self.assertTrue(result["is_opener"])
+        self.assertEqual(result["pitcher_role"], "opener")
+        self.assertEqual(result["confidence"], "medium")
+
+    def test_detect_opener_keeps_normal_starter_neutral(self) -> None:
+        pitcher = {
+            "fullName": "Traditional Starter",
+            "stats": {"gamesStarted": 28, "gamesPitched": 30},
+        }
+
+        result = detect_opener_situation(12345, pitcher)
+
+        self.assertFalse(result["is_opener"])
+        self.assertEqual(result["pitcher_role"], "starter")
 
 
 if __name__ == "__main__":

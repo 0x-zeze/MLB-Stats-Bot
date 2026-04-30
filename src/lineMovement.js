@@ -3,6 +3,7 @@ const DEFAULT_INTERVAL_MINUTES = 10;
 const MONEYLINE_MOVE_THRESHOLD = 15;
 const TOTAL_MOVE_THRESHOLD = 0.5;
 const MONITOR_TTL_HOURS = 18;
+const ALERT_DEDUPE_TTL_HOURS = 18;
 
 const activeMonitors = new Map();
 const state = {
@@ -23,6 +24,31 @@ function intervalMinutes() {
 
   const envValue = Number.parseInt(process.env.LINE_MONITOR_INTERVAL_MINUTES || '', 10);
   return Number.isFinite(envValue) && envValue > 0 ? envValue : DEFAULT_INTERVAL_MINUTES;
+}
+
+function lineAlertsEnabled() {
+  const configured = state.config?.lineMonitor?.enabled;
+  if (typeof configured === 'boolean') return configured;
+
+  const value = process.env.LINE_MOVEMENT_ALERTS;
+  if (value === undefined || value === '') return true;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
+}
+
+function moneylineMoveThreshold() {
+  const configured = Number(state.config?.lineMonitor?.moneylineThreshold);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+
+  const envValue = Number(process.env.LINE_MOVEMENT_THRESHOLD_ML || '');
+  return Number.isFinite(envValue) && envValue > 0 ? envValue : MONEYLINE_MOVE_THRESHOLD;
+}
+
+function totalMoveThreshold() {
+  const configured = Number(state.config?.lineMonitor?.totalThreshold);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+
+  const envValue = Number(process.env.LINE_MOVEMENT_THRESHOLD_TOTAL || '');
+  return Number.isFinite(envValue) && envValue > 0 ? envValue : TOTAL_MOVE_THRESHOLD;
 }
 
 function oddsApiKey() {
@@ -99,6 +125,30 @@ function toFiniteNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function originalModelEdge(game) {
+  const totalEdge = Number(game.totalRuns?.modelEdge);
+  if (Number.isFinite(totalEdge)) return totalEdge;
+
+  const agentPickId = game.agentAnalysis?.pickTeamId;
+  const isAwayAgentPick = String(agentPickId) === String(game.away?.id);
+  const isHomeAgentPick = String(agentPickId) === String(game.home?.id);
+  const pick =
+    isAwayAgentPick
+      ? game.away
+      : isHomeAgentPick
+        ? game.home
+        : game.pick || game.winner;
+  const agentProbability =
+    isAwayAgentPick
+      ? game.agentAnalysis?.awayProbability
+      : isHomeAgentPick
+        ? game.agentAnalysis?.homeProbability
+        : null;
+  const pickProbability = Number(agentProbability ?? pick?.winProbability);
+
+  return Number.isFinite(pickProbability) ? pickProbability - 50 : null;
+}
+
 function buildSnapshot(game, event) {
   const h2h = firstMarket(event.bookmakers, 'h2h');
   const totals = firstMarket(event.bookmakers, 'totals');
@@ -116,11 +166,14 @@ function buildSnapshot(game, event) {
     matchup: `${game.away?.name || event.away_team} @ ${game.home?.name || event.home_team}`,
     homeTeam: game.home?.name || event.home_team,
     awayTeam: game.away?.name || event.away_team,
+    homeAbbreviation: game.home?.abbreviation || game.home?.name || event.home_team,
+    awayAbbreviation: game.away?.abbreviation || game.away?.name || event.away_team,
     homeMoneyline: toFiniteNumber(homeOutcome?.price),
     awayMoneyline: toFiniteNumber(awayOutcome?.price),
     totalLine: toFiniteNumber(overOutcome?.point ?? underOutcome?.point),
     moneylineBook: h2h?.bookmaker?.title || h2h?.bookmaker?.key || 'bookmaker',
-    totalBook: totals?.bookmaker?.title || totals?.bookmaker?.key || 'bookmaker'
+    totalBook: totals?.bookmaker?.title || totals?.bookmaker?.key || 'bookmaker',
+    originalModelEdge: originalModelEdge(game)
   };
 }
 
@@ -183,47 +236,105 @@ function formatSigned(value, decimals = 0) {
   return `${parsed >= 0 ? '+' : ''}${parsed.toFixed(decimals)}`;
 }
 
-function formatMovementAlert({ snapshot, marketLabel, oldValue, newValue, delta, unit, bookmaker }) {
+function americanImpliedProbability(value) {
+  const odds = Number(value);
+  if (!Number.isFinite(odds) || odds === 0) return null;
+  return odds > 0 ? 100 / (odds + 100) : Math.abs(odds) / (Math.abs(odds) + 100);
+}
+
+function movementArrow(movement) {
+  if (movement.market === 'total') return movement.delta > 0 ? '↗️' : '↘️';
+
+  const previous = americanImpliedProbability(movement.previousValue);
+  const current = americanImpliedProbability(movement.currentValue);
+  if (!Number.isFinite(previous) || !Number.isFinite(current)) {
+    return movement.delta > 0 ? '↗️' : '↘️';
+  }
+
+  return current >= previous ? '↗️' : '↘️';
+}
+
+function formatOriginalModelEdge(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '';
+  return `${formatSigned(parsed, 1)}%`;
+}
+
+function formatMovementLine(movement) {
+  const arrow = movementArrow(movement);
+  if (movement.market === 'total') {
+    const action = movement.delta > 0 ? 'sharp over action' : 'sharp under action';
+    return `Total: ${movement.oldText} → ${movement.newText} ${arrow} (${action})`;
+  }
+
+  return `Moneyline: ${movement.teamLabel} moved from ${movement.oldText} → ${movement.newText} ${arrow}`;
+}
+
+function formatMovementAlert({ snapshot, movements }) {
+  const edge = formatOriginalModelEdge(snapshot.originalModelEdge);
   return [
-    '📈 MLB Line Movement Alert',
-    '',
+    '📊 Line Movement Alert',
     snapshot.matchup,
-    '',
-    `Market: ${marketLabel}`,
-    `Book: ${bookmaker}`,
-    `Move: ${oldValue} → ${newValue}`,
-    `Change: ${formatSigned(delta, unit === 'runs' ? 1 : 0)} ${unit}`,
-    '',
-    'Signal: significant line movement detected.',
-    'Note: gunakan sebagai market signal, bukan pick otomatis.'
-  ].join('\n');
+    ...movements.map(formatMovementLine),
+    'This may indicate sharp money.',
+    edge ? `Original model edge: ${edge}` : null
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function normalizeAlertValue(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return String(value || '');
+  return parsed.toFixed(3);
+}
+
+function movementAlertKey(movement, chatId) {
+  return [
+    'line-move',
+    chatId,
+    movement.gamePk,
+    movement.storageMarket || movement.market,
+    movement.bookmaker || '',
+    normalizeAlertValue(movement.previousValue),
+    normalizeAlertValue(movement.currentValue)
+  ].join(':');
+}
+
+function reserveMovementAlert(movement, chatId) {
+  if (!state.storage?.reserveLineAlert) return true;
+  const key = movementAlertKey(movement, chatId);
+  return state.storage.reserveLineAlert(key, movement, chatId, new Date().toISOString(), ALERT_DEDUPE_TTL_HOURS);
 }
 
 function snapshotFields(snapshot) {
   return [
     {
       market: 'moneyline_home',
-      label: `Moneyline ${snapshot.homeTeam}`,
+      type: 'moneyline',
+      teamLabel: snapshot.homeAbbreviation,
       value: snapshot.homeMoneyline,
-      threshold: MONEYLINE_MOVE_THRESHOLD,
+      threshold: moneylineMoveThreshold(),
       unit: 'cents',
       formatter: formatOdds,
       bookmaker: snapshot.moneylineBook
     },
     {
       market: 'moneyline_away',
-      label: `Moneyline ${snapshot.awayTeam}`,
+      type: 'moneyline',
+      teamLabel: snapshot.awayAbbreviation,
       value: snapshot.awayMoneyline,
-      threshold: MONEYLINE_MOVE_THRESHOLD,
+      threshold: moneylineMoveThreshold(),
       unit: 'cents',
       formatter: formatOdds,
       bookmaker: snapshot.moneylineBook
     },
     {
       market: 'total',
-      label: 'Total Runs',
+      type: 'total',
+      teamLabel: 'Total',
       value: snapshot.totalLine,
-      threshold: TOTAL_MOVE_THRESHOLD,
+      threshold: totalMoveThreshold(),
       unit: 'runs',
       formatter: (value) => Number(value).toFixed(1),
       bookmaker: snapshot.totalBook
@@ -231,37 +342,66 @@ function snapshotFields(snapshot) {
   ].filter((field) => Number.isFinite(field.value));
 }
 
-async function compareAndAlert(snapshot, chatId) {
-  if (!state.storage || !state.bot) return;
+async function compareSnapshot(snapshot, chatId, { sendAlerts = true } = {}) {
+  const result = {
+    initializedCount: 0,
+    movements: [],
+    alertSent: false,
+    alertText: ''
+  };
+
+  if (!state.storage) return result;
   const timestamp = new Date().toISOString();
 
   for (const field of snapshotFields(snapshot)) {
     const previous = state.storage.getLineSnapshot(snapshot.gamePk, field.market);
     state.storage.setLineSnapshot(snapshot.gamePk, field.market, field.value, timestamp);
 
-    if (!previous) continue;
+    if (!previous) {
+      result.initializedCount += 1;
+      continue;
+    }
 
     const oldValue = Number(previous.value);
     const delta = field.value - oldValue;
     if (!Number.isFinite(delta) || Math.abs(delta) < field.threshold) continue;
 
-    const text = formatMovementAlert({
-      snapshot,
-      marketLabel: field.label,
-      oldValue: field.formatter(oldValue),
-      newValue: field.formatter(field.value),
+    result.movements.push({
+      gamePk: snapshot.gamePk,
+      matchup: snapshot.matchup,
+      market: field.type,
+      storageMarket: field.market,
+      teamLabel: field.teamLabel,
+      oldText: field.formatter(oldValue),
+      newText: field.formatter(field.value),
+      previousValue: oldValue,
+      currentValue: field.value,
       delta,
       unit: field.unit,
-      bookmaker: field.bookmaker
+      bookmaker: field.bookmaker,
+      threshold: field.threshold
     });
+  }
+
+  if (result.movements.length > 0 && sendAlerts && state.bot && chatId) {
+    const freshMovements = result.movements.filter((movement) => reserveMovementAlert(movement, chatId));
+    if (freshMovements.length === 0) {
+      console.log(`Line movement alert skipped duplicate ${snapshot.gamePk}.`);
+      return result;
+    }
+
+    const text = formatMovementAlert({ snapshot, movements: freshMovements });
+    result.alertText = text;
 
     await state.bot.sendMessage(chatId, text).catch((error) => {
       console.error(`Line movement alert gagal ke ${chatId}:`, error.message);
     });
-    console.log(
-      `Line movement alert ${snapshot.gamePk} ${field.market}: ${oldValue} -> ${field.value}`
-    );
+    result.alertSent = true;
+    result.movements = freshMovements;
+    console.log(`Line movement alert ${snapshot.gamePk}: ${freshMovements.length} move(s).`);
   }
+
+  return result;
 }
 
 function stopMonitor(key) {
@@ -295,7 +435,7 @@ async function pollMonitor(key) {
 
     const snapshot = buildSnapshot(game, event);
     if (!snapshot.gamePk) continue;
-    await compareAndAlert(snapshot, monitor.chatId);
+    await compareSnapshot(snapshot, monitor.chatId, { sendAlerts: true });
   }
 }
 
@@ -307,6 +447,7 @@ export function configureLineMonitor({ bot, storage, config } = {}) {
 
 export function startLineMonitor(games, chatId) {
   if (!Array.isArray(games) || games.length === 0 || !chatId) return null;
+  if (!lineAlertsEnabled()) return null;
   if (!state.bot || !state.storage) {
     console.warn('Line movement monitor belum dikonfigurasi dengan bot/storage.');
     return null;
@@ -346,4 +487,56 @@ export function startLineMonitor(games, chatId) {
   );
 
   return monitor;
+}
+
+export async function checkLineMovement(games, chatId, { sendAlerts = true } = {}) {
+  const activeGames = Array.isArray(games)
+    ? games.filter((game) => game?.gamePk && !isFinalStatus(game.status))
+    : [];
+  const result = {
+    checkedGames: activeGames.length,
+    matchedGames: 0,
+    initializedSnapshots: 0,
+    movements: [],
+    alertsSent: 0,
+    hasOddsApiKey: Boolean(oddsApiKey())
+  };
+
+  if (!state.storage) {
+    console.warn('Line movement check membutuhkan storage.');
+    return result;
+  }
+
+  if (!result.hasOddsApiKey || activeGames.length === 0) {
+    return result;
+  }
+
+  const oddsEvents = await fetchOdds();
+  if (!oddsEvents.length) return result;
+
+  for (const game of activeGames) {
+    const event = findEventForGame(game, oddsEvents);
+    if (!event) continue;
+
+    const snapshot = buildSnapshot(game, event);
+    if (!snapshot.gamePk) continue;
+
+    result.matchedGames += 1;
+    const comparison = await compareSnapshot(snapshot, chatId, { sendAlerts });
+    result.initializedSnapshots += comparison.initializedCount;
+    result.alertsSent += comparison.alertSent ? 1 : 0;
+    result.movements.push(...comparison.movements);
+  }
+
+  return result;
+}
+
+export function lineMonitorSettings() {
+  return {
+    enabled: lineAlertsEnabled(),
+    intervalMinutes: intervalMinutes(),
+    moneylineThreshold: moneylineMoveThreshold(),
+    totalThreshold: totalMoveThreshold(),
+    hasOddsApiKey: Boolean(oddsApiKey())
+  };
 }

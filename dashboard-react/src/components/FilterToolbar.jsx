@@ -18,7 +18,7 @@ export default function FilterToolbar({
   onDateChange,
   loading,
   onRefresh,
-  exportHref,
+  onExport,
 }) {
   const [open, setOpen] = useState(false);
   const activeFilterLabel = filters.find(([value]) => value === activeFilter)?.[1] || 'All games';
@@ -59,11 +59,9 @@ export default function FilterToolbar({
             <Field label="Sort">
               <SortDropdown value={sort} options={sorts} onChange={onSortChange} />
             </Field>
-            <Button asChild variant="secondary">
-              <a href={exportHref}>
-                <Download size={16} />
-                CSV
-              </a>
+            <Button variant="secondary" type="button" onClick={onExport}>
+              <Download size={16} />
+              CSV
             </Button>
           </div>
         ) : null}

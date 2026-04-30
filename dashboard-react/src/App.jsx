@@ -1,10 +1,11 @@
 import { CalendarDays, Gauge, Target, Trophy } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { api, exportUrl } from './api.js';
+import { api, downloadExport, setUnauthorizedHandler } from './api.js';
 import { lower, signed } from './utils.js';
 import BacktestForm from './components/BacktestForm.jsx';
 import BacktestTable from './components/BacktestTable.jsx';
 import EmptyState from './components/EmptyState.jsx';
+import EvolutionView from './components/EvolutionView.jsx';
 import FilterToolbar from './components/FilterToolbar.jsx';
 import GameCard from './components/GameCard.jsx';
 import HistoryTable from './components/HistoryTable.jsx';
@@ -13,11 +14,13 @@ import LoadingState from './components/LoadingState.jsx';
 import PerformanceSummary from './components/PerformanceSummary.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
 import SummaryCard from './components/SummaryCard.jsx';
+import LoginPage from './LoginPage.jsx';
+import { useAuth } from './useAuth.js';
 import { Button } from './components/ui/button.jsx';
 import { Card, CardContent } from './components/ui/card.jsx';
 import { Field, Input, Select } from './components/ui/form.jsx';
 
-const tabs = ['Today', 'History', 'Backtest', 'Performance', 'Settings'];
+const tabs = ['Today', 'History', 'Backtest', 'Performance', 'Evolution', 'Settings'];
 const filters = [
   ['all', 'All games'],
   ['BET', 'BET'],
@@ -45,6 +48,7 @@ function useDashboardData() {
   const [today, setToday] = useState(null);
   const [history, setHistory] = useState([]);
   const [performance, setPerformance] = useState(null);
+  const [evolution, setEvolution] = useState(null);
   const [settings, setSettings] = useState(null);
   const [backtest, setBacktest] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -68,15 +72,17 @@ function useDashboardData() {
     setLoading(true);
     setError('');
     try {
-      const [todayPayload, historyPayload, performancePayload, settingsPayload] = await Promise.all([
+      const [todayPayload, historyPayload, performancePayload, evolutionPayload, settingsPayload] = await Promise.all([
         api.today({ source, date }),
         api.history(),
         api.performance(),
+        api.evolution(),
         api.settings(),
       ]);
       setToday(todayPayload);
       setHistory(historyPayload.rows || []);
       setPerformance(performancePayload);
+      setEvolution(evolutionPayload);
       setSettings(settingsPayload);
       setBacktest(await api.backtest({ season: new Date().getFullYear(), market_type: 'moneyline' }));
     } catch (err) {
@@ -100,6 +106,7 @@ function useDashboardData() {
     today,
     history,
     performance,
+    evolution,
     settings,
     setSettings,
     backtest,
@@ -150,6 +157,7 @@ function sortGames(games, sort) {
 function TodayView({ today, source, setSource, date, setDate, loadToday, loading }) {
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('time');
+  const [exportError, setExportError] = useState('');
   const games = useMemo(() => sortGames(filterGames(today?.games || [], filter), sort), [today, filter, sort]);
   const highestEdge = useMemo(() => {
     const edges = (today?.games || []).flatMap((game) => [
@@ -163,6 +171,16 @@ function TodayView({ today, source, setSource, date, setDate, loadToday, loading
       [game.data_quality?.lineup, game.data_quality?.weather, game.data_quality?.odds].some((value) => lower(value).includes(token))
     )
   );
+
+  async function exportToday() {
+    setExportError('');
+    try {
+      await downloadExport('today', { source, date });
+    } catch (err) {
+      setExportError(err.message);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -185,8 +203,9 @@ function TodayView({ today, source, setSource, date, setDate, loadToday, loading
         onDateChange={setDate}
         loading={loading}
         onRefresh={() => loadToday(source)}
-        exportHref={exportUrl('today', { source, date })}
+        onExport={exportToday}
       />
+      {exportError ? <p className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-800">{exportError}</p> : null}
       {today?.warning ? <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{today.warning}</p> : null}
       {hasWeakData ? <p className="rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700">Some games have missing, unavailable, or stale context. Predictions are intentionally conservative.</p> : null}
 
@@ -200,6 +219,7 @@ function TodayView({ today, source, setSource, date, setDate, loadToday, loading
 }
 
 function HistoryView({ history }) {
+  const [exportError, setExportError] = useState('');
   const [filters, setFilters] = useState({
     start: '',
     end: '',
@@ -217,6 +237,16 @@ function HistoryView({ history }) {
     if (filters.decision !== 'all' && row.decision !== filters.decision) return false;
     return true;
   });
+
+  async function exportHistory() {
+    setExportError('');
+    try {
+      await downloadExport('history');
+    } catch (err) {
+      setExportError(err.message);
+    }
+  }
+
   return (
     <section className="space-y-4">
       <Card>
@@ -228,10 +258,11 @@ function HistoryView({ history }) {
             <Field label="Result"><Select value={filters.result} onChange={(event) => setFilters({ ...filters, result: event.target.value })}><option value="all">All</option><option value="win">Win</option><option value="loss">Loss</option><option value="push">Push</option></Select></Field>
             <Field label="Confidence"><Select value={filters.confidence} onChange={(event) => setFilters({ ...filters, confidence: event.target.value })}><option value="all">All</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></Select></Field>
             <Field label="Decision"><Select value={filters.decision} onChange={(event) => setFilters({ ...filters, decision: event.target.value })}><option value="all">All</option><option value="BET">BET</option><option value="LEAN">LEAN</option><option value="NO BET">NO BET</option></Select></Field>
-            <Button asChild variant="secondary"><a href={exportUrl('history')}>Export CSV</a></Button>
+            <Button variant="secondary" type="button" onClick={exportHistory}>Export CSV</Button>
           </div>
         </CardContent>
       </Card>
+      {exportError ? <p className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-800">{exportError}</p> : null}
       {rows.length ? <HistoryTable rows={rows} /> : <EmptyState title="No history rows" message="No prediction history matched the selected filters." />}
     </section>
   );
@@ -240,6 +271,7 @@ function HistoryView({ history }) {
 function BacktestView({ backtest, setBacktest }) {
   const [form, setForm] = useState({ season: new Date().getFullYear(), market_type: 'moneyline', start_date: '', end_date: '' });
   const [running, setRunning] = useState(false);
+  const [exportError, setExportError] = useState('');
   async function run() {
     setRunning(true);
     try {
@@ -248,15 +280,26 @@ function BacktestView({ backtest, setBacktest }) {
       setRunning(false);
     }
   }
+
+  async function exportBacktest() {
+    setExportError('');
+    try {
+      await downloadExport('backtest', form);
+    } catch (err) {
+      setExportError(err.message);
+    }
+  }
+
   return (
     <section className="space-y-4">
-      <BacktestForm form={form} onChange={setForm} onRun={run} running={running} exportHref={exportUrl('backtest', form)} />
+      <BacktestForm form={form} onChange={setForm} onRun={run} running={running} onExport={exportBacktest} />
+      {exportError ? <p className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-800">{exportError}</p> : null}
       <BacktestTable result={backtest} />
     </section>
   );
 }
 
-export default function App() {
+function DashboardApp() {
   const data = useDashboardData();
   const [activeTab, setActiveTab] = useState('Today');
   const [saving, setSaving] = useState(false);
@@ -284,8 +327,21 @@ export default function App() {
         {activeTab === 'History' ? <HistoryView history={data.history} /> : null}
         {activeTab === 'Backtest' ? <BacktestView backtest={data.backtest} setBacktest={data.setBacktest} /> : null}
         {activeTab === 'Performance' ? <PerformanceSummary performance={data.performance} /> : null}
+        {activeTab === 'Evolution' ? <EvolutionView evolution={data.evolution} /> : null}
         {activeTab === 'Settings' ? <SettingsPanel settings={data.settings || {}} onChange={data.setSettings} onSave={saveSettings} saving={saving} /> : null}
         <p className="mt-4 text-xs text-slate-500">Auto-refresh is conservative and uses the configured interval. Source: {data.source}.</p>
     </Layout>
   );
+}
+
+export default function App() {
+  const auth = useAuth();
+
+  useEffect(() => setUnauthorizedHandler(auth.logout), [auth.logout]);
+
+  if (!auth.isAuthenticated) {
+    return <LoginPage onLogin={auth.login} />;
+  }
+
+  return <DashboardApp />;
 }

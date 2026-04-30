@@ -142,6 +142,39 @@ def _calibration_supports_high(game_context: dict[str, Any]) -> bool:
     return _as_bool(_field(calibration, "supports_high_confidence"))
 
 
+def _opener_entries(game_context: dict[str, Any]) -> list[dict[str, Any]]:
+    situation = game_context.get("opener_situation") or game_context.get("opener")
+    if not isinstance(situation, dict):
+        return []
+    if "is_opener" in situation:
+        return [situation]
+    return [item for item in situation.values() if isinstance(item, dict)]
+
+
+def _opener_confidence(game_context: dict[str, Any]) -> str:
+    confidences = {
+        str(item.get("confidence", "")).strip().lower()
+        for item in _opener_entries(game_context)
+        if _as_bool(item.get("is_opener"))
+    }
+    if "high" in confidences:
+        return "high"
+    if "medium" in confidences:
+        return "medium"
+    if "low" in confidences:
+        return "low"
+    return ""
+
+
+def _opener_quality_penalty(game_context: dict[str, Any]) -> int:
+    confidence = _opener_confidence(game_context)
+    if confidence == "high":
+        return 10
+    if confidence == "medium":
+        return 5
+    return 0
+
+
 def check_prediction_inputs(game_context: dict[str, Any]) -> dict[str, str]:
     """Classify every required prediction input as available, missing, or stale."""
     return {
@@ -185,6 +218,8 @@ def calculate_data_quality_score(game_context: dict[str, Any]) -> int:
     if checks["injury_news"] == AVAILABLE:
         score += 5
 
+    score -= _opener_quality_penalty(game_context)
+
     return max(0, min(100, score))
 
 
@@ -218,6 +253,10 @@ def generate_quality_report(game_context: dict[str, Any]) -> dict[str, Any]:
         for key, label in {"probable_pitchers": "probable pitchers", "lineup": "lineup"}.items()
         if checks.get(key) == PROJECTED
     ]
+    opener_confidence = _opener_confidence(game_context)
+    no_bet_considerations = []
+    if opener_confidence in {"high", "medium"}:
+        no_bet_considerations.append("opener_situation")
 
     return {
         **checks,
@@ -225,6 +264,8 @@ def generate_quality_report(game_context: dict[str, Any]) -> dict[str, Any]:
         "missing_fields": missing_fields,
         "stale_fields": stale_fields,
         "projected_fields": projected_fields,
+        "opener_situation": opener_confidence or "none",
+        "no_bet_considerations": no_bet_considerations,
         "weather_outdoor": _is_outdoor(game_context),
         "calibration_supports_high": _calibration_supports_high(game_context),
         "confidence_adjustments": [],
@@ -274,6 +315,10 @@ def apply_confidence_downgrade(
     if quality_report.get("probable_pitchers") == MISSING:
         no_bet = True
         reasons.append("probable pitcher missing")
+
+    consideration_notes = list(quality_report.get("no_bet_considerations") or [])
+    if "opener_situation" in consideration_notes:
+        adjustments.append("opener situation: SP role unclear")
 
     if edge_value is None:
         no_bet = True
@@ -353,6 +398,7 @@ def apply_confidence_downgrade(
             "decision": decision,
             "decision_reason": "; ".join(reasons) if reasons else "quality checks passed",
             "confidence_adjustments": adjustments,
+            "no_bet_considerations": consideration_notes,
             "data_quality_score": score,
             "quality_report": quality_report,
             "no_bet": decision == "NO BET",
@@ -365,6 +411,7 @@ def format_quality_report(quality_report: dict[str, Any]) -> str:
     """Render a short human-readable data quality report."""
     missing = ", ".join(quality_report.get("missing_fields") or ["none"])
     stale = ", ".join(quality_report.get("stale_fields") or ["none"])
+    considerations = ", ".join(quality_report.get("no_bet_considerations") or ["none"])
     adjustments = ", ".join(quality_report.get("confidence_adjustments") or ["none"])
     return "\n".join(
         [
@@ -376,9 +423,11 @@ def format_quality_report(quality_report: dict[str, Any]) -> str:
             f"- Bullpen usage: {quality_report.get('bullpen_usage', MISSING)}",
             f"- Park factor: {quality_report.get('park_factor', MISSING)}",
             f"- Market movement: {quality_report.get('market_movement', MISSING)}",
+            f"- Opener situation: {quality_report.get('opener_situation', 'none')}",
             f"- Data quality score: {quality_report.get('score', 0)}/100",
             f"- Missing: {missing}",
             f"- Stale: {stale}",
+            f"- No-bet considerations: {considerations}",
             f"- Confidence adjustments: {adjustments}",
         ]
     )

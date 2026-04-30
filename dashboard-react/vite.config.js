@@ -21,7 +21,16 @@ export default defineConfig({
     host: '0.0.0.0',
     port: webPort,
     proxy: {
-      '/api': `http://127.0.0.1:${apiPort}`,
+      '/api': {
+        target: `http://127.0.0.1:${apiPort}`,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            const authorization = req.headers.authorization;
+            if (authorization) proxyReq.setHeader('authorization', authorization);
+          });
+        },
+      },
       '/health': `http://127.0.0.1:${apiPort}`,
     },
   },

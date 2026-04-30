@@ -13,6 +13,19 @@ const GAME_SEPARATOR = '━━━━━━━━━━━━━━━━━━�
 const SECTION_SEPARATOR = '────────────';
 const TOTAL_RUN_LINES = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
 const DEFAULT_MARKET_TOTAL = 8.5;
+const OPENER_KEYWORD_RE = /\b(opener|bulk|piggyback)\b|opener\s*\/\s*bulk/i;
+const OPENER_NOTE_KEYS = new Set([
+  'note',
+  'notes',
+  'description',
+  'summary',
+  'role',
+  'type',
+  'gameNote',
+  'gameNotes',
+  'probablePitcherNote',
+  'probablePitcherNotes'
+]);
 const PARK_FACTOR_BASELINES = new Map([
   [108, { runFactor: 1.0, homeRunFactor: 1.02, label: 'Angel Stadium' }],
   [109, { runFactor: 1.0, homeRunFactor: 1.02, label: 'Chase Field' }],
@@ -288,6 +301,15 @@ function totalRunSummaryLines(item) {
   ];
 }
 
+function openerAlertLines(item) {
+  return [item.away, item.home]
+    .filter((team) => team?.openerSituation?.isOpener)
+    .map((team) => {
+      const pitcherName = team.starter?.fullName || team.starter?.name || 'Listed pitcher';
+      return `⚠️ Opener situation — ${pitcherName} may not be the primary pitcher`;
+    });
+}
+
 function splitInfoLine(value) {
   return String(value || '-')
     .split(' | ')
@@ -437,6 +459,99 @@ function pitcherLabel(pitcher, stats) {
   const hand = pitcher.pitchHand?.code ? `${pitcher.pitchHand.code}HP ` : '';
   if (!stats) return `${pitcher.fullName} ${hand}`.trim();
   return `${pitcher.fullName} ${hand}ERA ${safeFixed(stats.era)} WHIP ${safeFixed(stats.whip)}`;
+}
+
+function normalizedKey(value) {
+  return String(value || '').replace(/[^a-z0-9]+/gi, '').toLowerCase();
+}
+
+function collectOpenerNoteText(value, parentKey = '') {
+  if (!value) return [];
+  if (typeof value === 'string') {
+    return OPENER_NOTE_KEYS.has(parentKey) ? [value] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectOpenerNoteText(item, parentKey));
+  }
+  if (typeof value !== 'object') return [];
+
+  const lines = [];
+  for (const [key, nested] of Object.entries(value)) {
+    const normalized = normalizedKey(key);
+    const isNoteKey =
+      OPENER_NOTE_KEYS.has(key) ||
+      OPENER_NOTE_KEYS.has(normalized) ||
+      /note|description|summary|role|type/i.test(key);
+    if (typeof nested === 'string' && isNoteKey) {
+      lines.push(nested);
+    } else if (nested && typeof nested === 'object') {
+      lines.push(...collectOpenerNoteText(nested, isNoteKey ? normalized : parentKey));
+    }
+  }
+  return lines;
+}
+
+function pitcherRoleFromText(text) {
+  const lowered = String(text || '').toLowerCase();
+  if (lowered.includes('bulk') && !lowered.includes('opener')) return 'bulk';
+  if (OPENER_KEYWORD_RE.test(lowered)) return 'opener';
+  return 'starter';
+}
+
+function pitcherStartRatio(stats) {
+  const gamesStarted = toNumber(stats?.gamesStarted ?? stats?.starts, Number.NaN);
+  const appearances = toNumber(
+    stats?.gamesPitched ?? stats?.appearances ?? stats?.games,
+    Number.NaN
+  );
+  if (!Number.isFinite(gamesStarted) || !Number.isFinite(appearances) || appearances <= 0) {
+    return null;
+  }
+  return clamp(gamesStarted / appearances, 0, 1);
+}
+
+function detectOpenerSituation(game, side, pitcher, stats) {
+  const teamEntry = game?.teams?.[side] || {};
+  const noteText = [
+    ...collectOpenerNoteText(game),
+    ...collectOpenerNoteText(teamEntry),
+    ...collectOpenerNoteText(pitcher)
+  ].join(' ');
+  const noteMatch = OPENER_KEYWORD_RE.test(noteText);
+  const startRatio = pitcherStartRatio(stats);
+  const appearances = toNumber(stats?.gamesPitched ?? stats?.appearances ?? stats?.games, 0);
+  const lowStartShare = startRatio !== null && startRatio < 0.3 && appearances >= 10;
+
+  if (noteMatch) {
+    return {
+      isOpener: true,
+      pitcherRole: pitcherRoleFromText(noteText),
+      confidence: lowStartShare ? 'high' : 'medium',
+      careerGsPct: startRatio,
+      note: noteText.trim()
+    };
+  }
+
+  if (lowStartShare) {
+    return {
+      isOpener: true,
+      pitcherRole: 'opener',
+      confidence: 'medium',
+      careerGsPct: startRatio,
+      note: 'Career GS% below opener threshold.'
+    };
+  }
+
+  return {
+    isOpener: false,
+    pitcherRole: 'starter',
+    confidence: 'low',
+    careerGsPct: startRatio
+  };
+}
+
+function effectivePitcherStats(stats, openerSituation) {
+  return openerSituation?.isOpener ? null : stats;
 }
 
 function getTeamStatMap(statsData) {
@@ -1782,6 +1897,10 @@ function predictGame(
     : null;
   const awayPitcherStats = awayStarter ? pitcherStats.get(awayStarter.id) : null;
   const homePitcherStats = homeStarter ? pitcherStats.get(homeStarter.id) : null;
+  const awayOpenerSituation = detectOpenerSituation(game, 'away', awayStarter, awayPitcherStats);
+  const homeOpenerSituation = detectOpenerSituation(game, 'home', homeStarter, homePitcherStats);
+  const effectiveAwayPitcherStats = effectivePitcherStats(awayPitcherStats, awayOpenerSituation);
+  const effectiveHomePitcherStats = effectivePitcherStats(homePitcherStats, homeOpenerSituation);
   const awayPitcherRecent = awayStarter ? pitcherRecentStarts.get(awayStarter.id) : null;
   const homePitcherRecent = homeStarter ? pitcherRecentStarts.get(homeStarter.id) : null;
   const awayBullpen = bullpenProfiles.get(awayTeam.id) || finalizeBullpenProfile({ teamId: awayTeam.id, games: 0, bullpenPitches: 0, bullpenOuts: 0, relieverAppearances: 0, relieverDates: new Map(), highPitchRelievers: 0 });
@@ -1850,7 +1969,7 @@ function predictGame(
     (awayWhip - homeWhip) / 0.55 +
     (homeKMinusBb - awayKMinusBb) / 0.16 +
     (awayHr9 - homeHr9) / 1.2;
-  const spEdge = starterEdge(homePitcherStats, awayPitcherStats);
+  const spEdge = starterEdge(effectiveHomePitcherStats, effectiveAwayPitcherStats);
   const formEdge =
     (homeLastTenPct - awayLastTenPct) * 0.45 +
     (homeVenuePct - awayVenuePct) * 0.3 +
@@ -1886,7 +2005,10 @@ function predictGame(
     abbreviation: homeTeam.abbreviation,
     record: homeStanding?.leagueRecord || game.teams.home.leagueRecord,
     starter: homeStarter,
-    starterLine: pitcherLabel(homeStarter, homePitcherStats),
+    starterLine: homeOpenerSituation.isOpener
+      ? 'Bulk pitcher TBD'
+      : pitcherLabel(homeStarter, homePitcherStats),
+    openerSituation: homeOpenerSituation,
     winProbability: homeProbability
   };
   const away = {
@@ -1895,7 +2017,10 @@ function predictGame(
     abbreviation: awayTeam.abbreviation,
     record: awayStanding?.leagueRecord || game.teams.away.leagueRecord,
     starter: awayStarter,
-    starterLine: pitcherLabel(awayStarter, awayPitcherStats),
+    starterLine: awayOpenerSituation.isOpener
+      ? 'Bulk pitcher TBD'
+      : pitcherLabel(awayStarter, awayPitcherStats),
+    openerSituation: awayOpenerSituation,
     winProbability: awayProbability
   };
 
@@ -1904,8 +2029,8 @@ function predictGame(
     away,
     homeProfile,
     awayProfile,
-    homePitcherStats,
-    awayPitcherStats,
+    homePitcherStats: effectiveHomePitcherStats,
+    awayPitcherStats: effectiveAwayPitcherStats,
     homeStarter,
     awayStarter,
     probHome: homeProbability
@@ -1927,8 +2052,8 @@ function predictGame(
     homeProfile,
     awayStanding,
     homeStanding,
-    awayPitcherStats,
-    homePitcherStats,
+    awayPitcherStats: effectiveAwayPitcherStats,
+    homePitcherStats: effectiveHomePitcherStats,
     awayBullpen,
     homeBullpen,
     awayInjuries,
@@ -1944,10 +2069,16 @@ function predictGame(
     home,
     awayProfile: awayFirstInningProfile,
     homeProfile: homeFirstInningProfile,
-    awayPitcherStats,
-    homePitcherStats,
+    awayPitcherStats: effectiveAwayPitcherStats,
+    homePitcherStats: effectiveHomePitcherStats,
     headToHead
   });
+  const awayPitcherRecentLine = awayOpenerSituation.isOpener
+    ? 'Bulk pitcher TBD'
+    : awayPitcherRecent?.line || 'recent starts unavailable';
+  const homePitcherRecentLine = homeOpenerSituation.isOpener
+    ? 'Bulk pitcher TBD'
+    : homePitcherRecent?.line || 'recent starts unavailable';
 
   return {
     gamePk: game.gamePk,
@@ -1959,7 +2090,7 @@ function predictGame(
     contextLine: `${standingContext(away, awayStanding, 'away')} | ${standingContext(home, homeStanding, 'home')}`,
     advancedLine: `${advancedContext(away, awayProfile)} | ${advancedContext(home, homeProfile)}`,
     matchupSplitLine: `${matchupSplitLine(away, awayStanding, homeStarter, 'away')} | ${matchupSplitLine(home, homeStanding, awayStarter, 'home')}`,
-    pitcherRecentLine: `${away.abbreviation || away.name} SP ${awayPitcherRecent?.line || 'recent starts unavailable'} | ${home.abbreviation || home.name} SP ${homePitcherRecent?.line || 'recent starts unavailable'}`,
+    pitcherRecentLine: `${away.abbreviation || away.name} SP ${awayPitcherRecentLine} | ${home.abbreviation || home.name} SP ${homePitcherRecentLine}`,
     bullpenLine: `${away.abbreviation || away.name} bullpen ${awayBullpen.line} | ${home.abbreviation || home.name} bullpen ${homeBullpen.line}`,
     fatigueLines: fatigueFlagLines(away, home, awayScheduleFatigue, homeScheduleFatigue, awayPitcherRest, homePitcherRest),
     injuryLine: `${injuryCountLabel(away, awayInjuries)} | ${injuryCountLabel(home, homeInjuries)}`,
@@ -2188,6 +2319,7 @@ export function formatPredictions(
     const displayProb = displayedProbabilities(item);
     const pick = agentPick(item);
     const agentActive = Boolean(item.agentAnalysis);
+    const openerLines = openerAlertLines(item);
     const contextLines = [
       ...splitInfoLine(item.contextLine),
       ...(item.matchupMemory?.games > 0 ? [`- Memory matchup: ${item.matchupMemory.note}`] : [])
@@ -2229,6 +2361,7 @@ export function formatPredictions(
         '',
         SECTION_SEPARATOR,
         `✅ Pick ${agentActive ? 'Agent' : 'Model'}: ${pick.name}${agentActive ? ` (${item.agentAnalysis.confidence})` : ''}`,
+        ...openerLines,
         `🔥 SP: ${item.away.starterLine} vs ${item.home.starterLine}`,
         '',
         SECTION_SEPARATOR,

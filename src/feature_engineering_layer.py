@@ -11,6 +11,7 @@ from typing import Any
 from .bullpen import bullpen_fatigue_adjustment
 from .features import (
     bullpen_score,
+    detect_opener_situation,
     get_pitcher_rest_days,
     get_team_schedule_fatigue,
     home_field_adjustment,
@@ -71,8 +72,14 @@ def _team_fatigue_overall_adjustment(fatigue: dict[str, Any]) -> float:
     return -0.03 if int(fatigue.get("road_streak") or 0) >= 7 else 0.0
 
 
-def _pitcher_feature(pitcher, rest_days: int | None = None) -> float:
+def _pitcher_feature(
+    pitcher,
+    rest_days: int | None = None,
+    opener_detection: dict[str, Any] | None = None,
+) -> float:
     if pitcher is None:
+        return 0.0
+    if opener_detection and opener_detection.get("is_opener"):
         return 0.0
     score = pitcher_score(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio)
     if rest_days is not None:
@@ -101,6 +108,46 @@ def _market_probability(odds: Any) -> float | None:
     return american_odds_to_implied_probability(str(odds))
 
 
+def _attr(value: Any, *names: str) -> Any:
+    for name in names:
+        if isinstance(value, dict) and value.get(name) not in (None, ""):
+            return value.get(name)
+        if hasattr(value, name):
+            attr = getattr(value, name)
+            if attr not in (None, ""):
+                return attr
+    return None
+
+
+def _game_pk(game: Any) -> Any:
+    return _attr(game, "game_pk", "gamePk", "id", "game_id")
+
+
+def _pitcher_payload(collected: dict[str, Any], side: str, pitcher: Any) -> dict[str, Any]:
+    context = collected.get("context", {})
+    probable = (context.get("probable_pitchers") or {}).get(side)
+    payload = dict(probable) if isinstance(probable, dict) else {}
+    game = collected.get("game")
+
+    for key in ("game_note", "game_notes", "description", "notes"):
+        value = _attr(game, key)
+        if value not in (None, "") and key not in payload:
+            payload[key] = value
+
+    if pitcher is not None:
+        payload.setdefault("pitcher", _attr(pitcher, "pitcher", "fullName", "name"))
+        payload.setdefault("team", _attr(pitcher, "team"))
+
+    return payload
+
+
+def _opener_situation(collected: dict[str, Any], side: str, pitcher: Any) -> dict[str, Any]:
+    return detect_opener_situation(
+        _game_pk(collected.get("game")),
+        _pitcher_payload(collected, side, pitcher),
+    )
+
+
 def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
     """Create clean moneyline model features from raw game data."""
     home_team = collected["home_team"]
@@ -124,6 +171,18 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
     )
     home_fatigue = get_team_schedule_fatigue(home_team.team, game_date, schedule_data)
     away_fatigue = get_team_schedule_fatigue(away_team.team, game_date, schedule_data)
+    opener_situation = {
+        "home": _opener_situation(collected, "home", home_pitcher),
+        "away": _opener_situation(collected, "away", away_pitcher),
+    }
+    opener_flag = any(item.get("is_opener") for item in opener_situation.values())
+    opener_notes = [
+        f"{side}: SP role unclear — opener situation likely"
+        for side, item in opener_situation.items()
+        if item.get("is_opener")
+    ]
+    if isinstance(collected.get("context"), dict):
+        collected["context"]["opener_situation"] = opener_situation
 
     home_team_adjustment = _team_fatigue_overall_adjustment(home_fatigue)
     away_team_adjustment = _team_fatigue_overall_adjustment(away_fatigue)
@@ -133,8 +192,16 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
 
     components = {
         "team_strength": (log5_home - 0.5) * 5.0,
-        "starting_pitcher": _pitcher_feature(home_pitcher, home_pitcher_rest_days)
-        - _pitcher_feature(away_pitcher, away_pitcher_rest_days),
+        "starting_pitcher": _pitcher_feature(
+            home_pitcher,
+            home_pitcher_rest_days,
+            opener_situation["home"],
+        )
+        - _pitcher_feature(
+            away_pitcher,
+            away_pitcher_rest_days,
+            opener_situation["away"],
+        ),
         "offense": _offense_feature(home_team, home_fatigue) - _offense_feature(away_team, away_fatigue),
         "bullpen": _bullpen_feature(home_team) - _bullpen_feature(away_team),
         "recent_form": _recent_feature(home_team) - _recent_feature(away_team),
@@ -180,6 +247,9 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
             "home": _market_probability(market.get("home_moneyline")),
             "away": _market_probability(market.get("away_moneyline")),
         },
+        "opener_flag": opener_flag,
+        "opener_situation": opener_situation,
+        "notes": opener_notes,
         "signal_priority": SIGNAL_PRIORITY,
     }
 
