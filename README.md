@@ -46,6 +46,7 @@ Data yang dianalisa:
 - Support OpenAI-compatible API key.
 - Support OpenRouter-style model seperti `openai/gpt-4o-mini`.
 - Auto-alert harian.
+- Live odds line movement alert untuk moneyline dan total runs.
 - Post-game recap otomatis.
 - Memory learning untuk full-game pick dan YRFI/NRFI.
 - Python ML engine berbasis CSV lokal untuk Pythagorean, Log5, odds edge, dan model sklearn opsional.
@@ -714,7 +715,10 @@ Optional API keys di `.env`:
 ODDS_API_KEY=
 THE_ODDS_API_KEY=
 OPENWEATHER_API_KEY=
+LINE_MONITOR_INTERVAL_MINUTES=10
 ```
+
+`ODDS_API_KEY` atau `THE_ODDS_API_KEY` juga mengaktifkan live line movement monitor. Setelah `/today`, `/deep`, `/sendalert`, atau auto-update mengirim slate hari ini, bot menyimpan odds pertama sebagai baseline di SQLite lalu mengecek ulang setiap `LINE_MONITOR_INTERVAL_MINUTES`. Telegram akan memberi alert jika moneyline bergerak 15+ cents atau total bergerak 0.5+ runs.
 
 Optional pybaseball install:
 
@@ -1139,6 +1143,7 @@ Expected response:
 src/index.js          Bot Telegram, scheduler, command handler
 src/dashboard.js      Web dashboard lokal untuk monitoring model, QC, backtest, dan knowledge
 src/mlb.js            Data MLB, baseline model, formatter alert
+src/lineMovement.js   Live odds line movement monitor dan Telegram alert
 src/llm.js            Analyst Agent local/external
 src/storage.js        Memory dan state
 src/telegram.js       Telegram Bot API wrapper

@@ -81,6 +81,40 @@ test('recordOutcome stores matchup memory across reversed venues', () => {
     assert.equal(summary.matchupMemory.totalMatchups, 1);
     assert.equal(summary.matchupMemory.recent[0].key, '100:200');
   } finally {
+    storage.close();
     rmSync(statePath, { force: true });
+    rmSync(storage.dbPath, { force: true });
+    rmSync(`${storage.dbPath}-wal`, { force: true });
+    rmSync(`${storage.dbPath}-shm`, { force: true });
+  }
+});
+
+test('line snapshots persist last seen market values by game and market', () => {
+  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  mkdirSync(tempDir, { recursive: true });
+  const statePath = resolve(tempDir, `line-state-${Date.now()}.json`);
+  const storage = new Storage(statePath);
+
+  try {
+    storage.setLineSnapshot(12345, 'moneyline_home', -130, '2026-04-30T10:00:00.000Z');
+    assert.deepEqual(storage.getLineSnapshot(12345, 'moneyline_home'), {
+      gamePk: '12345',
+      market: 'moneyline_home',
+      value: -130,
+      timestamp: '2026-04-30T10:00:00.000Z'
+    });
+
+    storage.setLineSnapshot(12345, 'moneyline_home', -146, '2026-04-30T10:10:00.000Z');
+    const updated = storage.getLineSnapshot(12345, 'moneyline_home');
+
+    assert.equal(updated.value, -146);
+    assert.equal(updated.timestamp, '2026-04-30T10:10:00.000Z');
+    assert.equal(storage.getLineSnapshot(12345, 'total'), null);
+  } finally {
+    storage.close();
+    rmSync(statePath, { force: true });
+    rmSync(storage.dbPath, { force: true });
+    rmSync(`${storage.dbPath}-wal`, { force: true });
+    rmSync(`${storage.dbPath}-shm`, { force: true });
   }
 });

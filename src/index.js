@@ -17,6 +17,7 @@ import { Storage } from './storage.js';
 import { setupWebhook, TelegramBot } from './telegram.js';
 import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils.js';
 import { startDashboard } from './dashboard.js';
+import { configureLineMonitor, startLineMonitor } from './lineMovement.js';
 
 const config = loadConfig();
 const storage = new Storage();
@@ -58,7 +59,7 @@ function isAllowed(chatId) {
   return config.allowedChatIds.includes(String(chatId));
 }
 
-async function buildAlert(dateYmd, options = {}) {
+async function buildAlertPayload(dateYmd, options = {}) {
   const modelMemory = config.modelMemory ? storage.getMemory() : {};
   const predictions = await getMlbPredictions(dateYmd, modelMemory);
   const includeAdvanced = options.includeAdvanced ?? config.alertDetail === 'full';
@@ -68,14 +69,22 @@ async function buildAlert(dateYmd, options = {}) {
 
   if (!options.teamFilter && !includeAdvanced && !config.analystAgent.enabled) {
     const llmText = await summarizeDailyAlertWithOpenAI(config, predictions).catch(() => null);
-    if (llmText) return llmText;
+    if (llmText) return { text: llmText, predictions };
   }
 
-  return formatPredictions(dateYmd, predictions, {
-    maxGames: config.maxGamesPerMessage,
-    teamFilter: options.teamFilter || '',
-    includeAdvanced
-  });
+  return {
+    text: formatPredictions(dateYmd, predictions, {
+      maxGames: config.maxGamesPerMessage,
+      teamFilter: options.teamFilter || '',
+      includeAdvanced
+    }),
+    predictions
+  };
+}
+
+async function buildAlert(dateYmd, options = {}) {
+  const payload = await buildAlertPayload(dateYmd, options);
+  return payload.text;
 }
 
 async function attachAgentAnalyses(predictions) {
@@ -146,10 +155,16 @@ async function sendTextToAll(bot, text) {
   return chatIds.length;
 }
 
+function maybeStartLineMonitor(predictions, chatId, dateYmd) {
+  if (dateYmd !== dateInTimezone(config.timezone)) return;
+  startLineMonitor(predictions, chatId);
+}
+
 async function sendAlert(bot, chatId, dateYmd, options = {}) {
   await bot.sendMessage(chatId, `Mengambil data MLB ${dateYmd}...`);
-  const text = await buildAlert(dateYmd, options);
+  const { text, predictions } = await buildAlertPayload(dateYmd, options);
   await bot.sendMessage(chatId, text);
+  maybeStartLineMonitor(predictions, chatId, dateYmd);
   console.log(`Alert ${dateYmd} sent to ${chatId}.`);
 }
 
@@ -703,11 +718,16 @@ async function sendAlertToAll(bot, dateYmd) {
     return 0;
   }
 
-  const text = await buildAlert(dateYmd);
+  const { text, predictions } = await buildAlertPayload(dateYmd);
   for (const chatId of chatIds) {
-    await bot.sendMessage(chatId, text).catch((error) => {
-      console.error(`Gagal kirim ke ${chatId}:`, error.message);
-    });
+    await bot
+      .sendMessage(chatId, text)
+      .then(() => {
+        maybeStartLineMonitor(predictions, chatId, dateYmd);
+      })
+      .catch((error) => {
+        console.error(`Gagal kirim ke ${chatId}:`, error.message);
+      });
   }
 
   return chatIds.length;
@@ -1272,11 +1292,12 @@ async function processAutoUpdates(bot) {
 
   autoUpdateCheckRunning = true;
   try {
-    const text = await buildAlert(today);
+    const { text, predictions } = await buildAlertPayload(today);
     for (const target of targets) {
       await bot
         .sendMessage(target.chatId, text)
         .then(() => {
+          maybeStartLineMonitor(predictions, target.chatId, today);
           if (target.legacyEnv) {
             storage.setLastAutoAlertDate(today);
           } else {
@@ -1345,6 +1366,7 @@ async function main() {
   });
 
   const bot = new TelegramBot(config.telegramToken);
+  configureLineMonitor({ bot, storage, config });
   startScheduler(bot);
 
   if (config.telegramWebhook.enabled) {

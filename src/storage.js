@@ -416,9 +416,18 @@ export class Storage {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS line_snapshots (
+        game_pk TEXT NOT NULL,
+        market TEXT NOT NULL,
+        value REAL NOT NULL,
+        timestamp TEXT NOT NULL,
+        PRIMARY KEY (game_pk, market)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_picks_date ON picks(date_ymd);
       CREATE INDEX IF NOT EXISTS idx_picks_post_game ON picks(post_game_processed);
       CREATE INDEX IF NOT EXISTS idx_yrfi_date ON yrfi_results(date_ymd);
+      CREATE INDEX IF NOT EXISTS idx_line_snapshots_timestamp ON line_snapshots(timestamp);
     `);
 
     const now = new Date().toISOString();
@@ -918,6 +927,33 @@ export class Storage {
   getPrediction(gamePk) {
     const row = this.db.prepare('SELECT * FROM picks WHERE game_pk = ?').get(String(gamePk));
     return row ? this.predictionFromRow(row) : null;
+  }
+
+  getLineSnapshot(gamePk, market) {
+    const row = this.db
+      .prepare(
+        `SELECT game_pk AS gamePk, market, value, timestamp
+         FROM line_snapshots
+         WHERE game_pk = ? AND market = ?`
+      )
+      .get(String(gamePk), String(market));
+
+    return row || null;
+  }
+
+  setLineSnapshot(gamePk, market, value, timestamp = new Date().toISOString()) {
+    const parsedValue = Number(value);
+    if (!Number.isFinite(parsedValue)) return;
+
+    this.db
+      .prepare(
+        `INSERT INTO line_snapshots (game_pk, market, value, timestamp)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(game_pk, market) DO UPDATE SET
+           value = excluded.value,
+           timestamp = excluded.timestamp`
+      )
+      .run(String(gamePk), String(market), parsedValue, timestamp);
   }
 
   listPendingPredictionDates() {

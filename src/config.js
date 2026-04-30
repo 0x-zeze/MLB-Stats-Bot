@@ -82,6 +82,10 @@ export function loadConfig() {
       host: process.env.DASHBOARD_HOST || '0.0.0.0',
       port: intFromEnv(process.env.DASHBOARD_PORT, 3008)
     },
+    lineMonitor: {
+      intervalMinutes: intFromEnv(process.env.LINE_MONITOR_INTERVAL_MINUTES, 10),
+      oddsApiKey: process.env.ODDS_API_KEY || process.env.THE_ODDS_API_KEY || ''
+    },
     openai: {
       apiKey: process.env.OPENAI_API_KEY || '',
       baseUrl: process.env.OPENAI_BASE_URL || '',
