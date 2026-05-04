@@ -35,6 +35,13 @@ function lineAlertsEnabled() {
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 }
 
+function chatLineAlertsEnabled(chatId) {
+  if (!lineAlertsEnabled()) return false;
+  if (!state.storage?.getLineMovementAlerts || chatId === undefined || chatId === null) return true;
+
+  return state.storage.getLineMovementAlerts(chatId).enabled !== false;
+}
+
 function moneylineMoveThreshold() {
   const configured = Number(state.config?.lineMonitor?.moneylineThreshold);
   if (Number.isFinite(configured) && configured > 0) return configured;
@@ -383,7 +390,7 @@ async function compareSnapshot(snapshot, chatId, { sendAlerts = true } = {}) {
     });
   }
 
-  if (result.movements.length > 0 && sendAlerts && state.bot && chatId) {
+  if (result.movements.length > 0 && sendAlerts && state.bot && chatId && chatLineAlertsEnabled(chatId)) {
     const freshMovements = result.movements.filter((movement) => reserveMovementAlert(movement, chatId));
     if (freshMovements.length === 0) {
       console.log(`Line movement alert skipped duplicate ${snapshot.gamePk}.`);
@@ -447,7 +454,7 @@ export function configureLineMonitor({ bot, storage, config } = {}) {
 
 export function startLineMonitor(games, chatId) {
   if (!Array.isArray(games) || games.length === 0 || !chatId) return null;
-  if (!lineAlertsEnabled()) return null;
+  if (!chatLineAlertsEnabled(chatId)) return null;
   if (!state.bot || !state.storage) {
     console.warn('Line movement monitor belum dikonfigurasi dengan bot/storage.');
     return null;
@@ -487,6 +494,19 @@ export function startLineMonitor(games, chatId) {
   );
 
   return monitor;
+}
+
+export function stopLineMonitorForChat(chatId) {
+  const target = String(chatId);
+  let stopped = 0;
+
+  for (const [key, monitor] of activeMonitors.entries()) {
+    if (String(monitor.chatId) !== target) continue;
+    stopMonitor(key);
+    stopped += 1;
+  }
+
+  return stopped;
 }
 
 export async function checkLineMovement(games, chatId, { sendAlerts = true } = {}) {

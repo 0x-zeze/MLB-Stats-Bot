@@ -592,6 +592,8 @@ data/evolution/symbolic_updates.jsonl
 Telegram commands:
 
 ```text
+/evolve         jalankan evolution cycle dari history/post-game
+/evolve run     sama seperti /evolve
 /evolve summary   ringkasan evolution
 /evolve logtoday  simpan trajectory pre-game hari ini
 /evolve evaluate  evaluasi game kemarin
@@ -605,6 +607,16 @@ Telegram commands:
 ```
 
 Kamu tidak perlu menjalankan command evolution dari terminal VPS. Bot Telegram menjalankan module Python yang sesuai di background, lalu mengirim hasilnya kembali ke chat.
+
+Saat `/evolve` dijalankan tanpa argumen, bot akan:
+
+1. Mengecek game tersimpan yang sudah final.
+2. Mengupdate memory kecil dari post-game result.
+3. Mengimpor history/memory bot ke Evolution Engine.
+4. Membuat numeric evaluation, language loss, language gradient, dan lesson.
+5. Mengusulkan symbolic/rule candidates sebagai `pending`.
+
+Candidate tidak otomatis mengubah production behavior. Perubahan prompt/rule/weight tetap harus melewati backtest dan promotion gate.
 
 To view the Evolution tab, run the dashboard and open `http://localhost:5173`, then select `Evolution`. The tab shows summary counts, recent trajectories, lessons, language losses, language gradients, symbolic candidates, approved changes, and risk warnings.
 
@@ -820,6 +832,16 @@ LINE_MONITOR_INTERVAL_MINUTES=10
 ```
 
 `ODDS_API_KEY` atau `THE_ODDS_API_KEY` juga mengaktifkan live line movement monitor. Setelah `/today`, `/deep`, `/sendalert`, atau auto-update mengirim slate hari ini, bot menyimpan odds pertama sebagai baseline di SQLite lalu mengecek ulang setiap `LINE_MONITOR_INTERVAL_MINUTES`. Telegram akan memberi alert jika moneyline bergerak 15+ cents atau total bergerak 0.5+ runs.
+
+Notifikasi line movement bisa dimatikan per chat dari Telegram:
+
+```text
+/linealerts off
+/linealerts on
+/linealerts status
+```
+
+Alias yang sama juga tersedia lewat `/linemove off|on|status`. Command `/linecheck` tetap bisa dipakai untuk cek manual tanpa harus menyalakan spam notifikasi otomatis.
 
 Optional pybaseball install:
 
@@ -1058,6 +1080,9 @@ Catatan: ini bukan betting advice. MLB punya variance tinggi, dan probabilitas m
 /memory
 /autoupdate on
 /autoupdate time 20:00
+/linecheck
+/linealerts off
+/linealerts status
 /subscribe
 /unsubscribe
 /sendalert

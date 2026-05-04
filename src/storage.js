@@ -33,6 +33,9 @@ const DEFAULT_AUTO_UPDATE = {
   dailyTime: '',
   lastSentDate: ''
 };
+const DEFAULT_LINE_MOVEMENT_ALERTS = {
+  enabled: true
+};
 const TEAM_BIAS_LIMIT = 0.08;
 
 const SQLITE_EXTENSIONS = new Set(['.db', '.sqlite', '.sqlite3']);
@@ -188,6 +191,10 @@ function normalizeSubscriber(subscriber) {
     autoUpdate: {
       ...DEFAULT_AUTO_UPDATE,
       ...(subscriber?.autoUpdate || {})
+    },
+    lineMovementAlerts: {
+      ...DEFAULT_LINE_MOVEMENT_ALERTS,
+      ...(subscriber?.lineMovementAlerts || {})
     }
   };
 }
@@ -697,7 +704,11 @@ export class Storage {
     };
     const payload = {
       ...normalized,
-      autoUpdate
+      autoUpdate,
+      lineMovementAlerts: {
+        ...DEFAULT_LINE_MOVEMENT_ALERTS,
+        ...(normalized.lineMovementAlerts || {})
+      }
     };
 
     this.db
@@ -888,6 +899,39 @@ export class Storage {
     return {
       ...DEFAULT_AUTO_UPDATE,
       ...(subscriber?.autoUpdate || {})
+    };
+  }
+
+  setLineMovementAlerts(chat, updates = {}) {
+    const key = String(chat.id);
+    const existing =
+      this.readSubscriber(key) ||
+      normalizeSubscriber({
+        id: chat.id,
+        title: chat.title || chat.username || chat.first_name || String(chat.id),
+        subscribedAt: new Date().toISOString()
+      });
+
+    const subscriber = normalizeSubscriber({
+      ...existing,
+      id: chat.id,
+      title: existing.title || chat.title || chat.username || chat.first_name || String(chat.id),
+      lineMovementAlerts: {
+        ...DEFAULT_LINE_MOVEMENT_ALERTS,
+        ...(existing.lineMovementAlerts || {}),
+        ...updates
+      }
+    });
+
+    this.writeSubscriber(subscriber);
+    this.refreshState();
+  }
+
+  getLineMovementAlerts(chatId) {
+    const subscriber = this.readSubscriber(chatId);
+    return {
+      ...DEFAULT_LINE_MOVEMENT_ALERTS,
+      ...(subscriber?.lineMovementAlerts || {})
     };
   }
 

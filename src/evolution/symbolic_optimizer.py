@@ -34,6 +34,13 @@ def _candidate_id(gradient: dict[str, Any]) -> str:
 
 def propose_symbolic_updates(language_gradients: list[dict[str, Any]], persist: bool = True) -> list[dict[str, Any]]:
     candidates = []
+    existing_ids = set()
+    if persist:
+        existing_ids = {
+            str(candidate.get("candidate_id"))
+            for candidate in [*read_jsonl("symbolic_updates"), *read_jsonl("rule_candidates")]
+            if candidate.get("candidate_id")
+        }
     for gradient in language_gradients:
         target = str(gradient.get("target") or "analyst_prompt")
         candidate = {
@@ -50,10 +57,13 @@ def propose_symbolic_updates(language_gradients: list[dict[str, Any]], persist: 
             "status": "pending",
             "production_update_allowed": False,
         }
+        if candidate["candidate_id"] in existing_ids:
+            continue
         candidates.append(candidate)
         if persist:
             append_jsonl("symbolic_updates", candidate)
             append_jsonl("rule_candidates", candidate)
+            existing_ids.add(candidate["candidate_id"])
     return candidates
 
 

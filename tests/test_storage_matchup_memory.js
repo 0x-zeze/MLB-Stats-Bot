@@ -169,3 +169,30 @@ test('line alert reservations suppress duplicate movement alerts', () => {
     rmSync(`${storage.dbPath}-shm`, { force: true });
   }
 });
+
+test('line movement alert preference persists per chat', () => {
+  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  mkdirSync(tempDir, { recursive: true });
+  const statePath = resolve(tempDir, `line-alert-pref-state-${Date.now()}.json`);
+  const storage = new Storage(statePath);
+  const chat = { id: 789, title: 'MLB Chat' };
+
+  try {
+    assert.equal(storage.getLineMovementAlerts(chat.id).enabled, true);
+
+    storage.setLineMovementAlerts(chat, { enabled: false });
+    assert.equal(storage.getLineMovementAlerts(chat.id).enabled, false);
+
+    storage.setLineMovementAlerts(chat, { enabled: true });
+    assert.equal(storage.getLineMovementAlerts(chat.id).enabled, true);
+
+    const subscriber = storage.getSubscriber(chat.id);
+    assert.equal(subscriber.lineMovementAlerts.enabled, true);
+  } finally {
+    storage.close();
+    rmSync(statePath, { force: true });
+    rmSync(storage.dbPath, { force: true });
+    rmSync(`${storage.dbPath}-wal`, { force: true });
+    rmSync(`${storage.dbPath}-shm`, { force: true });
+  }
+});

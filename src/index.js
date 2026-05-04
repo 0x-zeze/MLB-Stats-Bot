@@ -21,7 +21,8 @@ import {
   checkLineMovement,
   configureLineMonitor,
   lineMonitorSettings,
-  startLineMonitor
+  startLineMonitor,
+  stopLineMonitorForChat
 } from './lineMovement.js';
 
 const config = loadConfig();
@@ -33,6 +34,11 @@ const LEGACY_PREDICT_CALLBACK_PREFIX = 'predict:';
 const AGENT_TOOL_CALLBACK_PREFIX = 'agent_tool:';
 const TOTAL_MARKET_BUTTONS = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
 const EVOLUTION_COMMANDS = {
+  run: {
+    module: 'src.evolution.evolution_engine',
+    args: ['--run-cycle'],
+    label: 'Evolution cycle'
+  },
   summary: {
     module: 'src.evolution.evolution_report',
     args: ['--summary'],
@@ -85,6 +91,10 @@ const EVOLUTION_COMMANDS = {
   }
 };
 const EVOLUTION_ALIASES = {
+  start: 'run',
+  learn: 'run',
+  belajar: 'run',
+  cycle: 'run',
   status: 'summary',
   eval: 'evaluate',
   yesterday: 'evaluate',
@@ -126,6 +136,7 @@ function helpText() {
     '/unsubscribe - matikan auto-alert',
     '/sendalert - kirim alert hari ini ke subscriber',
     '/linecheck - cek line movement vs odds tersimpan',
+    '/linealerts on|off|status - atur notifikasi line movement',
     '/chatid - lihat chat id'
   ].join('\n');
 }
@@ -139,6 +150,7 @@ function botCommandList() {
     { command: 'predict', description: 'Pilih game MLB dari tombol' },
     { command: 'postgame', description: 'Recap final dan update memory' },
     { command: 'linecheck', description: 'Cek line movement' },
+    { command: 'linealerts', description: 'Atur notifikasi line movement' },
     { command: 'evolve', description: 'Agent Evolution Engine' },
     { command: 'memory', description: 'Ringkasan memory model' },
     { command: 'agent', description: 'Status Analyst Agent' },
@@ -510,6 +522,8 @@ function evolutionHelpText() {
     'MLB Agent Evolution Engine',
     '',
     'Pakai dari Telegram:',
+    '/evolve - jalankan evolution cycle dari history/post-game',
+    '/evolve run - sama seperti /evolve',
     '/evolve summary - ringkasan evolution',
     '/evolve logtoday - simpan trajectory pre-game hari ini',
     '/evolve evaluate - evaluasi game kemarin',
@@ -555,6 +569,34 @@ function formatEvolutionSummary(payload) {
   ].join('\n');
 }
 
+function formatEvolutionCycleResult(payload) {
+  const postgame = payload.postgame || {};
+  const ingest = payload.ingest || {};
+  const summary = payload.summary || {};
+  return [
+    'MLB Agent Evolution Run',
+    '',
+    `Post-game dates checked: ${postgame.dates_checked || 0}`,
+    `New games learned into memory: ${postgame.learned_games || 0}`,
+    `History rows found: ${ingest.history_rows || 0}`,
+    `Evolution evaluations added: ${ingest.evaluated || 0}`,
+    `Duplicates skipped: ${ingest.skipped_duplicates || 0}`,
+    `Lessons added: ${ingest.lessons || 0}`,
+    `Language losses added: ${ingest.language_losses || 0}`,
+    `Language gradients added: ${ingest.language_gradients || 0}`,
+    `Symbolic candidates added: ${payload.symbolic_candidates || 0}`,
+    `Rule candidates added: ${payload.rule_candidates || 0}`,
+    '',
+    'Current totals:',
+    `Evaluated: ${summary.total_predictions_evaluated || 0}`,
+    `Lessons: ${summary.lessons_generated || 0}`,
+    `Gradients: ${summary.language_gradients_generated || 0}`,
+    `Candidates: ${summary.candidates_proposed || 0}`,
+    '',
+    'Safety: candidate tidak auto-promote. Rules/prompt/weights production tetap menunggu backtest dan promotion gate.'
+  ].join('\n');
+}
+
 function formatKeyValuePayload(title, payload) {
   if (payload.raw) {
     return [title, '', payload.raw].join('\n');
@@ -571,12 +613,39 @@ function formatKeyValuePayload(title, payload) {
 }
 
 function formatEvolutionResult(action, payload) {
+  if (action === 'run') return formatEvolutionCycleResult(payload);
   if (action === 'summary') return formatEvolutionSummary(payload);
   return formatKeyValuePayload(EVOLUTION_COMMANDS[action]?.label || 'Evolution command', payload);
 }
 
+async function processStoredPostGamesForEvolution() {
+  const dates = storage.listPendingPredictionDates();
+  const result = {
+    dates_checked: 0,
+    evaluated_games: 0,
+    learned_games: 0,
+    errors: []
+  };
+
+  for (const dateYmd of dates) {
+    result.dates_checked += 1;
+    try {
+      const evaluations = await evaluatePostGames(dateYmd, {
+        markProcessed: true,
+        includeProcessed: false
+      });
+      result.evaluated_games += evaluations.length;
+      result.learned_games += evaluations.filter((evaluation) => evaluation.learned).length;
+    } catch (error) {
+      result.errors.push(`${dateYmd}: ${error.message}`);
+    }
+  }
+
+  return result;
+}
+
 async function handleEvolutionCommand(bot, chatId, args) {
-  const requested = String(args[0] || 'summary').toLowerCase();
+  const requested = String(args[0] || 'run').toLowerCase();
   if (requested === 'help' || requested === 'menu') {
     await bot.sendMessage(chatId, evolutionHelpText());
     return;
@@ -598,11 +667,13 @@ async function handleEvolutionCommand(bot, chatId, args) {
   }
 
   await bot.sendMessage(chatId, `Menjalankan ${commandConfig.label}...`);
+  const postgame = action === 'run' ? await processStoredPostGamesForEvolution() : null;
   const output = await runPythonModule(commandConfig.module, commandArgs, {
     timeoutMessage: 'Evolution command timeout. Coba lagi sebentar.',
     timeoutMs: 90_000
   });
   const payload = parseJsonOutput(output);
+  if (postgame) payload.postgame = postgame;
   await bot.sendMessage(chatId, formatEvolutionResult(action, payload));
 }
 
@@ -1183,6 +1254,73 @@ async function handleAutoUpdateCommand(bot, chat, args) {
   await bot.sendMessage(chatId, autoUpdateHelpText());
 }
 
+function lineAlertsHelpText() {
+  return [
+    'Format line movement alerts:',
+    '',
+    '/linealerts on - aktifkan notifikasi line movement',
+    '/linealerts off - matikan notifikasi line movement',
+    '/linealerts status - lihat status',
+    '',
+    'Alias:',
+    '/linemove on',
+    '/linemove off',
+    '/linemove status'
+  ].join('\n');
+}
+
+function formatLineAlertsStatus(chatId, stoppedCount = null) {
+  const status = storage.getLineMovementAlerts(chatId);
+  const settings = lineMonitorSettings();
+  const lines = [
+    'Line Movement Alerts',
+    '',
+    `Status chat: ${status.enabled ? 'aktif' : 'mati'}`,
+    `Status global env: ${settings.enabled ? 'aktif' : 'mati'}`,
+    `Interval cek: ${settings.intervalMinutes} menit`,
+    `Threshold ML: ${settings.moneylineThreshold} cents`,
+    `Threshold total: ${settings.totalThreshold} runs`,
+    `Odds API: ${settings.hasOddsApiKey ? 'tersedia' : 'belum diisi'}`
+  ];
+
+  if (stoppedCount !== null) {
+    lines.push(`Monitor dihentikan: ${stoppedCount}`);
+  }
+
+  lines.push('', 'Command:', '/linealerts on', '/linealerts off', '/linealerts status');
+  return lines.join('\n');
+}
+
+async function handleLineAlertsCommand(bot, chat, args) {
+  const chatId = chat.id;
+  const action = String(args[0] || 'status').toLowerCase();
+
+  if (action === 'help') {
+    await bot.sendMessage(chatId, lineAlertsHelpText());
+    return;
+  }
+
+  if (action === 'status') {
+    await bot.sendMessage(chatId, formatLineAlertsStatus(chatId));
+    return;
+  }
+
+  if (action === 'on') {
+    storage.setLineMovementAlerts(chat, { enabled: true });
+    await bot.sendMessage(chatId, formatLineAlertsStatus(chatId));
+    return;
+  }
+
+  if (action === 'off') {
+    storage.setLineMovementAlerts(chat, { enabled: false });
+    const stoppedCount = stopLineMonitorForChat(chatId);
+    await bot.sendMessage(chatId, formatLineAlertsStatus(chatId, stoppedCount));
+    return;
+  }
+
+  await bot.sendMessage(chatId, lineAlertsHelpText());
+}
+
 async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.timezone)) {
   if (!question.trim()) {
     await bot.sendMessage(
@@ -1421,6 +1559,11 @@ async function handleMessage(bot, message) {
 
   if (command === '/linecheck') {
     await handleLineCheckCommand(bot, chatId);
+    return;
+  }
+
+  if (command === '/linealerts' || command === '/linemove') {
+    await handleLineAlertsCommand(bot, chat, args);
     return;
   }
 

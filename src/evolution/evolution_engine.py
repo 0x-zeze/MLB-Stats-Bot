@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import sqlite3
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 from ..evaluate import load_prediction_log
+from ..utils import DATA_DIR, safe_float
 from .language_gradient import generate_language_gradient
 from .language_loss import calculate_language_loss
 from .lesson_generator import attribute_prediction_result, generate_lesson
@@ -15,16 +19,39 @@ from .memory_store import (
     append_jsonl,
     append_prediction_outcome,
     read_jsonl,
+    read_prediction_outcomes,
     record_evolution_event,
 )
+from .evolution_report import build_evolution_summary
+from .trajectory_logger import build_prediction_trajectory
 from .prediction_evaluator import evaluate_prediction
 from .rule_candidate_generator import generate_rule_candidates
 from .symbolic_optimizer import propose_symbolic_updates
 from .tool_usage_analyzer import analyze_tool_usage
 
 
+def _outcome_key(game_id: Any, market: Any) -> tuple[str, str]:
+    return (str(game_id or ""), str(market or "moneyline").lower())
+
+
+def _existing_outcome_keys() -> set[tuple[str, str]]:
+    return {
+        _outcome_key(row.get("game_id"), row.get("market"))
+        for row in read_prediction_outcomes()
+        if row.get("game_id")
+    }
+
+
 def evaluate_completed_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]) -> dict[str, Any]:
     """Run the full settled-game evolution chain for one trajectory."""
+    key = _outcome_key(trajectory.get("game_id"), trajectory.get("market"))
+    if key in _existing_outcome_keys():
+        return {
+            "skipped_duplicate": True,
+            "game_id": key[0],
+            "market": key[1],
+        }
+
     evaluation = evaluate_prediction(trajectory, final_result)
     append_prediction_outcome(evaluation)
 
@@ -52,6 +79,211 @@ def evaluate_completed_prediction(trajectory: dict[str, Any], final_result: dict
         "lesson": lesson,
         "attribution": attribution,
         "tool_usage": tool_report,
+    }
+
+
+def _safe_json(value: Any, fallback: Any) -> Any:
+    if value in (None, ""):
+        return fallback
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(str(value))
+    except (TypeError, json.JSONDecodeError):
+        return fallback
+
+
+def _default_state_candidates(state_path: str | Path | None = None) -> list[Path]:
+    if state_path:
+        return [Path(state_path)]
+    return [DATA_DIR / "state.sqlite", DATA_DIR / "state.json"]
+
+
+def _read_bot_state_json(path: Path) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    payload = _safe_json(path.read_text(encoding="utf-8"), {})
+    predictions = {
+        str(game_pk): prediction
+        for game_pk, prediction in (payload.get("predictions") or {}).items()
+        if isinstance(prediction, dict)
+    }
+    learning_log = payload.get("memory", {}).get("learningLog") or []
+    return predictions, [row for row in learning_log if isinstance(row, dict)]
+
+
+def _read_bot_state_sqlite(path: Path) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        predictions = {
+            str(row["game_pk"]): _safe_json(row["payload"], {})
+            for row in connection.execute("SELECT game_pk, payload FROM picks")
+        }
+        row = connection.execute("SELECT learning_log FROM memory_summary WHERE id = 1").fetchone()
+        learning_log = _safe_json(row["learning_log"], []) if row else []
+    return predictions, [item for item in learning_log if isinstance(item, dict)]
+
+
+def _read_bot_history(state_path: str | Path | None = None) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], str | None]:
+    for path in _default_state_candidates(state_path):
+        if not path.exists():
+            continue
+        try:
+            if path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}:
+                predictions, learning_log = _read_bot_state_sqlite(path)
+            else:
+                predictions, learning_log = _read_bot_state_json(path)
+        except (OSError, sqlite3.DatabaseError, json.JSONDecodeError):
+            continue
+        if predictions or learning_log:
+            return predictions, learning_log, str(path)
+    return {}, [], None
+
+
+def _score_from_learning_log(entry: dict[str, Any]) -> tuple[int, int] | None:
+    score = str(entry.get("score") or "")
+    match = re.search(r"\s(\d+)\s*-\s*(\d+)\s", f" {score} ")
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
+    away = prediction.get("away") or {}
+    home = prediction.get("home") or {}
+    pick = prediction.get("pick") or {}
+    total_runs = prediction.get("totalRuns") or {}
+    confidence = pick.get("confidence") or total_runs.get("confidence") or "Low"
+    pick_probability = safe_float(pick.get("winProbability"), 50.0)
+    context = {
+        "game_id": prediction.get("gamePk"),
+        "date": prediction.get("dateYmd"),
+        "market": "moneyline",
+        "matchup": prediction.get("matchup") or f"{away.get('name')} @ {home.get('name')}",
+        "away_team": away.get("name"),
+        "home_team": home.get("name"),
+        "game_time": prediction.get("start"),
+        "venue": prediction.get("venue"),
+        "data_quality_score": 70,
+        "probable_pitcher_status": "stored",
+        "lineup_status": "stored",
+        "weather_status": "unknown",
+        "odds_status": "unknown",
+        "bullpen_status": "stored",
+        "tool_usage": ["get_mlb_predictions", "save_predictions", "postgame_memory"],
+        "moneyline": {
+            "model_probability": pick_probability,
+            "home_probability": home.get("winProbability"),
+            "away_probability": away.get("winProbability"),
+            "confidence": confidence,
+            "edge": round(pick_probability - 50.0, 3),
+        },
+        "main_factors": prediction.get("reasons") or [],
+        "risk_factors": [prediction.get("agentRisk")] if prediction.get("agentRisk") else [],
+    }
+    output = {
+        "final_lean": pick.get("name") or prediction.get("winner", {}).get("name") or "NO BET",
+        "confidence": confidence,
+        "moneyline": context["moneyline"],
+        "main_factors": context["main_factors"],
+        "risk_factors": context["risk_factors"],
+    }
+    return build_prediction_trajectory(context, output)
+
+
+def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
+    """Import settled Telegram bot history into the Evolution Engine.
+
+    The import is idempotent by game/market. It learns from games already
+    settled in the bot memory log, but it still only creates auditable
+    evolution artifacts; it never promotes production rule changes.
+    """
+    predictions, learning_log, source = _read_bot_history(state_path)
+    existing = _existing_outcome_keys()
+    evaluated = 0
+    skipped_duplicates = 0
+    skipped_missing_prediction = 0
+    skipped_missing_score = 0
+    generated_losses = 0
+    generated_gradients = 0
+    generated_lessons = 0
+
+    for entry in learning_log:
+        game_pk = str(entry.get("gamePk") or "")
+        prediction = predictions.get(game_pk)
+        if not prediction:
+            skipped_missing_prediction += 1
+            continue
+        if _outcome_key(game_pk, "moneyline") in existing:
+            skipped_duplicates += 1
+            continue
+        score = _score_from_learning_log(entry)
+        if not score:
+            skipped_missing_score += 1
+            continue
+
+        away_score, home_score = score
+        trajectory = _prediction_to_trajectory(prediction)
+        result = evaluate_completed_prediction(
+            trajectory,
+            {
+                "away_score": away_score,
+                "home_score": home_score,
+            },
+        )
+        if result.get("skipped_duplicate"):
+            skipped_duplicates += 1
+            continue
+        existing.add(_outcome_key(game_pk, "moneyline"))
+        evaluated += 1
+        generated_losses += 1
+        generated_gradients += 1
+        generated_lessons += 1
+
+    record_evolution_event(
+        "bot_history_ingested",
+        {
+            "source": source,
+            "history_rows": len(learning_log),
+            "evaluated": evaluated,
+            "skipped_duplicates": skipped_duplicates,
+            "skipped_missing_prediction": skipped_missing_prediction,
+            "skipped_missing_score": skipped_missing_score,
+        },
+    )
+    return {
+        "source": source or "not_found",
+        "history_rows": len(learning_log),
+        "evaluated": evaluated,
+        "skipped_duplicates": skipped_duplicates,
+        "skipped_missing_prediction": skipped_missing_prediction,
+        "skipped_missing_score": skipped_missing_score,
+        "language_losses": generated_losses,
+        "language_gradients": generated_gradients,
+        "lessons": generated_lessons,
+    }
+
+
+def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
+    ingest = ingest_bot_history(state_path)
+    symbolic_candidates = propose_symbolic_updates(read_jsonl("language_gradients"))
+    rule_candidates = generate_rule_candidates(read_jsonl("lessons"), read_jsonl("language_gradients"))
+    backtest = backtest_candidates()
+    summary = build_evolution_summary(limit=10)
+    record_evolution_event(
+        "evolution_cycle_completed",
+        {
+            "ingest": ingest,
+            "symbolic_candidates": len(symbolic_candidates),
+            "rule_candidates": len(rule_candidates),
+            "backtest": backtest,
+        },
+    )
+    return {
+        "ingest": ingest,
+        "symbolic_candidates": len(symbolic_candidates),
+        "rule_candidates": len(rule_candidates),
+        "backtest": backtest,
+        "summary": summary.get("summary", {}),
+        "safety": "Candidates are pending only. Production rules, prompts, and weights were not auto-promoted.",
     }
 
 
@@ -125,6 +357,9 @@ def promote_approved() -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="MLB Agent Evolution Engine.")
+    parser.add_argument("--run-cycle", action="store_true")
+    parser.add_argument("--ingest-bot-history", action="store_true")
+    parser.add_argument("--state-path", default="")
     parser.add_argument("--evaluate-yesterday", action="store_true")
     parser.add_argument("--generate-lessons", action="store_true")
     parser.add_argument("--propose-rules", action="store_true")
@@ -135,7 +370,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.evaluate_yesterday:
+    state_path = args.state_path or None
+    if args.run_cycle:
+        print(json.dumps(run_evolution_cycle(state_path), indent=2))
+    elif args.ingest_bot_history:
+        print(json.dumps(ingest_bot_history(state_path), indent=2))
+    elif args.evaluate_yesterday:
         print(json.dumps(evaluate_yesterday(), indent=2))
     elif args.generate_lessons:
         print(json.dumps(generate_lessons_from_existing_losses(), indent=2))

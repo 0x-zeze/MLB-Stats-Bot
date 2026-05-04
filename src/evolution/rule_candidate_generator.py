@@ -34,6 +34,13 @@ def generate_rule_candidates(
     min_repeats: int = 5,
     persist: bool = True,
 ) -> list[dict[str, Any]]:
+    existing_ids = set()
+    if persist:
+        existing_ids = {
+            str(candidate.get("candidate_id"))
+            for candidate in read_jsonl("rule_candidates")
+            if candidate.get("candidate_id")
+        }
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for lesson in lessons:
         key = f"{lesson.get('lesson_type')}|{lesson.get('suggested_adjustment')}"
@@ -62,9 +69,12 @@ def generate_rule_candidates(
             "status": "pending",
             "production_update_allowed": False,
         }
+        if candidate["candidate_id"] in existing_ids:
+            continue
         candidates.append(candidate)
         if persist:
             append_jsonl("rule_candidates", candidate)
+            existing_ids.add(candidate["candidate_id"])
     return candidates
 
 

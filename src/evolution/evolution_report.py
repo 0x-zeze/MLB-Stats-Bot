@@ -35,6 +35,10 @@ def build_evolution_summary(limit: int = 20) -> dict[str, Any]:
     gradients = read_jsonl("language_gradients")
     candidates = read_jsonl("rule_candidates")
     symbolic = read_jsonl("symbolic_updates")
+    candidate_ids = {
+        str(candidate.get("candidate_id") or candidate)
+        for candidate in [*candidates, *symbolic]
+    }
     approved = read_json("approved_rules").get("approved", [])
     rejected = read_json("rejected_rules").get("rejected", [])
     outcomes = read_prediction_outcomes()
@@ -45,7 +49,7 @@ def build_evolution_summary(limit: int = 20) -> dict[str, Any]:
             "lessons_generated": len(lessons),
             "language_losses_generated": len(losses),
             "language_gradients_generated": len(gradients),
-            "candidates_proposed": len(candidates) + len(symbolic),
+            "candidates_proposed": len(candidate_ids),
             "candidates_approved": len(approved),
             "candidates_rejected": len(rejected),
             "current_prompt_version": versions["prompt_version"],
