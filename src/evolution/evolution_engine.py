@@ -175,7 +175,12 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
             "away_probability": away.get("winProbability"),
             "confidence": confidence,
             "edge": round(pick_probability - 50.0, 3),
+            "current_odds": prediction.get("currentOdds") or {},
         },
+        "model_breakdown": prediction.get("modelBreakdown") or {},
+        "model_breakdown_line": prediction.get("modelBreakdownLine") or "",
+        "value_pick": prediction.get("valuePick") or {},
+        "bet_decision": prediction.get("betDecision") or {},
         "main_factors": prediction.get("reasons") or [],
         "risk_factors": [prediction.get("agentRisk")] if prediction.get("agentRisk") else [],
     }
@@ -183,6 +188,9 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
         "final_lean": pick.get("name") or prediction.get("winner", {}).get("name") or "NO BET",
         "confidence": confidence,
         "moneyline": context["moneyline"],
+        "model_breakdown": context["model_breakdown"],
+        "value_pick": context["value_pick"],
+        "bet_decision": context["bet_decision"],
         "main_factors": context["main_factors"],
         "risk_factors": context["risk_factors"],
     }

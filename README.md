@@ -47,6 +47,7 @@ Data yang dianalisa:
 - Support OpenRouter-style model seperti `openai/gpt-4o-mini`.
 - Auto-alert harian.
 - Live odds line movement alert untuk moneyline dan total runs.
+- Moneyline value engine dengan `VALUE / NO BET / LEAN ONLY` agar pick tidak bias ke probabilitas terbesar saja.
 - Post-game recap otomatis.
 - Memory learning untuk full-game pick dan YRFI/NRFI.
 - Python ML engine berbasis CSV lokal untuk Pythagorean, Log5, odds edge, dan model sklearn opsional.
@@ -842,6 +843,14 @@ Notifikasi line movement bisa dimatikan per chat dari Telegram:
 ```
 
 Alias yang sama juga tersedia lewat `/linemove off|on|status`. Command `/linecheck` tetap bisa dipakai untuk cek manual tanpa harus menyalakan spam notifikasi otomatis.
+
+### Moneyline Value Engine
+
+Jika odds tersedia, alert Telegram sekarang menampilkan `Value Pick` dan `Bet Decision`. Value dihitung dari probabilitas model dikurangi implied probability market. Artinya tim dengan probabilitas menang lebih kecil tetap bisa menjadi value jika odds-nya terlalu murah menurut model.
+
+Contoh: model memberi Team A 45%, tetapi odds +160 hanya mengimplikasikan sekitar 38.5%. Edge value sekitar +6.5%, sehingga bisa lebih bernilai daripada favorite 55% dengan odds yang sudah terlalu mahal.
+
+`Bet Decision: NO BET` muncul saat edge value kecil, lineup belum confirmed, opener/bulk pitcher aktif, probable pitcher belum jelas, atau record/H2H lebih dominan daripada matchup hari ini. Ini sengaja konservatif agar bot tidak memaksa pick dari persen terbesar saja.
 
 Optional pybaseball install:
 

@@ -7,17 +7,20 @@ import {
   summarizeDailyAlertWithOpenAI
 } from './llm.js';
 import {
+  applyMoneylineValueMarket,
   applyTotalRunMarket,
   formatPredictions,
   getFinalGameResults,
   getMlbPredictions,
-  getMlbScheduleChoices
+  getMlbScheduleChoices,
+  moneylineDecisionLines
 } from './mlb.js';
 import { Storage } from './storage.js';
 import { setupWebhook, TelegramBot } from './telegram.js';
 import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils.js';
 import { startDashboard } from './dashboard.js';
 import {
+  attachCurrentOdds,
   checkLineMovement,
   configureLineMonitor,
   lineMonitorSettings,
@@ -168,7 +171,9 @@ async function buildAlertPayload(dateYmd, options = {}) {
   const predictions = await getMlbPredictions(dateYmd, modelMemory);
   const includeAdvanced = options.includeAdvanced ?? config.alertDetail === 'full';
 
+  await attachOddsContext(predictions);
   await attachAgentAnalyses(predictions);
+  await attachMarketContext(predictions);
   storage.savePredictions(dateYmd, predictions);
 
   if (!options.teamFilter && !includeAdvanced && !config.analystAgent.enabled) {
@@ -184,6 +189,28 @@ async function buildAlertPayload(dateYmd, options = {}) {
     }),
     predictions
   };
+}
+
+async function attachOddsContext(predictions) {
+  await attachCurrentOdds(predictions).catch((error) => {
+    console.warn('Odds/value engine context unavailable:', error.message);
+    return null;
+  });
+}
+
+async function attachMarketContext(predictions) {
+  if (!predictions.some((prediction) => prediction.currentOdds)) {
+    await attachOddsContext(predictions);
+  }
+
+  for (const prediction of predictions) {
+    if (prediction.currentOdds?.totalLine && prediction.totalRuns) {
+      prediction.totalRuns = applyTotalRunMarket(prediction.totalRuns, prediction.currentOdds.totalLine);
+    }
+    applyMoneylineValueMarket(prediction);
+  }
+
+  return predictions;
 }
 
 async function buildAlert(dateYmd, options = {}) {
@@ -836,7 +863,8 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
   const modelReferenceLines = prediction.modelReferenceLines?.length
     ? prediction.modelReferenceLines.map((line) => `• ${line}`)
     : [`• ${prediction.modelReferenceLine}`];
-  const totalRuns = applyTotalRunMarket(prediction.totalRuns, options.marketLine);
+  const totalMarketLine = options.marketLine ?? prediction.currentOdds?.totalLine ?? prediction.totalRuns?.marketLine;
+  const totalRuns = applyTotalRunMarket(prediction.totalRuns, totalMarketLine);
   const totalDetail = totalRuns?.detail || {};
   const totalRunLines = totalRuns
     ? [
@@ -879,6 +907,7 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
     `Win Probability: ${percent(pickProbability)}`,
     `Opponent: ${opponent.name} ${percent(opponentProbability)}`,
     `Confidence: ${confidence}`,
+    ...moneylineDecisionLines(prediction),
     `Source: ${agentActive ? 'Analyst Agent + live MLB stats' : 'Baseline model + live MLB stats'}`,
     '',
     '────────────',
@@ -961,7 +990,9 @@ async function handlePredictCallback(bot, callbackQuery) {
     return;
   }
 
+  await attachOddsContext([prediction]);
   await attachAgentAnalyses([prediction]);
+  await attachMarketContext([prediction]);
   storage.savePredictions(dateYmd, [prediction]);
   await bot.sendMessage(chatId, formatLivePrediction(dateYmd, prediction, { marketLine }), {
     reply_markup: totalMarketKeyboard(dateYmd, gamePk)

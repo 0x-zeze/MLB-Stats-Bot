@@ -12,6 +12,27 @@ class LanguageLossTests(unittest.TestCase):
         self.assertEqual(loss["affected_factor"], "confidence_calibration")
         self.assertEqual(loss["numeric_context"]["actual_total"], 6.0)
 
+    def test_record_dominated_moneyline_loss_creates_record_bias_loss(self):
+        trajectory = sample_trajectory(
+            market="moneyline",
+            prediction={
+                "final_lean": "Cleveland Guardians",
+                "confidence": "Medium",
+                "moneyline_probability": 58,
+                "model_edge": 8,
+            },
+            model_breakdown={
+                "matchupEdge": 0.04,
+                "recordContextEdge": 0.22,
+                "recordDominated": True,
+            },
+        )
+
+        loss = calculate_language_loss(trajectory, final_result(home_score=2, away_score=5))
+
+        self.assertEqual(loss["loss_type"], "record_bias")
+        self.assertEqual(loss["affected_factor"], "record_context")
+
 
 if __name__ == "__main__":
     unittest.main()

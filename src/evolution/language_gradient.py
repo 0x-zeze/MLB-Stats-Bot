@@ -26,6 +26,11 @@ GRADIENT_MAP = {
         "Require a stronger edge or return NO BET when market difference is marginal.",
         "threshold_update",
     ),
+    "record_bias": (
+        "no_bet_rules",
+        "Return NO BET or cap confidence when record, recent form, H2H, or previous-series context dominates weak game-specific matchup signals.",
+        "no_bet_rule",
+    ),
     "lineup_misread": (
         "lineup_adjustment",
         "Cap totals confidence when lineups are projected or missing.",

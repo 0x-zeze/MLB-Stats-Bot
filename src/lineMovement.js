@@ -192,7 +192,7 @@ async function fetchOdds() {
   const key = oddsApiKey();
   if (!key) {
     if (!missingKeyLogged) {
-      console.warn('Line movement monitor disabled: ODDS_API_KEY/THE_ODDS_API_KEY belum diisi.');
+      console.warn('Odds API unavailable: ODDS_API_KEY/THE_ODDS_API_KEY belum diisi.');
       missingKeyLogged = true;
     }
     return [];
@@ -229,6 +229,38 @@ async function fetchOdds() {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function attachCurrentOdds(games = []) {
+  const activeGames = Array.isArray(games)
+    ? games.filter((game) => game?.gamePk && !isFinalStatus(game.status))
+    : [];
+  const result = {
+    checkedGames: activeGames.length,
+    matchedGames: 0,
+    hasOddsApiKey: Boolean(oddsApiKey())
+  };
+
+  if (!activeGames.length) return result;
+
+  const events = await fetchOdds();
+  for (const game of activeGames) {
+    const event = findEventForGame(game, events);
+    if (!event) continue;
+
+    const snapshot = buildSnapshot(game, event);
+    game.currentOdds = {
+      moneylineBook: snapshot.moneylineBook,
+      totalBook: snapshot.totalBook,
+      awayMoneyline: snapshot.awayMoneyline,
+      homeMoneyline: snapshot.homeMoneyline,
+      totalLine: snapshot.totalLine,
+      oddsFetchedAt: new Date().toISOString()
+    };
+    result.matchedGames += 1;
+  }
+
+  return result;
 }
 
 function formatOdds(value) {

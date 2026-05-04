@@ -136,12 +136,17 @@ function compactGameForAgent(item) {
       awayProbability: Math.round(item.away.winProbability),
       homeProbability: Math.round(item.home.winProbability),
       totalRuns: item.totalRuns,
+      modelBreakdown: item.modelBreakdown,
+      modelBreakdownLine: item.modelBreakdownLine,
+      currentOdds: item.currentOdds,
+      valuePick: item.valuePick,
+      betDecision: item.betDecision,
       rule: 'LLM may explain and flag risk, but must not invent probabilities or totals.'
     },
     signalPriority: {
-      tier1: ['probable pitchers', 'team offense', 'bullpen usage', 'park factor', 'market odds'],
-      tier2: ['weather', 'confirmed lineup', 'platoon splits', 'recent form'],
-      tier3: ['umpire tendency', 'public betting percentage', 'news sentiment', 'head-to-head trends']
+      tier1: ['probable pitchers', 'confirmed lineup/player availability', 'team offense', 'bullpen usage', 'park factor', 'market odds/value'],
+      tier2: ['weather', 'platoon splits', 'recent form', 'Pythagorean/Log5'],
+      tier3: ['team record', 'previous series winner', 'head-to-head trends', 'public betting percentage']
     },
     headToHead: {
       games: item.headToHead?.games || 0,
@@ -169,6 +174,12 @@ function compactGameForAgent(item) {
     modelReference: item.modelReference,
     modelReferenceLine: item.modelReferenceLine,
     modelReferenceLines: item.modelReferenceLines,
+    modelBreakdown: item.modelBreakdown,
+    modelBreakdownLine: item.modelBreakdownLine,
+    currentOdds: item.currentOdds,
+    valuePick: item.valuePick,
+    moneylineValueOptions: item.moneylineValueOptions,
+    betDecision: item.betDecision,
     totalRuns: item.totalRuns,
     baselineReasons: item.reasons,
     firstInning: item.firstInning
@@ -221,6 +232,29 @@ function deterministicConfidenceFromProbability(value) {
   if (edge >= 12) return 'high';
   if (edge >= 6) return 'medium';
   return 'low';
+}
+
+function confidenceRank(label) {
+  return { low: 1, medium: 2, high: 3 }[String(label || '').toLowerCase()] || 1;
+}
+
+function capConfidence(label, cap) {
+  return confidenceRank(label) <= confidenceRank(cap) ? label : cap;
+}
+
+function deterministicConfidenceFromPrediction(prediction, value) {
+  let confidence = deterministicConfidenceFromProbability(value);
+  const breakdown = prediction.modelBreakdown || {};
+  const matchupEdge = Math.abs(toNumber(breakdown.matchupEdge, 0));
+  const recordContextEdge = Math.abs(toNumber(breakdown.recordContextEdge, 0));
+
+  if (breakdown.recordDominated) {
+    confidence = capConfidence(confidence, 'low');
+  } else if (recordContextEdge > matchupEdge && matchupEdge < 0.18) {
+    confidence = capConfidence(confidence, 'medium');
+  }
+
+  return confidence;
 }
 
 function resolveTeamId(value, prediction) {
@@ -341,7 +375,7 @@ function sanitizeAnalysis(prediction, raw) {
     pickTeamName: pickTeamId === awayId ? prediction.away.name : prediction.home.name,
     awayProbability: normalizedAwayProbability,
     homeProbability: normalizedHomeProbability,
-    confidence: deterministicConfidenceFromProbability(pickProbability),
+    confidence: deterministicConfidenceFromPrediction(prediction, pickProbability),
     reasons: reasons.length > 0 ? reasons : prediction.reasons.slice(0, 3),
     risk: String(raw?.risk || 'Tidak ada risk khusus yang dominan.').slice(0, 220),
     memoryNote: String(raw?.memoryNote || 'Memory dipakai sebagai sinyal kecil.').slice(0, 220),

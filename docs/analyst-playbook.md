@@ -1,6 +1,6 @@
 # MLB Analyst Agent Playbook
 
-Version: `mlb-analyst-v1.3`
+Version: `mlb-analyst-v1.5`
 
 ## Role
 
@@ -51,6 +51,7 @@ Data utama:
 Tier 1, pengaruh terbesar:
 
 - probable pitchers
+- confirmed lineup and player availability
 - team offense
 - bullpen usage
 - park factor
@@ -59,18 +60,35 @@ Tier 1, pengaruh terbesar:
 Tier 2, adjustment:
 
 - weather
-- confirmed lineup
 - platoon splits
 - recent form
+- Pythagorean/Log5 priors
 
 Tier 3, context only:
 
+- team record
+- previous series winner
 - umpire tendency
 - public betting percentage
 - news sentiment
 - head-to-head trends
 
-Recent form tidak boleh mendominasi model. Umpire tendency tidak boleh override pitcher/offense/bullpen.
+Recent form, record, hasil game sebelumnya, dan H2H tidak boleh mendominasi model. Umpire tendency tidak boleh override pitcher/offense/bullpen/lineup.
+
+## Anti Series Bias
+
+- Jangan menaikkan probabilitas terutama karena tim menang game sebelumnya dalam series.
+- Game 2 dan game 3 harus dinilai ulang dari starter hari ini, lineup aktual, bullpen availability, platoon matchup, park/weather, dan market.
+- Record season, L10, dan H2H hanya prior kecil. Jika sinyal itu bertentangan dengan matchup hari ini, confidence turun.
+- Jika model pick didorong oleh record/context lebih besar daripada matchup edge, labeli sebagai low-confidence atau NO BET.
+
+## Value Pick and NO BET Discipline
+
+- Pick pemenang dan pick bernilai tidak selalu sama. Tim 45% bisa menjadi value pick jika odds market mengimplikasikan peluang jauh lebih rendah.
+- Moneyline value dihitung dari model probability dikurangi implied probability dari odds. Jika edge value di bawah threshold, keputusan betting harus `NO BET` walaupun model punya lean.
+- Jika record/H2H/recent form lebih besar daripada matchup edge hari ini, jangan naikkan confidence. Labeli sebagai `NO BET` kecuali odds edge sangat kuat dan data Tier 1 confirmed.
+- Jika lineup belum confirmed, probable pitcher tidak jelas, opener/bulk aktif, atau matchup edge tipis, `NO BET` lebih aman daripada memaksa pick.
+- Agent boleh menjelaskan value dan risk, tetapi tidak boleh mengubah angka probabilitas deterministic atau menganggap line movement sebagai pick otomatis.
 
 ## ML Reference Layer
 

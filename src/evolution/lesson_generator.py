@@ -12,6 +12,7 @@ LESSON_CATEGORIES = {
     "overconfidence": "confidence",
     "underconfidence": "confidence",
     "weak_edge": "market_movement",
+    "record_bias": "confidence",
     "lineup_misread": "lineup",
     "weather_misread": "weather",
     "bad_data_quality": "data_quality",
@@ -75,6 +76,14 @@ def attribute_prediction_result(trajectory: dict[str, Any], evaluation: dict[str
     lineup_status = str(snapshot.get("lineup_status") or "").lower()
     weather_status = str(snapshot.get("weather_status") or "").lower()
     bullpen_status = str(snapshot.get("bullpen_status") or "").lower()
+    model_breakdown = trajectory.get("model_breakdown") or trajectory.get("modelBreakdown") or {}
+    if not isinstance(model_breakdown, dict):
+        model_breakdown = {}
+    matchup_edge = abs(safe_float(model_breakdown.get("matchupEdge") or model_breakdown.get("matchup_edge"), 0.0))
+    record_context_edge = abs(safe_float(model_breakdown.get("recordContextEdge") or model_breakdown.get("record_context_edge"), 0.0))
+    starter_edge = abs(safe_float(model_breakdown.get("starterEdge") or model_breakdown.get("starter_edge"), 0.0))
+    lineup_edge = abs(safe_float(model_breakdown.get("lineupEdge") or model_breakdown.get("lineup_edge"), 0.0))
+    bullpen_edge = abs(safe_float(model_breakdown.get("bullpenEdge") or model_breakdown.get("bullpen_edge"), 0.0))
 
     factors.append(
         {
@@ -98,6 +107,38 @@ def attribute_prediction_result(trajectory: dict[str, Any], evaluation: dict[str
         factors.append({"factor": "bullpen", "impact": "negative", "reason": "Bullpen context was missing or stale."})
     if data_quality < 65:
         factors.append({"factor": "data_quality", "impact": "negative", "reason": "Data quality was below the conservative threshold."})
+    if record_context_edge > matchup_edge * 1.35 and matchup_edge < 0.2:
+        factors.append(
+            {
+                "factor": "record_context",
+                "impact": "negative" if result == "loss" else "neutral",
+                "reason": "Record, recent form, H2H, or previous-series context was larger than the game-specific matchup edge.",
+            }
+        )
+    if starter_edge >= 0.25:
+        factors.append(
+            {
+                "factor": "starting_pitcher",
+                "impact": baseline_impact,
+                "reason": "Starting pitcher quality was a meaningful model component for this pick.",
+            }
+        )
+    if lineup_edge >= 0.04:
+        factors.append(
+            {
+                "factor": "lineup",
+                "impact": baseline_impact if "projected" not in lineup_status and "missing" not in lineup_status else "negative",
+                "reason": "Lineup/player availability created a meaningful model component.",
+            }
+        )
+    if bullpen_edge >= 0.04:
+        factors.append(
+            {
+                "factor": "bullpen",
+                "impact": baseline_impact if "missing" not in bullpen_status and "stale" not in bullpen_status else "negative",
+                "reason": "Bullpen availability created a meaningful model component.",
+            }
+        )
     if result == "no_bet":
         factors.append(
             {

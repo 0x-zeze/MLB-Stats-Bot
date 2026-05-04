@@ -29,6 +29,12 @@ def calculate_language_loss(trajectory: dict[str, Any], final_result: dict[str, 
     data_quality = safe_float(evaluation.get("data_quality"), safe_float((trajectory.get("input_snapshot") or {}).get("data_quality"), 0.0))
     lineup_status = str((trajectory.get("input_snapshot") or {}).get("lineup_status") or "").lower()
     weather_status = str((trajectory.get("input_snapshot") or {}).get("weather_status") or "").lower()
+    model_breakdown = trajectory.get("model_breakdown") or trajectory.get("modelBreakdown") or {}
+    if not isinstance(model_breakdown, dict):
+        model_breakdown = {}
+    matchup_edge = abs(safe_float(model_breakdown.get("matchupEdge") or model_breakdown.get("matchup_edge"), 0.0))
+    record_context_edge = abs(safe_float(model_breakdown.get("recordContextEdge") or model_breakdown.get("record_context_edge"), 0.0))
+    record_dominated = bool(model_breakdown.get("recordDominated") or model_breakdown.get("record_dominated"))
 
     loss_type = "correct_pick" if evaluation.get("result") == "win" else "wrong_pick"
     severity = "low"
@@ -39,6 +45,11 @@ def calculate_language_loss(trajectory: dict[str, Any], final_result: dict[str, 
         loss_type = "good_no_bet" if evaluation.get("no_bet_appropriate") else "bad_no_bet"
         affected_factor = "no_bet_filter"
         summary = "The NO BET decision was supported by pre-game risk." if loss_type == "good_no_bet" else "The NO BET filter may have been too conservative."
+    elif evaluation.get("result") == "loss" and (record_dominated or (record_context_edge > matchup_edge * 1.35 and matchup_edge < 0.2)):
+        loss_type = "record_bias"
+        severity = "medium"
+        affected_factor = "record_context"
+        summary = "The moneyline pick leaned too much on record, form, H2H, or previous-series context instead of game-specific matchup signals."
     elif evaluation.get("overconfidence"):
         loss_type = "overconfidence"
         severity = "high" if confidence == "high" else "medium"
@@ -94,6 +105,8 @@ def calculate_language_loss(trajectory: dict[str, Any], final_result: dict[str, 
             "actual_total": actual_total,
             "edge": edge,
             "data_quality": data_quality,
+            "matchup_edge": matchup_edge,
+            "record_context_edge": record_context_edge,
         },
     }
 

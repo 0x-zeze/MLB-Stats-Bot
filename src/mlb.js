@@ -13,6 +13,8 @@ const GAME_SEPARATOR = '━━━━━━━━━━━━━━━━━━�
 const SECTION_SEPARATOR = '────────────';
 const TOTAL_RUN_LINES = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
 const DEFAULT_MARKET_TOTAL = 8.5;
+const MONEYLINE_VALUE_EDGE_THRESHOLD = 2.0;
+const STRONG_VALUE_EDGE_THRESHOLD = 4.0;
 const OPENER_KEYWORD_RE = /\b(opener|bulk|piggyback)\b|opener\s*\/\s*bulk/i;
 const OPENER_NOTE_KEYS = new Set([
   'note',
@@ -308,6 +310,155 @@ function openerAlertLines(item) {
       const pitcherName = team.starter?.fullName || team.starter?.name || 'Listed pitcher';
       return `⚠️ Opener situation — ${pitcherName} may not be the primary pitcher`;
     });
+}
+
+function formatMoneylineOdds(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed === 0) return '-';
+  return parsed > 0 ? `+${parsed}` : String(parsed);
+}
+
+function americanImpliedProbabilityPercent(value) {
+  const odds = Number(value);
+  if (!Number.isFinite(odds) || odds === 0) return null;
+  const probabilityValue = odds > 0 ? 100 / (odds + 100) : Math.abs(odds) / (Math.abs(odds) + 100);
+  return probabilityValue * 100;
+}
+
+function round1(value) {
+  return Math.round(toNumber(value, 0) * 10) / 10;
+}
+
+function displayedProbabilityForSide(item, side) {
+  if (side === 'away') {
+    return toNumber(item.agentAnalysis?.awayProbability ?? item.away?.winProbability, 50);
+  }
+
+  return toNumber(item.agentAnalysis?.homeProbability ?? item.home?.winProbability, 50);
+}
+
+function moneylineValueOption(item, side) {
+  const odds = side === 'away' ? item.currentOdds?.awayMoneyline : item.currentOdds?.homeMoneyline;
+  const impliedProbability = americanImpliedProbabilityPercent(odds);
+  if (!Number.isFinite(Number(odds)) || impliedProbability === null) return null;
+
+  const team = side === 'away' ? item.away : item.home;
+  const modelProbability = displayedProbabilityForSide(item, side);
+  const edge = modelProbability - impliedProbability;
+
+  return {
+    side,
+    teamId: team?.id,
+    teamName: team?.name,
+    teamAbbreviation: team?.abbreviation,
+    odds,
+    book: item.currentOdds?.moneylineBook || 'market',
+    modelProbability: round1(modelProbability),
+    impliedProbability: round1(impliedProbability),
+    edge: round1(edge)
+  };
+}
+
+function valueSafetyReasons(item, option) {
+  const reasons = [];
+  if (!option) return ['odds moneyline belum tersedia'];
+
+  if (option.edge < MONEYLINE_VALUE_EDGE_THRESHOLD) {
+    reasons.push(`value edge hanya ${option.edge >= 0 ? '+' : ''}${option.edge.toFixed(1)}%`);
+  }
+
+  const matchupEdge = Math.abs(toNumber(item.modelBreakdown?.matchupEdge, 0));
+  const recordContextEdge = Math.abs(toNumber(item.modelBreakdown?.recordContextEdge, 0));
+  if (item.modelBreakdown?.recordDominated || (recordContextEdge > matchupEdge * 1.35 && matchupEdge < 0.2)) {
+    reasons.push('record/H2H lebih dominan daripada matchup hari ini');
+  }
+
+  if (matchupEdge < 0.08 && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
+    reasons.push('matchup edge game ini masih tipis');
+  }
+
+  const lineups = [item.lineups?.away, item.lineups?.home].filter(Boolean);
+  const hasIncompleteLineup = lineups.some((lineup) => !lineup.confirmed || toNumber(lineup.count, 0) < 9);
+  if (hasIncompleteLineup && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
+    reasons.push('lineup belum confirmed penuh');
+  }
+
+  const openerTeams = [item.away, item.home].filter((team) => team?.openerSituation?.isOpener);
+  const riskyOpener = openerTeams.some((team) =>
+    ['high', 'medium'].includes(String(team.openerSituation?.confidence || '').toLowerCase())
+  );
+  if (riskyOpener) {
+    reasons.push('opener/bulk pitcher membuat SP signal tidak bersih');
+  }
+
+  const noProbablePitcher = !item.away?.starter || !item.home?.starter;
+  if (noProbablePitcher && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
+    reasons.push('probable pitcher belum jelas');
+  }
+
+  return [...new Set(reasons)];
+}
+
+export function applyMoneylineValueMarket(item) {
+  if (!item) return item;
+
+  const options = ['away', 'home']
+    .map((side) => moneylineValueOption(item, side))
+    .filter(Boolean)
+    .sort((left, right) => right.edge - left.edge);
+  const best = options[0] || null;
+  const reasons = valueSafetyReasons(item, best);
+
+  item.valuePick = best;
+  item.moneylineValueOptions = options;
+  item.betDecision = best
+    ? {
+        market: 'moneyline',
+        status: reasons.length ? 'NO BET' : 'VALUE',
+        teamId: best.teamId,
+        teamName: best.teamName,
+        teamAbbreviation: best.teamAbbreviation,
+        odds: best.odds,
+        book: best.book,
+        modelProbability: best.modelProbability,
+        impliedProbability: best.impliedProbability,
+        edge: best.edge,
+        reason: reasons[0] || `model ${best.modelProbability.toFixed(1)}% vs implied ${best.impliedProbability.toFixed(1)}%`,
+        reasons
+      }
+    : {
+        market: 'moneyline',
+        status: 'LEAN ONLY',
+        reason: 'odds moneyline belum tersedia',
+        reasons
+      };
+
+  return item;
+}
+
+export function moneylineDecisionLines(item) {
+  const decision = item?.betDecision;
+  if (!decision) return [];
+
+  if (decision.status === 'VALUE') {
+    return [
+      `Value Pick: ${decision.teamName} ${formatMoneylineOdds(decision.odds)} (${decision.book})`,
+      `Bet Decision: VALUE | model ${decision.modelProbability.toFixed(1)}% vs implied ${decision.impliedProbability.toFixed(1)}%, edge +${decision.edge.toFixed(1)}%`
+    ];
+  }
+
+  if (decision.status === 'NO BET') {
+    const pick = item.valuePick;
+    const valueLine = pick
+      ? `Value Check: ${pick.teamName} ${formatMoneylineOdds(pick.odds)} (${pick.book}), edge ${pick.edge >= 0 ? '+' : ''}${pick.edge.toFixed(1)}%`
+      : null;
+    return [
+      valueLine,
+      `Bet Decision: NO BET - ${decision.reason}`
+    ].filter(Boolean);
+  }
+
+  return [`Bet Decision: LEAN ONLY - ${decision.reason}`];
 }
 
 function splitInfoLine(value) {
@@ -758,6 +909,53 @@ function battingOrderSlot(player) {
   return Math.floor(raw / 100) || raw;
 }
 
+function hitterBattingStats(player) {
+  return (
+    player?.seasonStats?.batting ||
+    player?.stats?.batting ||
+    player?.stat?.batting ||
+    player?.batting ||
+    {}
+  );
+}
+
+function firstStatNumber(stats, keys, fallback = 0) {
+  for (const key of keys) {
+    const value = stats?.[key];
+    if (value === undefined || value === null || value === '') continue;
+    const parsed = toNumber(value, Number.NaN);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return fallback;
+}
+
+function hitterLineupScore(player, slot) {
+  const stats = hitterBattingStats(player);
+  const plateAppearances = firstStatNumber(stats, ['plateAppearances', 'pa'], 0);
+  const atBats = firstStatNumber(stats, ['atBats', 'ab'], 0);
+  const known = plateAppearances >= 25 || atBats >= 25 || stats.ops !== undefined || stats.onBasePercentage !== undefined;
+  if (!known) return { value: 0, known: false };
+
+  const ops = firstStatNumber(stats, ['ops'], DEFAULTS.ops);
+  const obp = firstStatNumber(stats, ['obp', 'onBasePercentage'], 0.32);
+  const slg = firstStatNumber(stats, ['slg', 'sluggingPercentage'], 0.4);
+  const homeRuns = firstStatNumber(stats, ['homeRuns', 'hr'], 0);
+  const sample = Math.max(plateAppearances, atBats, 1);
+  const powerPerPa = homeRuns / sample;
+  const slotWeight = slot <= 2 ? 1.18 : slot <= 5 ? 1.08 : slot <= 7 ? 0.92 : 0.78;
+  const score =
+    ((ops - DEFAULTS.ops) / 0.22) * 0.075 +
+    ((obp - 0.32) / 0.08) * 0.035 +
+    ((slg - 0.4) / 0.14) * 0.035 +
+    ((powerPerPa - 0.035) / 0.035) * 0.02;
+
+  return {
+    value: clamp(score * slotWeight, -0.16, 0.18),
+    known: true
+  };
+}
+
 function extractLineupProfile(boxTeam) {
   const players = Object.values(boxTeam?.players || {});
   const hitters = players
@@ -779,11 +977,19 @@ function extractLineupProfile(boxTeam) {
     .slice(0, 5)
     .map(lineupPlayerName)
     .filter(Boolean);
+  const hitterScores = orderedHitters.map((hitter, index) => hitterLineupScore(hitter, index + 1));
+  const knownStatCount = hitterScores.filter((score) => score.known).length;
+  const weightedScore =
+    knownStatCount >= 4
+      ? hitterScores.reduce((sum, score) => sum + score.value, 0) / Math.max(1, orderedHitters.length)
+      : 0;
 
   return {
     confirmed: orderedHitters.length >= 9,
     count: orderedHitters.length,
-    topFive
+    topFive,
+    knownStatCount,
+    qualityScore: clamp(weightedScore, -0.12, 0.12)
   };
 }
 
@@ -1384,11 +1590,19 @@ function starterEdge(homePitcherStats, awayPitcherStats) {
   const awayWhip = statWhip(awayPitcherStats);
   const homeKbb = kToBb(homePitcherStats);
   const awayKbb = kToBb(awayPitcherStats);
+  const homeKMinusBb = pitchingKMinusBb(homePitcherStats);
+  const awayKMinusBb = pitchingKMinusBb(awayPitcherStats);
+  const homeHr9 = pitchingHr9(homePitcherStats);
+  const awayHr9 = pitchingHr9(awayPitcherStats);
 
-  return (
-    (awayEra - homeEra) / 2.2 +
-    (awayWhip - homeWhip) / 0.55 +
-    (homeKbb - awayKbb) / 3.5
+  return clamp(
+    (awayEra - homeEra) / 2.4 +
+      (awayWhip - homeWhip) / 0.6 +
+      (homeKbb - awayKbb) / 4.0 +
+      (homeKMinusBb - awayKMinusBb) / 0.16 +
+      (awayHr9 - homeHr9) / 1.1,
+    -1.6,
+    1.6
   );
 }
 
@@ -1401,7 +1615,10 @@ function createReasons({
   awayPitcherStats,
   homeStarter,
   awayStarter,
-  probHome
+  probHome,
+  homeLineup,
+  awayLineup,
+  modelBreakdown
 }) {
   const winner = probHome >= 50 ? home : away;
   const loser = probHome >= 50 ? away : home;
@@ -1437,6 +1654,12 @@ function createReasons({
   const loserSpWhip = statWhip(loserPitcherStats);
   const winnerSpKbb = kToBb(winnerPitcherStats);
   const loserSpKbb = kToBb(loserPitcherStats);
+  const lineupEdge = toNumber(modelBreakdown?.lineupEdge, 0);
+  const bullpenEdge = toNumber(modelBreakdown?.bullpenEdge, 0);
+  const recordContextEdge = toNumber(modelBreakdown?.recordContextEdge, 0);
+  const matchupEdge = toNumber(modelBreakdown?.matchupEdge, 0);
+  const winnerLineup = probHome >= 50 ? homeLineup : awayLineup;
+  const loserLineup = probHome >= 50 ? awayLineup : homeLineup;
 
   if (
     winnerPitcherStats &&
@@ -1448,6 +1671,26 @@ function createReasons({
     reasons.push(
       `SP edge: ${winnerStarter?.fullName || winner.name} ERA ${safeFixed(winnerSpEra)}, WHIP ${safeFixed(winnerSpWhip)} vs ${loserStarter?.fullName || loser.name} ERA ${safeFixed(loserSpEra)}, WHIP ${safeFixed(loserSpWhip)}.`
     );
+  }
+
+  if (
+    (winner.id === home.id && lineupEdge >= 0.035) ||
+    (winner.id === away.id && lineupEdge <= -0.035)
+  ) {
+    const lineupStatus = winnerLineup?.confirmed
+      ? `confirmed ${winnerLineup.count}/9`
+      : winnerLineup?.count > 0
+        ? `partial ${winnerLineup.count}/9`
+        : 'lineup belum lengkap';
+    const top = winnerLineup?.topFive?.slice(0, 3)?.length
+      ? ` top ${winnerLineup.topFive.slice(0, 3).join(', ')}`
+      : '';
+    const loserStatus = loserLineup?.confirmed
+      ? `vs ${loserLineup.count}/9 confirmed`
+      : loserLineup?.count > 0
+        ? `vs partial ${loserLineup.count}/9`
+        : 'vs lineup lawan belum lengkap';
+    reasons.push(`Lineup edge: ${winner.name} ${lineupStatus}${top}; ${loserStatus}.`);
   }
 
   if (
@@ -1481,6 +1724,19 @@ function createReasons({
 
   if (winner.id === home.id) {
     reasons.push('Home field memberi edge kecil.');
+  }
+
+  if (modelBreakdown?.recordDominated) {
+    reasons.push('Record/H2H dibatasi: matchup hari ini belum cukup kuat, jadi confidence harus konservatif.');
+  } else if (Math.abs(matchupEdge) >= Math.abs(recordContextEdge) + 0.08) {
+    reasons.push('Pick lebih didorong matchup hari ini daripada record/H2H series.');
+  }
+
+  if (
+    (winner.id === home.id && bullpenEdge >= 0.045) ||
+    (winner.id === away.id && bullpenEdge <= -0.045)
+  ) {
+    reasons.push(`Bullpen availability: bullpen lawan lebih lelah, memberi edge late-game ke ${winner.name}.`);
   }
 
   if (reasons.length === 0) {
@@ -1670,6 +1926,42 @@ function lineupRunAdjustment(lineup, injuries) {
   }
 
   return 0;
+}
+
+function lineupWinEdge(homeLineup, awayLineup, homeInjuries, awayInjuries) {
+  const homeQuality = toNumber(homeLineup?.qualityScore, 0);
+  const awayQuality = toNumber(awayLineup?.qualityScore, 0);
+  const homeAvailability = lineupRunAdjustment(homeLineup, homeInjuries);
+  const awayAvailability = lineupRunAdjustment(awayLineup, awayInjuries);
+  return clamp(homeQuality - awayQuality + (homeAvailability - awayAvailability) * 0.45, -0.18, 0.18);
+}
+
+function bullpenAvailabilityEdge(homeBullpen, awayBullpen) {
+  const homeFatigue = toNumber(homeBullpen?.fatigueScore, 0);
+  const awayFatigue = toNumber(awayBullpen?.fatigueScore, 0);
+  const homeB2b = toNumber(homeBullpen?.backToBackRelievers, 0);
+  const awayB2b = toNumber(awayBullpen?.backToBackRelievers, 0);
+  const homeHighPitch = toNumber(homeBullpen?.highPitchRelievers, 0);
+  const awayHighPitch = toNumber(awayBullpen?.highPitchRelievers, 0);
+  return clamp(
+    (awayFatigue - homeFatigue) * 0.075 +
+      (awayB2b - homeB2b) * 0.025 +
+      (awayHighPitch - homeHighPitch) * 0.018,
+    -0.18,
+    0.18
+  );
+}
+
+function edgeTeamLabel(edge, away, home) {
+  if (edge > 0.015) return home.abbreviation || home.name;
+  if (edge < -0.015) return away.abbreviation || away.name;
+  return 'even';
+}
+
+function edgeComponentText(label, value, away, home) {
+  const team = edgeTeamLabel(value, away, home);
+  const magnitude = Math.abs(toNumber(value, 0)).toFixed(2);
+  return `${label} ${team} ${magnitude}`;
 }
 
 function lineupStatusLine(team, lineup) {
@@ -1977,27 +2269,54 @@ function predictGame(
   const pythagoreanEdge = homePythagoreanPct - awayPythagoreanPct;
   const log5Edge = homeReferenceBlend - 0.5;
   const h2hEdge = headToHead?.games > 0 ? (headToHead.homeProbability - 50) / 50 : 0;
-  const memoryEdge = (homeMemoryBias - awayMemoryBias) * 0.35 + matchupMemory.edge;
+  const memoryEdge = (homeMemoryBias - awayMemoryBias) * 0.12 + matchupMemory.edge * 0.25;
   const fatigueEdge = scheduleFatigueEdge(
     homeScheduleFatigue,
     awayScheduleFatigue,
     homePitcherRest,
     awayPitcherRest
   );
-  const edge =
-    winPctEdge * 0.65 +
-    (offenseEdge + homeScheduleFatigue.offenseAdjustment - awayScheduleFatigue.offenseAdjustment) * 0.22 +
-    preventionEdge * 0.2 +
-    spEdge * 0.26 +
-    formEdge +
-    pythagoreanEdge * 0.35 +
-    log5Edge * 0.85 +
-    h2hEdge * 0.12 +
-    memoryEdge +
-    fatigueEdge +
-    0.18;
+  const lineupEdge = lineupWinEdge(homeLineup, awayLineup, homeInjuries, awayInjuries);
+  const bullpenEdge = bullpenAvailabilityEdge(homeBullpen, awayBullpen);
+  const offenseFatigueEdge =
+    homeScheduleFatigue.offenseAdjustment - awayScheduleFatigue.offenseAdjustment;
+  const matchupEdge =
+    clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.3 +
+    clamp(preventionEdge, -1.35, 1.35) * 0.24 +
+    clamp(spEdge, -1.35, 1.35) * 0.38 +
+    lineupEdge * 0.85 +
+    bullpenEdge * 0.9 +
+    fatigueEdge * 0.7;
+  const recordContextEdge =
+    winPctEdge * 0.18 +
+    pythagoreanEdge * 0.14 +
+    log5Edge * 0.16 +
+    clamp(formEdge, -0.3, 0.3) * 0.28 +
+    h2hEdge * 0.025 +
+    memoryEdge;
+  const recordDominated =
+    Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
+  const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + 0.12;
   const homeProbability = clamp(sigmoid(edge) * 100, 30, 70);
   const awayProbability = 100 - homeProbability;
+  const modelBreakdown = {
+    matchupEdge,
+    recordContextEdge,
+    offenseEdge: clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.3,
+    preventionEdge: clamp(preventionEdge, -1.35, 1.35) * 0.24,
+    starterEdge: clamp(spEdge, -1.35, 1.35) * 0.38,
+    lineupEdge: lineupEdge * 0.85,
+    bullpenEdge: bullpenEdge * 0.9,
+    fatigueEdge: fatigueEdge * 0.7,
+    winPctEdge: winPctEdge * 0.18,
+    pythagoreanEdge: pythagoreanEdge * 0.14,
+    log5Edge: log5Edge * 0.16,
+    formEdge: clamp(formEdge, -0.3, 0.3) * 0.28,
+    h2hEdge: h2hEdge * 0.025,
+    memoryEdge,
+    homeFieldEdge: 0.12,
+    recordDominated
+  };
 
   const home = {
     id: homeTeam.id,
@@ -2033,7 +2352,10 @@ function predictGame(
     awayPitcherStats: effectiveAwayPitcherStats,
     homeStarter,
     awayStarter,
-    probHome: homeProbability
+    probHome: homeProbability,
+    homeLineup,
+    awayLineup,
+    modelBreakdown
   });
   const modelReferenceLines = buildModelReferenceLines({
     away,
@@ -2109,6 +2431,14 @@ function predictGame(
     },
     modelReferenceLine: modelReferenceLines.join(' | '),
     modelReferenceLines,
+    modelBreakdownLine: [
+      edgeComponentText('matchup', modelBreakdown.matchupEdge, away, home),
+      edgeComponentText('record/H2H', modelBreakdown.recordContextEdge, away, home),
+      edgeComponentText('SP', modelBreakdown.starterEdge, away, home),
+      edgeComponentText('lineup', modelBreakdown.lineupEdge, away, home),
+      edgeComponentText('bullpen', modelBreakdown.bullpenEdge, away, home)
+    ].join(' | '),
+    modelBreakdown,
     totalRuns,
     modelReference: {
       awayPythagoreanPct: Math.round(awayPythagoreanPct * 100),
@@ -2358,9 +2688,11 @@ export function formatPredictions(
         agentActive ? `📐 Baseline: ${winProbText(item.away)}  |  ${winProbText(item.home)}` : null,
         `🤝 H2H: ${h2hSummary}`,
         `🎯 H2H Prob: ${h2hProbText(item.away, item.headToHead?.awayProbability ?? 50)}  |  ${h2hProbText(item.home, item.headToHead?.homeProbability ?? 50)}`,
+        item.modelBreakdownLine ? `Model source: ${item.modelBreakdownLine}` : null,
         '',
         SECTION_SEPARATOR,
         `✅ Pick ${agentActive ? 'Agent' : 'Model'}: ${pick.name}${agentActive ? ` (${item.agentAnalysis.confidence})` : ''}`,
+        ...moneylineDecisionLines(item),
         ...openerLines,
         `🔥 SP: ${item.away.starterLine} vs ${item.home.starterLine}`,
         '',

@@ -292,6 +292,12 @@ function compactPrediction(prediction, dateYmd) {
           confidence: prediction.totalRuns.confidence
         }
       : null,
+    modelBreakdown: prediction.modelBreakdown || null,
+    modelBreakdownLine: prediction.modelBreakdownLine || '',
+    currentOdds: prediction.currentOdds || null,
+    valuePick: prediction.valuePick || null,
+    moneylineValueOptions: prediction.moneylineValueOptions || [],
+    betDecision: prediction.betDecision || null,
     agentRisk: agent?.risk || '',
     agentMemoryNote: agent?.memoryNote || '',
     savedAt: new Date().toISOString()
