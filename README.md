@@ -297,6 +297,8 @@ atau:
 ALERT_DETAIL=full
 ```
 
+Di Telegram, `/today` selalu memakai tampilan ringkas untuk semua game: matchup, waktu, stadion, probabilitas, dan pick model. Gunakan `/deep` jika ingin semua statistik lengkap untuk seluruh slate.
+
 ## Menjalankan Bot Dan Dashboard
 
 Mode utama, cukup satu command untuk menjalankan Telegram bot, FastAPI API, dan React dashboard:

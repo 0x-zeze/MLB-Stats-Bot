@@ -120,8 +120,8 @@ function helpText() {
     'MLB Alert Bot siap.',
     '',
     'Command:',
-    '/today - alert hari ini',
-    '/deep - alert hari ini dengan advanced stats',
+    '/today - list ringkas semua game hari ini',
+    '/deep - semua game dengan statistik lengkap',
     '/date YYYY-MM-DD - alert tanggal tertentu',
     '/game TEAM - cek tim tertentu hari ini',
     '/predict - pilih game MLB dari tombol',
@@ -146,8 +146,8 @@ function helpText() {
 
 function botCommandList() {
   return [
-    { command: 'today', description: 'Alert MLB hari ini' },
-    { command: 'deep', description: 'Alert dengan advanced stats' },
+    { command: 'today', description: 'List ringkas semua game' },
+    { command: 'deep', description: 'Semua game dengan statistik lengkap' },
     { command: 'date', description: 'Alert tanggal tertentu' },
     { command: 'game', description: 'Cek tim tertentu hari ini' },
     { command: 'predict', description: 'Pilih game MLB dari tombol' },
@@ -176,14 +176,14 @@ async function buildAlertPayload(dateYmd, options = {}) {
   await attachMarketContext(predictions);
   storage.savePredictions(dateYmd, predictions);
 
-  if (!options.teamFilter && !includeAdvanced && !config.analystAgent.enabled) {
+  if (options.allowSummary && !options.teamFilter && !includeAdvanced && !config.analystAgent.enabled) {
     const llmText = await summarizeDailyAlertWithOpenAI(config, predictions).catch(() => null);
     if (llmText) return { text: llmText, predictions };
   }
 
   return {
     text: formatPredictions(dateYmd, predictions, {
-      maxGames: config.maxGamesPerMessage,
+      maxGames: options.maxGames ?? (includeAdvanced ? config.maxGamesPerMessage : predictions.length),
       teamFilter: options.teamFilter || '',
       includeAdvanced
     }),
@@ -1516,14 +1516,14 @@ async function handleMessage(bot, message) {
   if (command === '/today') {
     const maybeDate = args[0];
     const dateYmd = isValidDateYmd(maybeDate) ? maybeDate : dateInTimezone(config.timezone);
-    await sendAlert(bot, chatId, dateYmd);
+    await sendAlert(bot, chatId, dateYmd, { includeAdvanced: false });
     return;
   }
 
   if (command === '/deep') {
     const maybeDate = args[0];
     const dateYmd = isValidDateYmd(maybeDate) ? maybeDate : dateInTimezone(config.timezone);
-    await sendAlert(bot, chatId, dateYmd, { includeAdvanced: true });
+    await sendAlert(bot, chatId, dateYmd, { includeAdvanced: true, maxGames: Number.MAX_SAFE_INTEGER });
     return;
   }
 
@@ -1545,7 +1545,7 @@ async function handleMessage(bot, message) {
       return;
     }
 
-    await sendAlert(bot, chatId, dateInTimezone(config.timezone), { teamFilter });
+    await sendAlert(bot, chatId, dateInTimezone(config.timezone), { teamFilter, includeAdvanced: true });
     return;
   }
 

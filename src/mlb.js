@@ -461,6 +461,16 @@ export function moneylineDecisionLines(item) {
   return [`Bet Decision: LEAN ONLY - ${decision.reason}`];
 }
 
+function compactPredictionBlock(item) {
+  return [
+    `${item.away.name} @ ${item.home.name}`,
+    `${item.start}`,
+    `${item.venue}`,
+    `Probabilitas: ${winProbText(item.away)} | ${winProbText(item.home)}`,
+    `Pick Model: ${item.winner?.name || (item.home.winProbability >= item.away.winProbability ? item.home.name : item.away.name)}`
+  ].join('\n');
+}
+
 function splitInfoLine(value) {
   return String(value || '-')
     .split(' | ')
@@ -2644,6 +2654,20 @@ export function formatPredictions(
 
   const shown = filtered.slice(0, maxGames);
   const lines = [`⚾ MLB Pre-game Alert\n📅 ${dateYmd}`, GAME_SEPARATOR];
+
+  if (!includeAdvanced) {
+    for (const item of shown) {
+      lines.push(compactPredictionBlock(item));
+      lines.push(SECTION_SEPARATOR);
+    }
+
+    if (filtered.length > shown.length) {
+      lines.push(`+ ${filtered.length - shown.length} game lain. Pakai /deep untuk semua statistik detail.`);
+    }
+
+    lines.push('âš ï¸ Note: probabilitas adalah estimasi model, bukan kepastian.');
+    return lines.join('\n\n');
+  }
 
   for (const item of shown) {
     const displayProb = displayedProbabilities(item);
