@@ -114,6 +114,11 @@ const EVOLUTION_ALIASES = {
   log: 'logtoday',
   logtoday: 'logtoday'
 };
+const AUDIT_COMMAND = {
+  module: 'src.evolution.evolution_audit',
+  args: ['--summary'],
+  label: 'Evolution audit'
+};
 
 function helpText() {
   return [
@@ -134,6 +139,7 @@ function helpText() {
     '/postgame YYYY-MM-DD - cek recap final dan update memory',
     '/memory - lihat performa memory model',
     '/evolve - menu Agent Evolution Engine',
+    '/audit - diagnosis kelemahan Agent Evolution',
     '/autoupdate on|off|time HH:mm|status - atur update otomatis',
     '/subscribe - aktifkan auto-alert di chat ini',
     '/unsubscribe - matikan auto-alert',
@@ -155,6 +161,7 @@ function botCommandList() {
     { command: 'linecheck', description: 'Cek line movement' },
     { command: 'linealerts', description: 'Atur notifikasi line movement' },
     { command: 'evolve', description: 'Agent Evolution Engine' },
+    { command: 'audit', description: 'Diagnosis kelemahan agent' },
     { command: 'memory', description: 'Ringkasan memory model' },
     { command: 'agent', description: 'Status Analyst Agent' },
     { command: 'help', description: 'Daftar command' }
@@ -624,6 +631,55 @@ function formatEvolutionCycleResult(payload) {
   ].join('\n');
 }
 
+function formatAuditSegment(segment) {
+  const record = segment.decided
+    ? `${segment.wins || 0}-${segment.losses || 0}`
+    : `${segment.no_bets || 0} no-bet`;
+  const rate = segment.decided ? `${segment.accuracy || 0}%` : `NB quality ${segment.no_bet_quality || 0}%`;
+  return `• ${segment.segment}: ${record}, ${rate} (${segment.sample_size || 0} sample)`;
+}
+
+function formatEvolutionAudit(payload) {
+  const summary = payload.summary || {};
+  const weakest = payload.weakest_segments || [];
+  const causes = payload.root_causes || [];
+  const recommendations = payload.priority_recommendations || [];
+  const candidates = payload.candidate_priorities || [];
+
+  return [
+    'MLB Agent Evolution Audit',
+    '',
+    `Evaluated: ${summary.evaluated || 0}`,
+    `Decided: ${summary.decided || 0}`,
+    `Record: ${summary.wins || 0}-${summary.losses || 0}`,
+    `Accuracy: ${summary.accuracy || 0}%`,
+    `No Bet: ${summary.no_bets || 0}`,
+    summary.average_clv !== null && summary.average_clv !== undefined ? `Avg CLV: ${summary.average_clv}` : null,
+    '',
+    'Weakest segments:',
+    ...(weakest.length ? weakest.slice(0, 4).map(formatAuditSegment) : ['• Belum cukup sample segment.']),
+    '',
+    'Root causes:',
+    ...(causes.length
+      ? causes.slice(0, 5).map((cause) => `• ${cause.loss_type}: ${cause.count}x (${cause.primary_factor})`)
+      : ['• Belum ada language loss.']),
+    '',
+    'Top fixes:',
+    ...(recommendations.length
+      ? recommendations.slice(0, 4).map((item, index) => `${index + 1}. ${item.recommendation}`)
+      : ['1. Jalankan /evolve setelah post-game agar loss/lesson bertambah.']),
+    '',
+    'Candidate priority:',
+    ...(candidates.length
+      ? candidates.slice(0, 3).map((item) => `• ${item.type}: score ${item.priority_score}, backtest ${item.backtest_status}`)
+      : ['• Belum ada candidate prioritas.']),
+    '',
+    'Safety: audit hanya diagnosis. Tidak auto-ubah rules/prompt/weights.'
+  ]
+    .filter((line) => line !== null && line !== undefined)
+    .join('\n');
+}
+
 function formatKeyValuePayload(title, payload) {
   if (payload.raw) {
     return [title, '', payload.raw].join('\n');
@@ -702,6 +758,16 @@ async function handleEvolutionCommand(bot, chatId, args) {
   const payload = parseJsonOutput(output);
   if (postgame) payload.postgame = postgame;
   await bot.sendMessage(chatId, formatEvolutionResult(action, payload));
+}
+
+async function handleAuditCommand(bot, chatId) {
+  await bot.sendMessage(chatId, 'Menjalankan Evolution audit...');
+  const output = await runPythonModule(AUDIT_COMMAND.module, AUDIT_COMMAND.args, {
+    timeoutMessage: 'Audit command timeout. Coba lagi sebentar.',
+    timeoutMs: 90_000
+  });
+  const payload = parseJsonOutput(output);
+  await bot.sendMessage(chatId, formatEvolutionAudit(payload));
 }
 
 function agentToolHomeKeyboard() {
@@ -1600,6 +1666,11 @@ async function handleMessage(bot, message) {
 
   if (command === '/evolve' || command === '/evolution') {
     await handleEvolutionCommand(bot, chatId, args);
+    return;
+  }
+
+  if (command === '/audit') {
+    await handleAuditCommand(bot, chatId);
     return;
   }
 

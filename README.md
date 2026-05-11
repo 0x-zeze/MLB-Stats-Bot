@@ -590,6 +590,7 @@ data/evolution/language_gradients.jsonl
 data/evolution/prompt_versions.json
 data/evolution/tool_usage_reports.jsonl
 data/evolution/symbolic_updates.jsonl
+data/evolution/audit_reports.jsonl
 ```
 
 Telegram commands:
@@ -607,6 +608,7 @@ Telegram commands:
 /evolve rules     propose rule candidate
 /evolve backtest  cek candidate yang perlu backtest
 /evolve promote   cek status promotion gate
+/audit            diagnosis weakness, root cause, dan candidate priority
 ```
 
 Kamu tidak perlu menjalankan command evolution dari terminal VPS. Bot Telegram menjalankan module Python yang sesuai di background, lalu mengirim hasilnya kembali ke chat.
@@ -620,6 +622,14 @@ Saat `/evolve` dijalankan tanpa argumen, bot akan:
 5. Mengusulkan symbolic/rule candidates sebagai `pending`.
 
 Candidate tidak otomatis mengubah production behavior. Perubahan prompt/rule/weight tetap harus melewati backtest dan promotion gate.
+
+Audit layer:
+
+- Membuat weakness ranking per segment seperti market, confidence, edge bucket, data quality, no-bet, dan CLV.
+- Menghitung root cause paling sering dari language losses.
+- Mengubah root cause menjadi rekomendasi praktis.
+- Meranking rule/symbolic candidates agar kandidat paling berulang diuji dulu.
+- Audit hanya diagnosis. Audit tidak mempromosikan candidate dan tidak mengubah production behavior.
 
 To view the Evolution tab, run the dashboard and open `http://localhost:5173`, then select `Evolution`. The tab shows summary counts, recent trajectories, lessons, language losses, language gradients, symbolic candidates, approved changes, and risk warnings.
 
@@ -1089,6 +1099,7 @@ Catatan: ini bukan betting advice. MLB punya variance tinggi, dan probabilitas m
 /skill
 /postgame 2026-04-27
 /memory
+/audit
 /autoupdate on
 /autoupdate time 20:00
 /linecheck

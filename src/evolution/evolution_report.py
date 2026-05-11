@@ -6,6 +6,7 @@ import argparse
 import json
 from typing import Any
 
+from .evolution_audit import build_evolution_audit
 from .memory_store import current_versions, read_json, read_jsonl, read_prediction_outcomes
 
 
@@ -43,6 +44,7 @@ def build_evolution_summary(limit: int = 20) -> dict[str, Any]:
     rejected = read_json("rejected_rules").get("rejected", [])
     outcomes = read_prediction_outcomes()
     versions = current_versions()
+    audit = build_evolution_audit(persist=False)
     return {
         "summary": {
             "total_predictions_evaluated": len(outcomes),
@@ -64,7 +66,8 @@ def build_evolution_summary(limit: int = 20) -> dict[str, Any]:
         "rule_candidates": _recent("rule_candidates", limit),
         "approved_changes": list(reversed(approved[-limit:])),
         "rejected_changes": list(reversed(rejected[-limit:])),
-        "risk_warnings": _risk_warnings(losses[-limit:], lessons[-limit:]),
+        "risk_warnings": audit.get("risk_warnings") or _risk_warnings(losses[-limit:], lessons[-limit:]),
+        "audit": audit,
     }
 
 

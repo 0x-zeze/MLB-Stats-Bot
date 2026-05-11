@@ -188,6 +188,70 @@ function RiskWarnings({ rows }) {
   );
 }
 
+function AuditDiagnostics({ audit }) {
+  const summary = audit?.summary || {};
+  const weakest = audit?.weakest_segments || [];
+  const causes = audit?.root_causes || [];
+  const recommendations = audit?.priority_recommendations || [];
+  const candidates = audit?.candidate_priorities || [];
+
+  return (
+    <Section title="Audit Diagnostics">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div>
+          <p className="text-xs font-semibold uppercase text-slate-500">Snapshot</p>
+          <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+            <span>Evaluated: {summary.evaluated || 0}</span>
+            <span>Accuracy: {summary.accuracy || 0}%</span>
+            <span>Record: {summary.wins || 0}-{summary.losses || 0}</span>
+            <span>No Bet: {summary.no_bets || 0}</span>
+          </div>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase text-slate-500">Candidate Priority</p>
+          <div className="mt-2 space-y-2">
+            {candidates.length ? candidates.slice(0, 3).map((row) => (
+              <p key={row.candidate_id} className="text-sm text-slate-600">
+                <span className="font-semibold text-ink">{text(row.type)}</span> score {text(row.priority_score)} / {text(row.backtest_status)}
+              </p>
+            )) : <p className="text-sm text-slate-500">No prioritized candidates yet.</p>}
+          </div>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+        <div>
+          <p className="text-xs font-semibold uppercase text-slate-500">Weakest Segments</p>
+          <div className="mt-2 space-y-2">
+            {weakest.length ? weakest.slice(0, 4).map((row) => (
+              <p key={row.segment} className="text-sm text-slate-600">
+                <span className="font-semibold text-ink">{text(row.segment)}</span>: {row.wins || 0}-{row.losses || 0}, {row.loss_rate || 0}% loss
+              </p>
+            )) : <p className="text-sm text-slate-500">Not enough segment sample yet.</p>}
+          </div>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase text-slate-500">Root Causes</p>
+          <div className="mt-2 space-y-2">
+            {causes.length ? causes.slice(0, 4).map((row) => (
+              <p key={row.loss_type} className="text-sm text-slate-600">
+                <span className="font-semibold text-ink">{text(row.loss_type)}</span>: {row.count || 0}x / {text(row.primary_factor)}
+              </p>
+            )) : <p className="text-sm text-slate-500">No language losses yet.</p>}
+          </div>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase text-slate-500">Top Fixes</p>
+          <div className="mt-2 space-y-2">
+            {recommendations.length ? recommendations.slice(0, 3).map((row) => (
+              <p key={row.recommendation} className="text-sm text-slate-600">{text(row.recommendation)}</p>
+            )) : <p className="text-sm text-slate-500">Run /evolve after settled games to build fixes.</p>}
+          </div>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 export default function EvolutionView({ evolution }) {
   const summary = evolution?.summary || {};
   const candidates = [
@@ -208,6 +272,7 @@ export default function EvolutionView({ evolution }) {
       <Losses rows={evolution?.language_losses || []} />
       <Gradients rows={evolution?.language_gradients || []} />
       <Candidates rows={candidates} />
+      <AuditDiagnostics audit={evolution?.audit} />
       <ApprovedChanges rows={evolution?.approved_changes || []} />
       <RiskWarnings rows={evolution?.risk_warnings || []} />
     </div>

@@ -20,6 +20,7 @@ JSONL_FILES = {
     "language_gradients": "language_gradients.jsonl",
     "tool_usage_reports": "tool_usage_reports.jsonl",
     "symbolic_updates": "symbolic_updates.jsonl",
+    "audit_reports": "audit_reports.jsonl",
 }
 
 JSON_FILES = {
