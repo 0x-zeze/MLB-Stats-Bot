@@ -313,6 +313,33 @@ function openerAlertLines(item) {
     });
 }
 
+function lateUpdateWarnings(item, { compact = false } = {}) {
+  const warnings = [];
+  const hasOpener = [item.away, item.home].some((team) => team?.openerSituation?.isOpener);
+  const missingStarter = [item.away, item.home].some((team) => {
+    const name = team?.starter?.fullName || team?.starter?.name || team?.starterLine || '';
+    return !name || String(name).toLowerCase().includes('tbd');
+  });
+  if (hasOpener) warnings.push('opener/bulk pitcher');
+  if (missingStarter) warnings.push('probable pitcher TBD');
+
+  if (!compact) {
+    const lineups = [item.lineups?.away, item.lineups?.home].filter(Boolean);
+    const incompleteLineup =
+      lineups.length < 2 || lineups.some((lineup) => !lineup.confirmed || toNumber(lineup.count, 0) < 9);
+    if (incompleteLineup) warnings.push('lineup belum confirmed');
+    if (!item.currentOdds?.awayMoneyline || !item.currentOdds?.homeMoneyline) warnings.push('moneyline odds belum lengkap');
+    if (!item.currentOdds?.totalLine) warnings.push('market total belum tersedia');
+  }
+
+  return [...new Set(warnings)].slice(0, compact ? 2 : 5);
+}
+
+function lateUpdateLines(item, options = {}) {
+  const warnings = lateUpdateWarnings(item, options);
+  return warnings.length ? [uiKV('⚠️', 'Late Watch', warnings.join(' | '))] : [];
+}
+
 function formatMoneylineOdds(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed === 0) return '-';
@@ -468,7 +495,8 @@ function compactPredictionBlock(item) {
     uiKV('🕒', 'Waktu', item.start),
     uiKV('📍', 'Stadium', item.venue),
     uiKV('📊', 'Probabilitas', `${winProbText(item.away)} | ${winProbText(item.home)}`),
-    uiKV('✅', 'Pick Model', item.winner?.name || (item.home.winProbability >= item.away.winProbability ? item.home.name : item.away.name))
+    uiKV('✅', 'Pick Model', item.winner?.name || (item.home.winProbability >= item.away.winProbability ? item.home.name : item.away.name)),
+    ...lateUpdateLines(item, { compact: true })
   ].join('\n');
 }
 
@@ -2719,6 +2747,7 @@ export function formatPredictions(
         uiKV('✅', `Pick ${agentActive ? 'Agent' : 'Model'}`, `${pick.name}${agentActive ? ` | ${item.agentAnalysis.confidence}` : ''}`),
         ...moneylineDecisionLines(item),
         ...openerLines,
+        ...lateUpdateLines(item),
         uiKV('🔥', 'SP', `${item.away.starterLine} vs ${item.home.starterLine}`),
         '',
         SECTION_SEPARATOR,

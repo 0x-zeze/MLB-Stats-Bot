@@ -494,7 +494,8 @@ function topPickCandidate(prediction) {
   const matchupEdge = Math.abs(toNumber(prediction.modelBreakdown?.matchupEdge, 0)) * 10;
   const status = String(prediction.betDecision?.status || 'LEAN ONLY').toUpperCase();
   const statusBoost = status === 'VALUE' ? 5 : status === 'NO BET' ? -4 : 0;
-  const score = probability - 50 + Math.max(edge, 0) * 0.8 + confidenceScore(confidence) + matchupEdge + statusBoost;
+  const warnings = topPickWarnings(prediction);
+  const score = probability - 50 + Math.max(edge, 0) * 0.8 + confidenceScore(confidence) + matchupEdge + statusBoost - warnings.length * 1.5;
 
   return {
     prediction,
@@ -504,8 +505,36 @@ function topPickCandidate(prediction) {
     probability,
     confidence,
     score,
-    status
+    status,
+    warnings
   };
+}
+
+function topPickWarnings(prediction) {
+  const warnings = [];
+  const lineups = [prediction.lineups?.away, prediction.lineups?.home].filter(Boolean);
+  if (lineups.length < 2 || lineups.some((lineup) => !lineup.confirmed || toNumber(lineup.count, 0) < 9)) {
+    warnings.push('lineup belum confirmed');
+  }
+  if ([prediction.away, prediction.home].some((team) => team?.openerSituation?.isOpener)) {
+    warnings.push('opener/bulk pitcher');
+  }
+  if ([prediction.away, prediction.home].some((team) => String(team?.starterLine || '').toLowerCase().includes('tbd'))) {
+    warnings.push('probable pitcher TBD');
+  }
+  if (prediction.betDecision?.status === 'NO BET') {
+    warnings.push(prediction.betDecision.reason || 'no-bet filter aktif');
+  }
+  return [...new Set(warnings)].slice(0, 3);
+}
+
+function pickTier(candidate) {
+  if (candidate.status === 'NO BET' || candidate.warnings.length >= 2) return '⛔ No Bet Risk';
+  if (candidate.probability >= 61 && confidenceRank(candidate.confidence) >= 2 && candidate.warnings.length === 0) {
+    return '✅ Strong Pick';
+  }
+  if (candidate.probability >= 56 || confidenceRank(candidate.confidence) >= 2) return '🟡 Lean Only';
+  return '⚪ Thin Lean';
 }
 
 function shortReason(candidate) {
@@ -546,8 +575,12 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5) {
     const pickLabel = candidate.pick?.abbreviation || candidate.pick?.name || 'TBD';
     const opponentLabel = candidate.opponent?.abbreviation || candidate.opponent?.name || 'TBD';
     lines.push(`${index + 1}. 🎯 ${pickLabel} ML vs ${opponentLabel}`);
+    lines.push(`   ${uiKV('🏷️', 'Tier', pickTier(candidate))}`);
     lines.push(`   ${uiKV('✅', 'Prediksi menang', `${candidate.pick?.name || pickLabel} | ${candidate.probability}% | ${candidate.confidence}`)}`);
     lines.push(`   ${uiKV('💡', 'Alasan', `${shortReason(candidate)}.`)}`);
+    if (candidate.warnings.length) {
+      lines.push(`   ${uiKV('⚠️', 'Risk', candidate.warnings.join(' | '))}`);
+    }
   });
 
   return lines.join('\n');

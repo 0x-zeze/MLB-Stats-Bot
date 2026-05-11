@@ -605,14 +605,20 @@ Saat `/audit` dijalankan, bot akan merangkum:
 
 1. Weakest segments.
 2. Root cause dari language loss.
-3. Candidate priority.
-4. Risk warning yang perlu diperhatikan sebelum pick berikutnya.
+3. Calibration bucket, misalnya apakah pick 60-65% terlalu percaya diri.
+4. CLV report dari opening/pick odds vs closing odds jika data tersedia.
+5. Reason quality, agar agent tahu faktor mana yang sering benar atau misleading.
+6. Confidence cap candidates yang masih audit-only dan wajib backtest.
 
 Candidate tidak otomatis mengubah production behavior. Perubahan prompt/rule/weight tetap harus melewati backtest dan promotion gate.
 
 Audit layer:
 
 - Membuat weakness ranking per segment seperti market, confidence, edge bucket, data quality, no-bet, dan CLV.
+- Membuat calibration bucket berdasarkan predicted probability vs observed win rate.
+- Membaca CLV jika closing line tersedia; jika belum tersedia, audit akan menandai sample CLV masih kosong.
+- Mengukur reason quality dari faktor seperti starter, offense, bullpen, lineup, injury, market edge, record/H2H, weather, dan opener/bulk.
+- Mengusulkan confidence cap candidate saat bucket/segment terlihat overconfident.
 - Menghitung root cause paling sering dari language losses.
 - Mengubah root cause menjadi rekomendasi praktis.
 - Meranking rule/symbolic candidates agar kandidat paling berulang diuji dulu.
@@ -1090,6 +1096,13 @@ kenapa Dodgers dipilih?
 upset risk terbesar hari ini?
 bandingkan Yankees vs Rangers
 ```
+
+Integrasi tanpa command baru:
+
+- `/ask best 5 top pick for today` menampilkan tier `Strong Pick`, `Lean Only`, `Thin Lean`, atau `No Bet Risk`.
+- `/today` tetap ringkas, tetapi akan memberi `Late Watch` jika ada risiko besar seperti opener/bulk atau probable pitcher TBD.
+- `/deep` menampilkan `Late Watch` lebih lengkap: lineup belum confirmed, odds belum lengkap, market total belum tersedia, opener/bulk, atau pitcher TBD.
+- `/audit` menjadi pusat evaluasi: calibration, CLV, reason quality, confidence cap candidate, weakest segment, dan root cause.
 
 ## Contoh Output
 

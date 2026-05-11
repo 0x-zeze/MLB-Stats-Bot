@@ -57,11 +57,52 @@ def _predicted_probability(trajectory: dict[str, Any], market: str, lean: str) -
 def _market_odds(trajectory: dict[str, Any], lean: str) -> Any:
     odds = (trajectory.get("prediction") or {}).get("market_odds")
     if isinstance(odds, dict):
-        return odds.get("under") if lean.lower().startswith("under") else odds.get("over")
+        lean_text = str(lean or "").lower()
+        if lean_text.startswith("under"):
+            return odds.get("under")
+        if lean_text.startswith("over"):
+            return odds.get("over")
+        away_team = str(trajectory.get("away_team") or "").lower()
+        home_team = str(trajectory.get("home_team") or "").lower()
+        if away_team and away_team in lean_text:
+            return odds.get("awayMoneyline") or odds.get("away_moneyline") or odds.get("away")
+        if home_team and home_team in lean_text:
+            return odds.get("homeMoneyline") or odds.get("home_moneyline") or odds.get("home")
+        return odds.get("moneyline") or odds.get("odds")
     return odds
 
 
+def _closing_moneyline(final_result: dict[str, Any], trajectory: dict[str, Any], lean: str) -> Any:
+    away_team = str(trajectory.get("away_team") or "").lower()
+    home_team = str(trajectory.get("home_team") or "").lower()
+    lean_text = str(lean or "").lower()
+    if away_team and away_team in lean_text:
+        return final_result.get("closing_away_moneyline") or final_result.get("closing_away_odds")
+    if home_team and home_team in lean_text:
+        return final_result.get("closing_home_moneyline") or final_result.get("closing_home_odds")
+    return final_result.get("closing_moneyline") or final_result.get("closing_odds")
+
+
+def _american_implied(value: Any) -> float | None:
+    odds = safe_float(value, 0.0)
+    if odds == 0:
+        return None
+    if odds > 0:
+        return 100.0 / (odds + 100.0)
+    return abs(odds) / (abs(odds) + 100.0)
+
+
 def _clv(trajectory: dict[str, Any], final_result: dict[str, Any], lean: str) -> float | None:
+    market = str(trajectory.get("market") or "moneyline").lower()
+    if market == "moneyline":
+        opening_odds = _market_odds(trajectory, lean)
+        closing_odds = _closing_moneyline(final_result, trajectory, lean)
+        opening_implied = _american_implied(opening_odds)
+        closing_implied = _american_implied(closing_odds)
+        if opening_implied is None or closing_implied is None:
+            return None
+        return round((closing_implied - opening_implied) * 100.0, 3)
+
     closing_total = final_result.get("closing_total") or final_result.get("closing_line")
     market_total = (trajectory.get("prediction") or {}).get("market_total")
     if closing_total in (None, "") or market_total in (None, ""):
@@ -143,6 +184,11 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         "no_bet_appropriate": no_bet_appropriate,
         "profit_loss": profit_loss,
         "clv": _clv(trajectory, final_result, lean),
+        "predicted_probability": round(probability_value * 100.0, 3),
+        "opening_odds": odds,
+        "closing_odds": _closing_moneyline(final_result, trajectory, lean)
+        if market == "moneyline"
+        else final_result.get("closing_total") or final_result.get("closing_line"),
         "brier_score": brier,
         "confidence_calibration_bucket": confidence,
         "calibration_bucket": confidence,
@@ -150,5 +196,9 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         "data_quality": data_quality,
         "overconfidence": status == "loss" and confidence in {"medium", "high"},
         "underconfidence": status == "win" and confidence == "low",
+        "main_factors": trajectory.get("main_factors") or [],
+        "risk_factors": trajectory.get("risk_factors") or [],
+        "bet_decision": trajectory.get("bet_decision") or {},
+        "value_pick": trajectory.get("value_pick") or {},
         "evaluation_notes": notes,
     }

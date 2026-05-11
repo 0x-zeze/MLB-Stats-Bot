@@ -19,6 +19,9 @@ class EvolutionAuditTests(unittest.TestCase):
                     "edge": 1.4,
                     "data_quality": 72,
                     "brier_score": 0.36,
+                    "predicted_probability": 66,
+                    "clv": -1.2,
+                    "main_factors": ["SP edge and market edge looked attractive."],
                 }
             )
             append_prediction_outcome(
@@ -32,6 +35,9 @@ class EvolutionAuditTests(unittest.TestCase):
                     "edge": 1.8,
                     "data_quality": 70,
                     "brier_score": 0.32,
+                    "predicted_probability": 64,
+                    "clv": -0.7,
+                    "main_factors": ["Market edge was small and lineup was projected."],
                 }
             )
             append_prediction_outcome(
@@ -45,6 +51,25 @@ class EvolutionAuditTests(unittest.TestCase):
                     "edge": 4.2,
                     "data_quality": 82,
                     "brier_score": 0.12,
+                    "predicted_probability": 58,
+                    "clv": 0.4,
+                    "main_factors": ["Bullpen availability supported the pick."],
+                }
+            )
+            append_prediction_outcome(
+                {
+                    "game_id": "game-4",
+                    "date": "2026-05-03",
+                    "market": "moneyline",
+                    "prediction": "Home Team",
+                    "confidence": "high",
+                    "result": "loss",
+                    "edge": 1.5,
+                    "data_quality": 76,
+                    "brier_score": 0.35,
+                    "predicted_probability": 63,
+                    "clv": -0.3,
+                    "main_factors": ["Starter edge was overweighted despite weak market edge."],
                 }
             )
             append_jsonl(
@@ -104,11 +129,15 @@ class EvolutionAuditTests(unittest.TestCase):
             audit = build_evolution_audit(min_segment_sample=2, persist=True)
             reports = read_jsonl("audit_reports")
 
-        self.assertEqual(audit["summary"]["evaluated"], 3)
-        self.assertEqual(audit["summary"]["losses"], 2)
+        self.assertEqual(audit["summary"]["evaluated"], 4)
+        self.assertEqual(audit["summary"]["losses"], 3)
         self.assertEqual(audit["root_causes"][0]["loss_type"], "weak_edge")
         self.assertTrue(any(item["segment"] == "confidence:high" for item in audit["weakest_segments"]))
         self.assertEqual(audit["candidate_priorities"][0]["candidate_id"], "cand-1")
+        self.assertEqual(audit["clv_report"]["sample_size"], 4)
+        self.assertTrue(audit["calibration_buckets"])
+        self.assertTrue(audit["reason_quality"])
+        self.assertTrue(audit["confidence_cap_candidates"])
         self.assertTrue(audit["priority_recommendations"])
         self.assertEqual(len(reports), 1)
 

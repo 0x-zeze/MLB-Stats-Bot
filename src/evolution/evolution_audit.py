@@ -39,6 +39,27 @@ TYPE_PRIORITY = {
     "explanation_update": 1,
 }
 
+CONFIDENCE_PROBABILITY_FALLBACK = {
+    "low": 54.0,
+    "medium": 60.0,
+    "high": 65.0,
+    "model": 55.0,
+}
+
+REASON_PATTERNS = {
+    "starting_pitcher": ("sp", "starter", "pitcher", "era", "whip", "k-bb", "hr/9"),
+    "offense": ("offense", "ops", "iso", "r/g", "run creation", "bat", "hitter"),
+    "bullpen": ("bullpen", "reliever", "late-game", "back-to-back", "fatigue"),
+    "lineup": ("lineup", "confirmed", "projected", "batting order"),
+    "injury": ("injury", "injured", "il ", "availability", "absent"),
+    "market_edge": ("market", "odds", "value", "implied", "edge", "clv", "line movement"),
+    "record_recent_form": ("record", "h2h", "l10", "recent", "streak", "form", "series"),
+    "weather": ("weather", "wind", "temperature", "roof"),
+    "park_factor": ("park", "venue", "ballpark"),
+    "data_quality": ("quality", "missing", "stale", "unavailable"),
+    "opener_bulk": ("opener", "bulk", "piggyback"),
+}
+
 
 def _parse_json(value: Any, fallback: Any) -> Any:
     if isinstance(value, (dict, list)):
@@ -61,6 +82,69 @@ def _evaluation_rows() -> list[dict[str, Any]]:
         merged["confidence"] = str(merged.get("confidence") or "unknown").lower()
         rows.append(merged)
     return rows
+
+
+def _is_decided(row: dict[str, Any]) -> bool:
+    return row.get("result") in {"win", "loss"}
+
+
+def _predicted_probability(row: dict[str, Any]) -> float | None:
+    for key in ["predicted_probability", "model_probability", "moneyline_probability", "probability"]:
+        if row.get(key) not in (None, ""):
+            parsed = safe_float(row.get(key), 0.0)
+            if parsed > 0:
+                return parsed * 100.0 if parsed <= 1 else parsed
+
+    value_pick = _parse_json(row.get("value_pick"), row.get("value_pick") or {})
+    if isinstance(value_pick, dict) and value_pick.get("modelProbability") not in (None, ""):
+        return safe_float(value_pick.get("modelProbability"), 0.0)
+
+    confidence = str(row.get("confidence") or "").lower()
+    fallback = CONFIDENCE_PROBABILITY_FALLBACK.get(confidence)
+    return fallback
+
+
+def _probability_bucket(probability: float | None) -> str:
+    if probability is None or probability <= 0:
+        return "probability:unknown"
+    if probability < 55:
+        return "probability:50-55"
+    if probability < 60:
+        return "probability:55-60"
+    if probability < 65:
+        return "probability:60-65"
+    if probability < 70:
+        return "probability:65-70"
+    return "probability:70+"
+
+
+def _classify_reason(text: Any) -> str | None:
+    normalized = str(text or "").lower()
+    if not normalized:
+        return None
+    for label, tokens in REASON_PATTERNS.items():
+        if any(token in normalized for token in tokens):
+            return label
+    return "other"
+
+
+def _reason_tags(row: dict[str, Any]) -> list[str]:
+    explicit = row.get("reason_tags")
+    if isinstance(explicit, list):
+        return [str(item) for item in explicit if item]
+    if isinstance(explicit, str) and explicit.strip():
+        parsed = _parse_json(explicit, [])
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if item]
+        return [item.strip() for item in explicit.split(",") if item.strip()]
+
+    factors = row.get("main_factors") or row.get("reasons") or []
+    if isinstance(factors, str):
+        factors = _parse_json(factors, [factors])
+    if not isinstance(factors, list):
+        factors = []
+    tags = [_classify_reason(item) for item in factors]
+    return sorted({tag for tag in tags if tag})
 
 
 def _pct(numerator: float, denominator: float) -> float:
@@ -130,6 +214,7 @@ def _segment_labels(row: dict[str, Any]) -> list[str]:
         _prediction_side(row),
         _bucket_edge(row),
         _bucket_data_quality(row),
+        _probability_bucket(_predicted_probability(row)),
     ]
     clv = _bucket_clv(row)
     if clv:
@@ -173,6 +258,148 @@ def segment_performance(rows: list[dict[str, Any]], min_sample: int = 3) -> list
             grouped[label].append(row)
     records = [_segment_record(label, items) for label, items in grouped.items() if len(items) >= min_sample]
     return sorted(records, key=lambda item: (item["loss_rate"], item["losses"], item["sample_size"]), reverse=True)
+
+
+def calibration_buckets(rows: list[dict[str, Any]], min_sample: int = 1) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if not _is_decided(row):
+            continue
+        grouped[_probability_bucket(_predicted_probability(row))].append(row)
+
+    records: list[dict[str, Any]] = []
+    for bucket, items in grouped.items():
+        if len(items) < min_sample:
+            continue
+        wins = sum(1 for row in items if row.get("result") == "win")
+        losses = sum(1 for row in items if row.get("result") == "loss")
+        probabilities = [value for value in (_predicted_probability(row) for row in items) if value is not None]
+        avg_probability = _avg(probabilities) or 0.0
+        observed = _pct(wins, wins + losses)
+        error = round(observed - avg_probability, 1)
+        if error <= -7.5:
+            verdict = "overconfident"
+        elif error >= 7.5:
+            verdict = "underconfident"
+        else:
+            verdict = "calibrated"
+        records.append(
+            {
+                "bucket": bucket,
+                "sample_size": len(items),
+                "wins": wins,
+                "losses": losses,
+                "avg_predicted_probability": round(avg_probability, 1),
+                "observed_win_rate": observed,
+                "calibration_error": error,
+                "verdict": verdict,
+            }
+        )
+    return sorted(records, key=lambda item: item["bucket"])
+
+
+def clv_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    values = [safe_float(row.get("clv"), 0.0) for row in rows if row.get("clv") not in (None, "")]
+    positives = sum(1 for value in values if value > 0.01)
+    negatives = sum(1 for value in values if value < -0.01)
+    flats = len(values) - positives - negatives
+    return {
+        "sample_size": len(values),
+        "average_clv": _avg(values),
+        "positive": positives,
+        "negative": negatives,
+        "flat": flats,
+        "positive_rate": _pct(positives, len(values)),
+        "status": "tracking" if values else "missing_closing_line_data",
+        "note": "Positive CLV means the market moved toward the agent's side after the pick."
+        if values
+        else "No closing line data yet. Keep storing opening/pick odds and closing odds before judging market edge.",
+    }
+
+
+def reason_quality(rows: list[dict[str, Any]], losses: list[dict[str, Any]], min_sample: int = 1) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, int]] = defaultdict(lambda: {"wins": 0, "losses": 0, "loss_mentions": 0})
+    for row in rows:
+        if not _is_decided(row):
+            continue
+        tags = _reason_tags(row) or ["unknown"]
+        for tag in tags:
+            if row.get("result") == "win":
+                grouped[tag]["wins"] += 1
+            elif row.get("result") == "loss":
+                grouped[tag]["losses"] += 1
+
+    for loss in losses:
+        tag = _classify_reason(loss.get("affected_factor") or loss.get("loss_type"))
+        if tag:
+            grouped[tag]["loss_mentions"] += 1
+
+    records: list[dict[str, Any]] = []
+    for factor, counts in grouped.items():
+        sample = counts["wins"] + counts["losses"]
+        if sample < min_sample and counts["loss_mentions"] == 0:
+            continue
+        accuracy = _pct(counts["wins"], sample)
+        if sample and accuracy < 45:
+            verdict = "weak_signal"
+        elif sample and accuracy >= 58:
+            verdict = "useful_signal"
+        elif counts["loss_mentions"] >= 3:
+            verdict = "needs_review"
+        else:
+            verdict = "neutral"
+        records.append(
+            {
+                "factor": factor,
+                "sample_size": sample,
+                "wins": counts["wins"],
+                "losses": counts["losses"],
+                "accuracy": accuracy,
+                "loss_mentions": counts["loss_mentions"],
+                "verdict": verdict,
+            }
+        )
+    return sorted(records, key=lambda item: (item["verdict"] == "weak_signal", item["loss_mentions"], item["losses"]), reverse=True)
+
+
+def confidence_cap_candidates(rows: list[dict[str, Any]], calibration: list[dict[str, Any]], segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for bucket in calibration:
+        if bucket.get("sample_size", 0) < 3 or bucket.get("verdict") != "overconfident":
+            continue
+        candidates.append(
+            {
+                "candidate_id": f"audit-confidence-cap-{bucket['bucket'].replace(':', '-').replace('+', 'plus')}",
+                "type": "confidence_cap",
+                "target": bucket["bucket"],
+                "update": f"Cap confidence one level lower for {bucket['bucket']} until calibration improves.",
+                "reason": f"Observed win rate {bucket['observed_win_rate']}% vs avg predicted {bucket['avg_predicted_probability']}%.",
+                "required_backtest": True,
+                "status": "audit_candidate_only",
+            }
+        )
+
+    for segment in segments:
+        label = str(segment.get("segment") or "")
+        if not label.startswith("confidence:") or segment.get("decided", 0) < 3 or segment.get("loss_rate", 0) < 55:
+            continue
+        confidence = label.split(":", 1)[1]
+        candidates.append(
+            {
+                "candidate_id": f"audit-confidence-cap-{confidence}",
+                "type": "confidence_cap",
+                "target": label,
+                "update": f"Cap {confidence} confidence picks when Tier 1 signals do not agree.",
+                "reason": f"{segment.get('wins')}-{segment.get('losses')} with {segment.get('loss_rate')}% loss rate.",
+                "required_backtest": True,
+                "status": "audit_candidate_only",
+            }
+        )
+
+    unique: dict[str, dict[str, Any]] = {}
+    for candidate in candidates:
+        unique[str(candidate["candidate_id"])] = candidate
+    return list(unique.values())[:8]
 
 
 def _severity_weight(value: Any) -> int:
@@ -340,6 +567,10 @@ def build_evolution_audit(
     causes = root_causes(losses)
     priorities = candidate_priorities(limit=candidate_limit)
     fixes = recommendations(causes, weakest)
+    calibration = calibration_buckets(rows)
+    clv = clv_report(rows)
+    reasons = reason_quality(rows, losses)
+    cap_candidates = confidence_cap_candidates(rows, calibration, segments)
 
     audit = {
         "summary": {
@@ -365,6 +596,10 @@ def build_evolution_audit(
         "root_causes": causes[:10],
         "priority_recommendations": fixes,
         "candidate_priorities": priorities,
+        "calibration_buckets": calibration,
+        "clv_report": clv,
+        "reason_quality": reasons,
+        "confidence_cap_candidates": cap_candidates,
         "risk_warnings": _risk_warnings(causes, weakest),
         "segment_performance": segments[:30],
         "safety": "Audit only. It does not auto-promote candidates or change production behavior.",

@@ -622,12 +622,33 @@ function formatAuditSegment(segment) {
   return uiBullet('•', `${segment.segment} | ${record} | ${rate} | ${segment.sample_size || 0} sample`);
 }
 
+function formatAuditCalibration(bucket) {
+  return uiBullet(
+    '•',
+    `${bucket.bucket} | ${bucket.wins || 0}-${bucket.losses || 0} | pred ${bucket.avg_predicted_probability || 0}% | actual ${bucket.observed_win_rate || 0}% | ${bucket.verdict || 'unknown'}`
+  );
+}
+
+function formatReasonQuality(item) {
+  const sample = item.sample_size || 0;
+  const record = sample ? `${item.wins || 0}-${item.losses || 0}` : `${item.loss_mentions || 0} loss mentions`;
+  return uiBullet('•', `${item.factor} | ${record} | ${item.accuracy || 0}% | ${item.verdict || 'neutral'}`);
+}
+
+function formatConfidenceCapCandidate(item) {
+  return uiBullet('•', `${item.target || item.type} | ${item.update || item.reason}`);
+}
+
 function formatEvolutionAudit(payload) {
   const summary = payload.summary || {};
   const weakest = payload.weakest_segments || [];
   const causes = payload.root_causes || [];
   const recommendations = payload.priority_recommendations || [];
   const candidates = payload.candidate_priorities || [];
+  const calibration = payload.calibration_buckets || [];
+  const clv = payload.clv_report || {};
+  const reasonQuality = payload.reason_quality || [];
+  const confidenceCaps = payload.confidence_cap_candidates || [];
 
   return [
     uiTitle('🔎', 'MLB Agent Evolution | audit'),
@@ -638,6 +659,16 @@ function formatEvolutionAudit(payload) {
     uiKV('📈', 'Accuracy', `${summary.accuracy || 0}%`),
     uiKV('🛑', 'No Bet', summary.no_bets || 0),
     summary.average_clv !== null && summary.average_clv !== undefined ? uiKV('📉', 'Avg CLV', summary.average_clv) : null,
+    uiKV('📈', 'CLV sample', `${clv.sample_size || 0} | avg ${clv.average_clv ?? '-'} | positive ${clv.positive_rate || 0}%`),
+    '',
+    uiSection('🎚️', 'Calibration buckets'),
+    ...(calibration.length ? calibration.slice(0, 5).map(formatAuditCalibration) : [uiBullet('•', 'Belum ada sample calibration.')]),
+    '',
+    uiSection('🧾', 'Reason quality'),
+    ...(reasonQuality.length ? reasonQuality.slice(0, 5).map(formatReasonQuality) : [uiBullet('•', 'Belum ada reason quality sample.')]),
+    '',
+    uiSection('🧯', 'Confidence cap candidates'),
+    ...(confidenceCaps.length ? confidenceCaps.slice(0, 4).map(formatConfidenceCapCandidate) : [uiBullet('•', 'Belum ada confidence cap candidate dari audit.')]),
     '',
     uiSection('⚠️', 'Weakest segments'),
     ...(weakest.length ? weakest.slice(0, 4).map(formatAuditSegment) : [uiBullet('•', 'Belum cukup sample segment.')]),
