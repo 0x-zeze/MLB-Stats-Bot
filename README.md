@@ -593,33 +593,20 @@ data/evolution/symbolic_updates.jsonl
 data/evolution/audit_reports.jsonl
 ```
 
-Telegram commands:
+Telegram command utama untuk evolution:
 
 ```text
-/evolve         jalankan evolution cycle dari history/post-game
-/evolve run     sama seperti /evolve
-/evolve summary   ringkasan evolution
-/evolve logtoday  simpan trajectory pre-game hari ini
-/evolve evaluate  evaluasi game kemarin
-/evolve lessons   cek lesson tersimpan
-/evolve loss      generate language loss
-/evolve gradient  generate language gradient
-/evolve propose   propose symbolic update
-/evolve rules     propose rule candidate
-/evolve backtest  cek candidate yang perlu backtest
-/evolve promote   cek status promotion gate
-/audit            diagnosis weakness, root cause, dan candidate priority
+/audit  diagnosis weakness, root cause, calibration issue, dan candidate priority
 ```
 
 Kamu tidak perlu menjalankan command evolution dari terminal VPS. Bot Telegram menjalankan module Python yang sesuai di background, lalu mengirim hasilnya kembali ke chat.
 
-Saat `/evolve` dijalankan tanpa argumen, bot akan:
+Saat `/audit` dijalankan, bot akan merangkum:
 
-1. Mengecek game tersimpan yang sudah final.
-2. Mengupdate memory kecil dari post-game result.
-3. Mengimpor history/memory bot ke Evolution Engine.
-4. Membuat numeric evaluation, language loss, language gradient, dan lesson.
-5. Mengusulkan symbolic/rule candidates sebagai `pending`.
+1. Weakest segments.
+2. Root cause dari language loss.
+3. Candidate priority.
+4. Risk warning yang perlu diperhatikan sebelum pick berikutnya.
 
 Candidate tidak otomatis mengubah production behavior. Perubahan prompt/rule/weight tetap harus melewati backtest dan promotion gate.
 
@@ -844,7 +831,7 @@ OPENWEATHER_API_KEY=
 LINE_MONITOR_INTERVAL_MINUTES=10
 ```
 
-`ODDS_API_KEY` atau `THE_ODDS_API_KEY` juga mengaktifkan live line movement monitor. Setelah `/today`, `/deep`, `/sendalert`, atau auto-update mengirim slate hari ini, bot menyimpan odds pertama sebagai baseline di SQLite lalu mengecek ulang setiap `LINE_MONITOR_INTERVAL_MINUTES`. Telegram akan memberi alert jika moneyline bergerak 15+ cents atau total bergerak 0.5+ runs.
+`ODDS_API_KEY` atau `THE_ODDS_API_KEY` juga mengaktifkan live line movement monitor. Setelah `/today`, `/deep`, atau auto-update mengirim slate hari ini, bot menyimpan odds pertama sebagai baseline di SQLite lalu mengecek ulang setiap `LINE_MONITOR_INTERVAL_MINUTES`. Telegram akan memberi alert jika moneyline bergerak 15+ cents atau total bergerak 0.5+ runs.
 
 Notifikasi line movement bisa dimatikan per chat dari Telegram:
 
@@ -854,7 +841,7 @@ Notifikasi line movement bisa dimatikan per chat dari Telegram:
 /linealerts status
 ```
 
-Alias yang sama juga tersedia lewat `/linemove off|on|status`. Command `/linecheck` tetap bisa dipakai untuk cek manual tanpa harus menyalakan spam notifikasi otomatis.
+Alias yang sama juga tersedia lewat `/linemove off|on|status`.
 
 ### Moneyline Value Engine
 
@@ -1082,34 +1069,19 @@ Catatan: ini bukan betting advice. MLB punya variance tinggi, dan probabilitas m
 
 ## Command Telegram
 
+Menu command Telegram sengaja dibuat pendek. Command utama yang muncul hanya:
+
 ```text
-/start
-/help
 /today
 /deep
-/date 2026-04-27
 /game Yankees
-/predict
-/predict Los Angeles Dodgers | New York Yankees
-/predict Los Angeles Dodgers | New York Yankees | -120
-/agenttools
-/kb why does wind blowing out increase over probability?
-/ask game mana yang edge-nya paling kuat hari ini?
-/agent
-/skill
-/postgame 2026-04-27
-/memory
+/ask best 5 top pick for today
 /audit
-/autoupdate on
-/autoupdate time 20:00
-/linecheck
 /linealerts off
 /linealerts status
-/subscribe
-/unsubscribe
-/sendalert
-/chatid
 ```
+
+Command lama seperti `/predict`, `/memory`, `/postgame`, `/evolve`, `/linecheck`, dan `/agenttools` masih ada sebagai hidden/backward-compatible command, tetapi tidak ditampilkan di menu utama agar Telegram tetap bersih.
 
 Kamu juga bisa langsung bertanya tanpa slash:
 

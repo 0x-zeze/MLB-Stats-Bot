@@ -123,32 +123,18 @@ const AUDIT_COMMAND = {
 
 function helpText() {
   return [
-    uiTitle('⚾', 'MLB Alert Bot | siap'),
+    uiTitle('⚾', 'MLB Bot | command utama'),
     '',
-    uiSection('📋', 'Command'),
+    uiSection('📋', '6 command aktif'),
     uiCommand('/today', 'list ringkas semua game hari ini'),
     uiCommand('/deep', 'semua game dengan statistik lengkap'),
-    uiCommand('/date YYYY-MM-DD', 'alert tanggal tertentu'),
     uiCommand('/game TEAM', 'cek tim tertentu hari ini'),
-    uiCommand('/predict', 'pilih game MLB dari tombol'),
-    uiCommand('/agenttools', 'tools interaktif data/knowledge layer'),
-    uiCommand('/kb pertanyaan', 'tanya knowledge base MLB'),
-    uiCommand('/ask pertanyaan', 'tanya Analyst Agent'),
-    uiCommand('/agent', 'lihat status Analyst Agent'),
-    uiCommand('/skill', 'lihat playbook analisa Agent'),
-    uiCommand('/postgame YYYY-MM-DD', 'recap final dan update memory'),
-    uiCommand('/memory', 'lihat performa memory model'),
-    uiCommand('/evolve', 'menu Agent Evolution Engine'),
+    uiCommand('/ask pertanyaan', 'tanya Analyst Agent, termasuk top pick'),
     uiCommand('/audit', 'diagnosis kelemahan Agent Evolution'),
-    uiCommand('/autoupdate on|off|time HH:mm|status', 'atur update otomatis'),
-    uiCommand('/subscribe', 'aktifkan auto-alert di chat ini'),
-    uiCommand('/unsubscribe', 'matikan auto-alert'),
-    uiCommand('/sendalert', 'kirim alert hari ini ke subscriber'),
-    uiCommand('/linecheck', 'cek line movement vs odds tersimpan'),
     uiCommand('/linealerts on|off|status', 'atur notifikasi line movement'),
-    uiCommand('/chatid', 'lihat chat id'),
     '',
-    uiBullet('💬', 'Pertanyaan biasa tanpa slash tetap masuk ke Analyst Agent.')
+    uiBullet('💬', 'Pertanyaan biasa tanpa slash tetap masuk ke Analyst Agent.'),
+    uiBullet('🧰', 'Command lama tetap hidden/backward-compatible, tapi tidak ditampilkan agar menu bersih.')
   ].join('\n');
 }
 
@@ -156,17 +142,10 @@ function botCommandList() {
   return [
     { command: 'today', description: 'List ringkas semua game' },
     { command: 'deep', description: 'Semua game dengan statistik lengkap' },
-    { command: 'date', description: 'Alert tanggal tertentu' },
     { command: 'game', description: 'Cek tim tertentu hari ini' },
-    { command: 'predict', description: 'Pilih game MLB dari tombol' },
-    { command: 'postgame', description: 'Recap final dan update memory' },
-    { command: 'linecheck', description: 'Cek line movement' },
-    { command: 'linealerts', description: 'Atur notifikasi line movement' },
-    { command: 'evolve', description: 'Agent Evolution Engine' },
+    { command: 'ask', description: 'Tanya Analyst Agent' },
     { command: 'audit', description: 'Diagnosis kelemahan agent' },
-    { command: 'memory', description: 'Ringkasan memory model' },
-    { command: 'agent', description: 'Status Analyst Agent' },
-    { command: 'help', description: 'Daftar command' }
+    { command: 'linealerts', description: 'Atur line movement alerts' }
   ];
 }
 
@@ -671,7 +650,7 @@ function formatEvolutionAudit(payload) {
     uiSection('🛠️', 'Top fixes'),
     ...(recommendations.length
       ? recommendations.slice(0, 4).map((item, index) => `${index + 1}. ${item.recommendation}`)
-      : ['1. Jalankan /evolve setelah post-game agar loss/lesson bertambah.']),
+      : ['1. Jalankan /audit setelah beberapa game final agar weakness/lesson terlihat.']),
     '',
     uiSection('🧪', 'Candidate priority'),
     ...(candidates.length
