@@ -1,3 +1,5 @@
+import { uiBullet, uiKV, uiTitle } from './telegramFormat.js';
+
 const ODDS_API_URL = 'https://api.the-odds-api.com/v4/sports/baseball_mlb/odds';
 const DEFAULT_INTERVAL_MINUTES = 10;
 const MONEYLINE_MOVE_THRESHOLD = 15;
@@ -303,20 +305,20 @@ function formatMovementLine(movement) {
   const arrow = movementArrow(movement);
   if (movement.market === 'total') {
     const action = movement.delta > 0 ? 'sharp over action' : 'sharp under action';
-    return `Total: ${movement.oldText} → ${movement.newText} ${arrow} (${action})`;
+    return uiKV('📊', 'Total', `${movement.oldText} -> ${movement.newText} ${arrow} | ${action}`);
   }
 
-  return `Moneyline: ${movement.teamLabel} moved from ${movement.oldText} → ${movement.newText} ${arrow}`;
+  return uiKV('💰', 'Moneyline', `${movement.teamLabel} | ${movement.oldText} -> ${movement.newText} ${arrow}`);
 }
 
 function formatMovementAlert({ snapshot, movements }) {
   const edge = formatOriginalModelEdge(snapshot.originalModelEdge);
   return [
-    '📊 Line Movement Alert',
-    snapshot.matchup,
+    uiTitle('📊', 'Line Movement Alert'),
+    uiKV('🏟️', 'Matchup', snapshot.matchup),
     ...movements.map(formatMovementLine),
-    'This may indicate sharp money.',
-    edge ? `Original model edge: ${edge}` : null
+    uiBullet('⚠️', 'This may indicate sharp money.'),
+    edge ? uiKV('🎯', 'Original model edge', edge) : null
   ]
     .filter(Boolean)
     .join('\n');

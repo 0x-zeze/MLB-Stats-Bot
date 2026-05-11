@@ -4,6 +4,7 @@ import {
   ANALYST_SKILL_VERSION,
   ANALYST_SYSTEM_PROMPT
 } from './analystSkill.js';
+import { uiKV, uiTitle } from './telegramFormat.js';
 
 function trimSlash(value) {
   return String(value || '').replace(/\/+$/, '');
@@ -421,16 +422,28 @@ function findAnalysisArray(value, depth = 0) {
   return null;
 }
 
-function normalizeInteractiveAnswer(text) {
+export function stripHiddenReasoning(text) {
   if (!text) return null;
 
-  const trimmed = String(text).trim();
+  return String(text)
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    .replace(/^\s*<think>[\s\S]*$/i, '')
+    .trim();
+}
+
+export function normalizeInteractiveAnswer(text) {
+  const cleaned = stripHiddenReasoning(text);
+  if (!cleaned) return null;
+
+  const trimmed = cleaned.trim();
   const parsed = extractJson(trimmed);
   if (!parsed) return trimmed;
 
-  if (typeof parsed.answer === 'string') return parsed.answer.trim();
-  if (typeof parsed.text === 'string') return parsed.text.trim();
-  if (typeof parsed.message === 'string') return parsed.message.trim();
+  if (typeof parsed.answer === 'string') return stripHiddenReasoning(parsed.answer);
+  if (typeof parsed.text === 'string') return stripHiddenReasoning(parsed.text);
+  if (typeof parsed.message === 'string') return stripHiddenReasoning(parsed.message);
 
   const lines = [];
   if (parsed.bestGame) lines.push(`Pilihan terkuat: ${parsed.bestGame}`);
@@ -442,6 +455,102 @@ function normalizeInteractiveAnswer(text) {
   if (parsed.risk) lines.push(`Risk: ${parsed.risk}`);
 
   return lines.length > 0 ? lines.join('\n') : trimmed;
+}
+
+function asksForTopPicks(question) {
+  const text = String(question || '').toLowerCase();
+  const pickIntent =
+    /\b(best|top|strongest|terkuat|terbaik)\b/.test(text) &&
+    /\b(pick|picks|pilihan|lean|rekomendasi)\b/.test(text);
+  const fiveIntent = /\b(5|five|lima)\b/.test(text);
+  return pickIntent && fiveIntent;
+}
+
+function confidenceScore(label) {
+  return { high: 3, medium: 1.5, low: 0 }[String(label || '').toLowerCase()] || 0;
+}
+
+function teamSideForPick(prediction) {
+  const pickId = prediction.agentAnalysis?.pickTeamId ?? prediction.winner?.id;
+  if (String(pickId) === String(prediction.away?.id)) return 'away';
+  if (String(pickId) === String(prediction.home?.id)) return 'home';
+  return toNumber(prediction.home?.winProbability, 50) >= toNumber(prediction.away?.winProbability, 50)
+    ? 'home'
+    : 'away';
+}
+
+function topPickCandidate(prediction) {
+  const side = teamSideForPick(prediction);
+  const pick = side === 'away' ? prediction.away : prediction.home;
+  const opponent = side === 'away' ? prediction.home : prediction.away;
+  const probability = normalizeProbability(
+    side === 'away'
+      ? prediction.agentAnalysis?.awayProbability ?? prediction.away?.winProbability
+      : prediction.agentAnalysis?.homeProbability ?? prediction.home?.winProbability,
+    50
+  );
+  const confidence = prediction.agentAnalysis?.confidence || deterministicConfidenceFromPrediction(prediction, probability);
+  const edge = toNumber(prediction.betDecision?.edge ?? prediction.valuePick?.edge, 0);
+  const matchupEdge = Math.abs(toNumber(prediction.modelBreakdown?.matchupEdge, 0)) * 10;
+  const status = String(prediction.betDecision?.status || 'LEAN ONLY').toUpperCase();
+  const statusBoost = status === 'VALUE' ? 5 : status === 'NO BET' ? -4 : 0;
+  const score = probability - 50 + Math.max(edge, 0) * 0.8 + confidenceScore(confidence) + matchupEdge + statusBoost;
+
+  return {
+    prediction,
+    side,
+    pick,
+    opponent,
+    probability,
+    confidence,
+    score,
+    status
+  };
+}
+
+function shortReason(candidate) {
+  const { prediction } = candidate;
+  const reasons = [
+    ...(prediction.agentAnalysis?.reasons || []),
+    ...(prediction.reasons || [])
+  ]
+    .map((reason) => String(reason || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  const uniqueReasons = [...new Set(reasons)];
+  if (uniqueReasons.length > 0) {
+    return uniqueReasons[0].replace(/\.$/, '');
+  }
+
+  const starterLine =
+    candidate.side === 'away' ? prediction.away?.starterLine : prediction.home?.starterLine;
+  if (starterLine) return String(starterLine).replace(/\.$/, '');
+  if (prediction.contextLine) return String(prediction.contextLine).replace(/\.$/, '');
+  return 'model memberi edge matchup paling jelas di slate ini';
+}
+
+export function buildTopPicksAnswer(predictions, question = '', limit = 5) {
+  if (!asksForTopPicks(question) || !Array.isArray(predictions) || predictions.length === 0) {
+    return null;
+  }
+
+  const candidates = predictions
+    .map(topPickCandidate)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit);
+
+  if (candidates.length === 0) return null;
+
+  const lines = [uiTitle('🏆', 'Top 5 Pick Model | Hari Ini'), ''];
+  candidates.forEach((candidate, index) => {
+    const pickLabel = candidate.pick?.abbreviation || candidate.pick?.name || 'TBD';
+    const opponentLabel = candidate.opponent?.abbreviation || candidate.opponent?.name || 'TBD';
+    lines.push(`${index + 1}. 🎯 ${pickLabel} ML vs ${opponentLabel}`);
+    lines.push(`   ${uiKV('✅', 'Prediksi menang', `${candidate.pick?.name || pickLabel} | ${candidate.probability}% | ${candidate.confidence}`)}`);
+    lines.push(`   ${uiKV('💡', 'Alasan', `${shortReason(candidate)}.`)}`);
+  });
+
+  return lines.join('\n');
 }
 
 async function analyzeWithExternalAgent(config, predictions, memorySummary) {
@@ -591,6 +700,9 @@ async function askLocalAgent(config, { question, dateYmd, predictions, memorySum
 
 export async function answerInteractiveQuestion(config, payload) {
   if (!config.interactiveAgent) return null;
+
+  const deterministicAnswer = buildTopPicksAnswer(payload.predictions, payload.question);
+  if (deterministicAnswer) return deterministicAnswer;
 
   if (config.analystAgent.mode === 'external') {
     return askExternalAgent(config, payload);

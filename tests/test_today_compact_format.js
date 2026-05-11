@@ -55,8 +55,8 @@ test('compact today format lists all supplied games with only core fields', () =
   assert.match(output, /Away One @ Home One/);
   assert.match(output, /Away Two @ Home Two/);
   assert.match(output, /Away Three @ Home Three/);
-  assert.match(output, /Probabilitas:/);
-  assert.match(output, /Pick Model: Home One/);
+  assert.match(output, /Probabilitas \|/);
+  assert.match(output, /Pick Model \| Home One/);
   assert.doesNotMatch(output, /Context should be hidden/);
   assert.doesNotMatch(output, /Main Factors/);
   assert.doesNotMatch(output, /\+ 1 game lain/);

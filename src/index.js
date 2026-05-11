@@ -17,6 +17,7 @@ import {
 } from './mlb.js';
 import { Storage } from './storage.js';
 import { setupWebhook, TelegramBot } from './telegram.js';
+import { UI_LINE, UI_THIN_LINE, uiBullet, uiCommand, uiKV, uiSection, uiTitle } from './telegramFormat.js';
 import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils.js';
 import { startDashboard } from './dashboard.js';
 import {
@@ -122,31 +123,32 @@ const AUDIT_COMMAND = {
 
 function helpText() {
   return [
-    'MLB Alert Bot siap.',
+    uiTitle('⚾', 'MLB Alert Bot | siap'),
     '',
-    'Command:',
-    '/today - list ringkas semua game hari ini',
-    '/deep - semua game dengan statistik lengkap',
-    '/date YYYY-MM-DD - alert tanggal tertentu',
-    '/game TEAM - cek tim tertentu hari ini',
-    '/predict - pilih game MLB dari tombol',
-    '/agenttools - tools interaktif data/knowledge layer',
-    '/kb pertanyaan - tanya knowledge base MLB',
-    '/ask pertanyaan - tanya Analyst Agent',
-    'Atau kirim pertanyaan biasa tanpa slash.',
-    '/agent - lihat status Analyst Agent',
-    '/skill - lihat playbook analisa Agent',
-    '/postgame YYYY-MM-DD - cek recap final dan update memory',
-    '/memory - lihat performa memory model',
-    '/evolve - menu Agent Evolution Engine',
-    '/audit - diagnosis kelemahan Agent Evolution',
-    '/autoupdate on|off|time HH:mm|status - atur update otomatis',
-    '/subscribe - aktifkan auto-alert di chat ini',
-    '/unsubscribe - matikan auto-alert',
-    '/sendalert - kirim alert hari ini ke subscriber',
-    '/linecheck - cek line movement vs odds tersimpan',
-    '/linealerts on|off|status - atur notifikasi line movement',
-    '/chatid - lihat chat id'
+    uiSection('📋', 'Command'),
+    uiCommand('/today', 'list ringkas semua game hari ini'),
+    uiCommand('/deep', 'semua game dengan statistik lengkap'),
+    uiCommand('/date YYYY-MM-DD', 'alert tanggal tertentu'),
+    uiCommand('/game TEAM', 'cek tim tertentu hari ini'),
+    uiCommand('/predict', 'pilih game MLB dari tombol'),
+    uiCommand('/agenttools', 'tools interaktif data/knowledge layer'),
+    uiCommand('/kb pertanyaan', 'tanya knowledge base MLB'),
+    uiCommand('/ask pertanyaan', 'tanya Analyst Agent'),
+    uiCommand('/agent', 'lihat status Analyst Agent'),
+    uiCommand('/skill', 'lihat playbook analisa Agent'),
+    uiCommand('/postgame YYYY-MM-DD', 'recap final dan update memory'),
+    uiCommand('/memory', 'lihat performa memory model'),
+    uiCommand('/evolve', 'menu Agent Evolution Engine'),
+    uiCommand('/audit', 'diagnosis kelemahan Agent Evolution'),
+    uiCommand('/autoupdate on|off|time HH:mm|status', 'atur update otomatis'),
+    uiCommand('/subscribe', 'aktifkan auto-alert di chat ini'),
+    uiCommand('/unsubscribe', 'matikan auto-alert'),
+    uiCommand('/sendalert', 'kirim alert hari ini ke subscriber'),
+    uiCommand('/linecheck', 'cek line movement vs odds tersimpan'),
+    uiCommand('/linealerts on|off|status', 'atur notifikasi line movement'),
+    uiCommand('/chatid', 'lihat chat id'),
+    '',
+    uiBullet('💬', 'Pertanyaan biasa tanpa slash tetap masuk ke Analyst Agent.')
   ].join('\n');
 }
 
@@ -299,7 +301,7 @@ function maybeStartLineMonitor(predictions, chatId, dateYmd) {
 }
 
 async function sendAlert(bot, chatId, dateYmd, options = {}) {
-  await bot.sendMessage(chatId, `Mengambil data MLB ${dateYmd}...`);
+  await bot.sendMessage(chatId, uiKV('⏳', 'Mengambil data MLB', dateYmd));
   const { text, predictions } = await buildAlertPayload(dateYmd, options);
   await bot.sendMessage(chatId, text);
   maybeStartLineMonitor(predictions, chatId, dateYmd);
@@ -308,18 +310,19 @@ async function sendAlert(bot, chatId, dateYmd, options = {}) {
 
 function predictionHelpText() {
   return [
-    'Kirim /predict untuk memilih game dari tombol.',
+    uiTitle('📊', 'MLB Prediction | help'),
     '',
-    'Format manual: /predict HOME | AWAY | odds_opsional',
+    uiKV('🧭', 'Menu', '/predict'),
+    uiKV('⌨️', 'Manual', '/predict HOME | AWAY | odds_opsional'),
     '',
-    'Contoh:',
-    '/predict',
-    '/predict 2026-04-27',
-    '/predict Los Angeles Dodgers | New York Yankees',
-    '/predict Los Angeles Dodgers | New York Yankees | -120',
-    '/predict Los Angeles Dodgers | New York Yankees | decimal 1.91',
+    uiSection('💡', 'Contoh'),
+    uiCommand('/predict', 'pilih game dari tombol'),
+    uiCommand('/predict 2026-04-27', 'pilih game tanggal tertentu'),
+    uiCommand('/predict Los Angeles Dodgers | New York Yankees', 'manual matchup'),
+    uiCommand('/predict Los Angeles Dodgers | New York Yankees | -120', 'manual + American odds'),
+    uiCommand('/predict Los Angeles Dodgers | New York Yankees | decimal 1.91', 'manual + decimal odds'),
     '',
-    'Catatan: /predict tanpa matchup memakai schedule MLB live. Setelah game dipilih, tombol Total 6.5-11.5 bisa dipakai untuk cek market total. Format manual memakai Python ML engine dan sample CSV lokal.'
+    uiBullet('⚠️', '/predict tanpa matchup memakai schedule MLB live. Tombol Total 6.5-11.5 dipakai untuk cek market total.')
   ].join('\n');
 }
 
@@ -363,10 +366,11 @@ async function sendPredictionGameMenu(bot, chatId, dateYmd = '') {
     await bot.sendMessage(
       chatId,
       [
-        `Tidak ada game MLB pada ${targetDate}.`,
+        uiTitle('📊', 'MLB Prediction | game list'),
+        uiKV('📅', 'Tanggal', targetDate),
         '',
-        'Kamu tetap bisa pakai format manual:',
-        '/predict Los Angeles Dodgers | New York Yankees'
+        uiBullet('⚠️', 'Tidak ada game MLB pada tanggal ini.'),
+        uiCommand('/predict Los Angeles Dodgers | New York Yankees', 'pakai format manual')
       ].join('\n')
     );
     return;
@@ -375,11 +379,11 @@ async function sendPredictionGameMenu(bot, chatId, dateYmd = '') {
   await bot.sendMessage(
     chatId,
     [
-      '📊 Pilih game untuk MLB prediction:',
-      `Tanggal: ${targetDate}`,
-      `Sumber: MLB StatsAPI live schedule (${games.length} game)`,
+      uiTitle('📊', 'Pilih Game | MLB prediction'),
+      uiKV('📅', 'Tanggal', targetDate),
+      uiKV('📡', 'Sumber', `MLB StatsAPI live schedule | ${games.length} game`),
       '',
-      'Tap salah satu matchup di bawah.'
+      uiBullet('👇', 'Tap salah satu matchup di bawah.')
     ].join('\n'),
     {
       reply_markup: predictionKeyboard(targetDate, games)
@@ -543,33 +547,33 @@ function runPythonModule(moduleName, args = [], options = {}) {
 
 function formatPythonPredictionOutput(output) {
   return [
-    '📊 MLB Python Prediction',
+    uiTitle('📊', 'MLB Python Prediction'),
     '',
     output,
     '',
-    '⚠️ Estimasi model, bukan jaminan hasil atau betting advice.'
+    uiBullet('⚠️', 'Estimasi model, bukan jaminan hasil atau betting advice.')
   ].join('\n');
 }
 
 function evolutionHelpText() {
   return [
-    'MLB Agent Evolution Engine',
+    uiTitle('🧠', 'MLB Agent Evolution | help'),
     '',
-    'Pakai dari Telegram:',
-    '/evolve - jalankan evolution cycle dari history/post-game',
-    '/evolve run - sama seperti /evolve',
-    '/evolve summary - ringkasan evolution',
-    '/evolve logtoday - simpan trajectory pre-game hari ini',
-    '/evolve evaluate - evaluasi game kemarin',
-    '/evolve lessons - cek lesson tersimpan',
-    '/evolve loss - generate language loss',
-    '/evolve gradient - generate language gradient',
-    '/evolve propose - propose symbolic update',
-    '/evolve rules - propose rule candidate',
-    '/evolve backtest - cek candidate yang perlu backtest',
-    '/evolve promote - cek status promotion gate',
+    uiSection('📋', 'Telegram command'),
+    uiCommand('/evolve', 'jalankan evolution cycle dari history/post-game'),
+    uiCommand('/evolve run', 'sama seperti /evolve'),
+    uiCommand('/evolve summary', 'ringkasan evolution'),
+    uiCommand('/evolve logtoday', 'simpan trajectory pre-game hari ini'),
+    uiCommand('/evolve evaluate', 'evaluasi game kemarin'),
+    uiCommand('/evolve lessons', 'cek lesson tersimpan'),
+    uiCommand('/evolve loss', 'generate language loss'),
+    uiCommand('/evolve gradient', 'generate language gradient'),
+    uiCommand('/evolve propose', 'propose symbolic update'),
+    uiCommand('/evolve rules', 'propose rule candidate'),
+    uiCommand('/evolve backtest', 'cek candidate yang perlu backtest'),
+    uiCommand('/evolve promote', 'cek status promotion gate'),
     '',
-    'Catatan: command ini tidak auto-ubah production. Semua candidate tetap butuh backtest dan promotion gate.'
+    uiBullet('🛡️', 'Tidak auto-ubah production. Semua candidate tetap butuh backtest dan promotion gate.')
   ].join('\n');
 }
 
@@ -584,22 +588,22 @@ function parseJsonOutput(output) {
 function formatEvolutionSummary(payload) {
   const summary = payload.summary || {};
   return [
-    'MLB Agent Evolution Summary',
+    uiTitle('🧠', 'MLB Agent Evolution | summary'),
     '',
-    `Evaluated: ${summary.total_predictions_evaluated || 0}`,
-    `Lessons: ${summary.lessons_generated || 0}`,
-    `Language loss: ${summary.language_losses_generated || 0}`,
-    `Language gradient: ${summary.language_gradients_generated || 0}`,
-    `Candidates: ${summary.candidates_proposed || 0}`,
-    `Approved: ${summary.candidates_approved || 0}`,
-    `Rejected: ${summary.candidates_rejected || 0}`,
+    uiKV('📊', 'Evaluated', summary.total_predictions_evaluated || 0),
+    uiKV('📚', 'Lessons', summary.lessons_generated || 0),
+    uiKV('⚠️', 'Language loss', summary.language_losses_generated || 0),
+    uiKV('🧭', 'Language gradient', summary.language_gradients_generated || 0),
+    uiKV('🧪', 'Candidates', summary.candidates_proposed || 0),
+    uiKV('✅', 'Approved', summary.candidates_approved || 0),
+    uiKV('❌', 'Rejected', summary.candidates_rejected || 0),
     '',
-    'Active versions:',
-    `Prompt: ${summary.current_prompt_version || '-'}`,
-    `Rules: ${summary.current_rule_version || '-'}`,
-    `Weights: ${summary.current_weight_version || '-'}`,
+    uiSection('🏷️', 'Active versions'),
+    uiKV('💬', 'Prompt', summary.current_prompt_version || '-'),
+    uiKV('📏', 'Rules', summary.current_rule_version || '-'),
+    uiKV('⚖️', 'Weights', summary.current_weight_version || '-'),
     '',
-    'Lihat detail di dashboard tab Evolution.'
+    uiBullet('📌', 'Lihat detail di dashboard tab Evolution.')
   ].join('\n');
 }
 
@@ -608,26 +612,26 @@ function formatEvolutionCycleResult(payload) {
   const ingest = payload.ingest || {};
   const summary = payload.summary || {};
   return [
-    'MLB Agent Evolution Run',
+    uiTitle('🧠', 'MLB Agent Evolution | run'),
     '',
-    `Post-game dates checked: ${postgame.dates_checked || 0}`,
-    `New games learned into memory: ${postgame.learned_games || 0}`,
-    `History rows found: ${ingest.history_rows || 0}`,
-    `Evolution evaluations added: ${ingest.evaluated || 0}`,
-    `Duplicates skipped: ${ingest.skipped_duplicates || 0}`,
-    `Lessons added: ${ingest.lessons || 0}`,
-    `Language losses added: ${ingest.language_losses || 0}`,
-    `Language gradients added: ${ingest.language_gradients || 0}`,
-    `Symbolic candidates added: ${payload.symbolic_candidates || 0}`,
-    `Rule candidates added: ${payload.rule_candidates || 0}`,
+    uiKV('🏁', 'Post-game dates checked', postgame.dates_checked || 0),
+    uiKV('🧠', 'New games learned', postgame.learned_games || 0),
+    uiKV('📚', 'History rows found', ingest.history_rows || 0),
+    uiKV('📊', 'Evaluations added', ingest.evaluated || 0),
+    uiKV('♻️', 'Duplicates skipped', ingest.skipped_duplicates || 0),
+    uiKV('📘', 'Lessons added', ingest.lessons || 0),
+    uiKV('⚠️', 'Language losses added', ingest.language_losses || 0),
+    uiKV('🧭', 'Language gradients added', ingest.language_gradients || 0),
+    uiKV('🧪', 'Symbolic candidates added', payload.symbolic_candidates || 0),
+    uiKV('📏', 'Rule candidates added', payload.rule_candidates || 0),
     '',
-    'Current totals:',
-    `Evaluated: ${summary.total_predictions_evaluated || 0}`,
-    `Lessons: ${summary.lessons_generated || 0}`,
-    `Gradients: ${summary.language_gradients_generated || 0}`,
-    `Candidates: ${summary.candidates_proposed || 0}`,
+    uiSection('📌', 'Current totals'),
+    uiKV('📊', 'Evaluated', summary.total_predictions_evaluated || 0),
+    uiKV('📚', 'Lessons', summary.lessons_generated || 0),
+    uiKV('🧭', 'Gradients', summary.language_gradients_generated || 0),
+    uiKV('🧪', 'Candidates', summary.candidates_proposed || 0),
     '',
-    'Safety: candidate tidak auto-promote. Rules/prompt/weights production tetap menunggu backtest dan promotion gate.'
+    uiBullet('🛡️', 'Candidate tidak auto-promote. Rules/prompt/weights production tetap menunggu backtest dan promotion gate.')
   ].join('\n');
 }
 
@@ -636,7 +640,7 @@ function formatAuditSegment(segment) {
     ? `${segment.wins || 0}-${segment.losses || 0}`
     : `${segment.no_bets || 0} no-bet`;
   const rate = segment.decided ? `${segment.accuracy || 0}%` : `NB quality ${segment.no_bet_quality || 0}%`;
-  return `• ${segment.segment}: ${record}, ${rate} (${segment.sample_size || 0} sample)`;
+  return uiBullet('•', `${segment.segment} | ${record} | ${rate} | ${segment.sample_size || 0} sample`);
 }
 
 function formatEvolutionAudit(payload) {
@@ -647,34 +651,34 @@ function formatEvolutionAudit(payload) {
   const candidates = payload.candidate_priorities || [];
 
   return [
-    'MLB Agent Evolution Audit',
+    uiTitle('🔎', 'MLB Agent Evolution | audit'),
     '',
-    `Evaluated: ${summary.evaluated || 0}`,
-    `Decided: ${summary.decided || 0}`,
-    `Record: ${summary.wins || 0}-${summary.losses || 0}`,
-    `Accuracy: ${summary.accuracy || 0}%`,
-    `No Bet: ${summary.no_bets || 0}`,
-    summary.average_clv !== null && summary.average_clv !== undefined ? `Avg CLV: ${summary.average_clv}` : null,
+    uiKV('📊', 'Evaluated', summary.evaluated || 0),
+    uiKV('🎯', 'Decided', summary.decided || 0),
+    uiKV('🏁', 'Record', `${summary.wins || 0}-${summary.losses || 0}`),
+    uiKV('📈', 'Accuracy', `${summary.accuracy || 0}%`),
+    uiKV('🛑', 'No Bet', summary.no_bets || 0),
+    summary.average_clv !== null && summary.average_clv !== undefined ? uiKV('📉', 'Avg CLV', summary.average_clv) : null,
     '',
-    'Weakest segments:',
-    ...(weakest.length ? weakest.slice(0, 4).map(formatAuditSegment) : ['• Belum cukup sample segment.']),
+    uiSection('⚠️', 'Weakest segments'),
+    ...(weakest.length ? weakest.slice(0, 4).map(formatAuditSegment) : [uiBullet('•', 'Belum cukup sample segment.')]),
     '',
-    'Root causes:',
+    uiSection('🧩', 'Root causes'),
     ...(causes.length
-      ? causes.slice(0, 5).map((cause) => `• ${cause.loss_type}: ${cause.count}x (${cause.primary_factor})`)
-      : ['• Belum ada language loss.']),
+      ? causes.slice(0, 5).map((cause) => uiBullet('•', `${cause.loss_type} | ${cause.count}x | ${cause.primary_factor}`))
+      : [uiBullet('•', 'Belum ada language loss.')]),
     '',
-    'Top fixes:',
+    uiSection('🛠️', 'Top fixes'),
     ...(recommendations.length
       ? recommendations.slice(0, 4).map((item, index) => `${index + 1}. ${item.recommendation}`)
       : ['1. Jalankan /evolve setelah post-game agar loss/lesson bertambah.']),
     '',
-    'Candidate priority:',
+    uiSection('🧪', 'Candidate priority'),
     ...(candidates.length
-      ? candidates.slice(0, 3).map((item) => `• ${item.type}: score ${item.priority_score}, backtest ${item.backtest_status}`)
-      : ['• Belum ada candidate prioritas.']),
+      ? candidates.slice(0, 3).map((item) => uiBullet('•', `${item.type} | score ${item.priority_score} | backtest ${item.backtest_status}`))
+      : [uiBullet('•', 'Belum ada candidate prioritas.')]),
     '',
-    'Safety: audit hanya diagnosis. Tidak auto-ubah rules/prompt/weights.'
+    uiBullet('🛡️', 'Audit hanya diagnosis. Tidak auto-ubah rules/prompt/weights.')
   ]
     .filter((line) => line !== null && line !== undefined)
     .join('\n');
@@ -682,17 +686,17 @@ function formatEvolutionAudit(payload) {
 
 function formatKeyValuePayload(title, payload) {
   if (payload.raw) {
-    return [title, '', payload.raw].join('\n');
+    return [uiTitle('📦', title), '', payload.raw].join('\n');
   }
 
   const lines = Object.entries(payload).map(([key, value]) => {
     const label = key.replace(/_/g, ' ');
-    if (Array.isArray(value)) return `${label}: ${value.length}`;
-    if (value && typeof value === 'object') return `${label}: ${JSON.stringify(value)}`;
-    return `${label}: ${value}`;
+    if (Array.isArray(value)) return uiKV('•', label, value.length);
+    if (value && typeof value === 'object') return uiKV('•', label, JSON.stringify(value));
+    return uiKV('•', label, value);
   });
 
-  return [title, '', ...(lines.length ? lines : ['Tidak ada perubahan.'])].join('\n');
+  return [uiTitle('📦', title), '', ...(lines.length ? lines : [uiBullet('•', 'Tidak ada perubahan.')])].join('\n');
 }
 
 function formatEvolutionResult(action, payload) {
@@ -749,7 +753,7 @@ async function handleEvolutionCommand(bot, chatId, args) {
     }
   }
 
-  await bot.sendMessage(chatId, `Menjalankan ${commandConfig.label}...`);
+  await bot.sendMessage(chatId, uiKV('⏳', 'Menjalankan', commandConfig.label));
   const postgame = action === 'run' ? await processStoredPostGamesForEvolution() : null;
   const output = await runPythonModule(commandConfig.module, commandArgs, {
     timeoutMessage: 'Evolution command timeout. Coba lagi sebentar.',
@@ -761,7 +765,7 @@ async function handleEvolutionCommand(bot, chatId, args) {
 }
 
 async function handleAuditCommand(bot, chatId) {
-  await bot.sendMessage(chatId, 'Menjalankan Evolution audit...');
+  await bot.sendMessage(chatId, uiKV('⏳', 'Menjalankan', 'Evolution audit'));
   const output = await runPythonModule(AUDIT_COMMAND.module, AUDIT_COMMAND.args, {
     timeoutMessage: 'Audit command timeout. Coba lagi sebentar.',
     timeoutMs: 90_000
@@ -838,21 +842,21 @@ function agentKnowledgeKeyboard() {
 async function sendAgentToolsMenu(bot, chatId) {
   await bot.sendMessage(
     chatId,
-    ['MLB Agent Tools', '', 'Pilih action:'].join('\n'),
+    [uiTitle('🧰', 'MLB Agent Tools'), '', uiBullet('👇', 'Pilih action.')].join('\n'),
     { reply_markup: agentToolHomeKeyboard() }
   );
 }
 
 async function sendAgentToolGames(bot, chatId) {
   const payload = await runAgentBridge('games');
-  await bot.sendMessage(chatId, payload.text || 'Pilih game:', {
+  await bot.sendMessage(chatId, payload.text || uiTitle('📋', 'Pilih Game'), {
     reply_markup: agentToolGamesKeyboard(payload.games || [])
   });
 }
 
 async function sendKnowledgeAnswer(bot, chatId, query) {
   const payload = await runAgentBridge('knowledge', [query]);
-  await bot.sendMessage(chatId, payload.text || 'Knowledge tidak tersedia.', {
+  await bot.sendMessage(chatId, payload.text || uiBullet('⚠️', 'Knowledge tidak tersedia.'), {
     reply_markup: agentKnowledgeKeyboard()
   });
 }
@@ -886,17 +890,17 @@ function sumNumberValues(...values) {
 
 function totalProbabilityLines(label, probabilities) {
   return TOTAL_MARKET_BUTTONS.map(
-    (line) => `• ${label} ${line}: ${percent(probabilities[String(line)] || 0)}`
+    (line) => uiKV('•', `${label} ${line}`, percent(probabilities[String(line)] || 0))
   );
 }
 
 function totalDriverLines(totalDetail) {
   return [
-    `• Offense: ${signedRuns(sumNumberValues(totalDetail.homeOffense, totalDetail.awayOffense))}`,
-    `• Starting pitcher: ${signedRuns(sumNumberValues(totalDetail.homeStarterAllowed, totalDetail.awayStarterAllowed))}`,
-    `• Bullpen: ${signedRuns(sumNumberValues(totalDetail.homeBullpenAllowed, totalDetail.awayBullpenAllowed))}`,
-    `• Weather: ${signedRuns(totalDetail.weather)}`,
-    `• Lineup: ${signedRuns(sumNumberValues(totalDetail.homeLineupAdj, totalDetail.awayLineupAdj))}`
+    uiKV('•', 'Offense', signedRuns(sumNumberValues(totalDetail.homeOffense, totalDetail.awayOffense))),
+    uiKV('•', 'Starting pitcher', signedRuns(sumNumberValues(totalDetail.homeStarterAllowed, totalDetail.awayStarterAllowed))),
+    uiKV('•', 'Bullpen', signedRuns(sumNumberValues(totalDetail.homeBullpenAllowed, totalDetail.awayBullpenAllowed))),
+    uiKV('•', 'Weather', signedRuns(totalDetail.weather)),
+    uiKV('•', 'Lineup', signedRuns(sumNumberValues(totalDetail.homeLineupAdj, totalDetail.awayLineupAdj)))
   ];
 }
 
@@ -905,7 +909,7 @@ function lineupContextLines(lineupLine) {
     .split(' | ')
     .filter(Boolean);
 
-  return lines.length ? lines.map((line) => `• ${line}`) : ['• Lineup: belum tersedia'];
+  return lines.length ? lines.map((line) => uiBullet('•', line)) : [uiKV('•', 'Lineup', 'belum tersedia')];
 }
 
 function formatLivePrediction(dateYmd, prediction, options = {}) {
@@ -934,76 +938,76 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
   const totalDetail = totalRuns?.detail || {};
   const totalRunLines = totalRuns
     ? [
-        '📌 Projection',
-        `• Projected total: ${totalRuns.projectedTotal.toFixed(1)} runs`,
-        `• Expected runs: ${prediction.away.abbreviation || prediction.away.name} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${prediction.home.abbreviation || prediction.home.name} ${totalRuns.homeExpectedRuns.toFixed(1)}`,
-        `• Market total: ${totalRuns.marketLine} (${signedRuns(totalRuns.marketDeltaRuns)} runs vs model)`,
-        `• Best lean: ${totalRuns.bestLean} (${totalRuns.confidence})`,
-        `• Model edge: ${signedRuns(totalRuns.modelEdge)}% vs 50% baseline`,
+        uiSection('📌', 'Projection'),
+        uiKV('•', 'Projected total', `${totalRuns.projectedTotal.toFixed(1)} runs`),
+        uiKV('•', 'Expected runs', `${prediction.away.abbreviation || prediction.away.name} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${prediction.home.abbreviation || prediction.home.name} ${totalRuns.homeExpectedRuns.toFixed(1)}`),
+        uiKV('•', 'Market total', `${totalRuns.marketLine} | ${signedRuns(totalRuns.marketDeltaRuns)} runs vs model`),
+        uiKV('•', 'Best lean', `${totalRuns.bestLean} | ${totalRuns.confidence}`),
+        uiKV('•', 'Model edge', `${signedRuns(totalRuns.modelEdge)}% vs 50% baseline`),
         '',
-        '📈 Over Probability',
+        uiSection('📈', 'Over Probability'),
         ...totalProbabilityLines('Over', totalRuns.over),
         '',
-        '📉 Under Probability',
+        uiSection('📉', 'Under Probability'),
         ...totalProbabilityLines('Under', totalRuns.under),
         '',
-        '⚙️ Run Drivers',
+        uiSection('⚙️', 'Run Drivers'),
         ...totalDriverLines(totalDetail),
         '',
-        '🏟 Context',
-        `• Park: ${totalRuns.detail?.park?.label || prediction.venue} (Run PF ${totalRuns.detail?.park?.runFactorPct || 100}, HR PF ${totalRuns.detail?.park?.homeRunFactorPct || 100})`,
+        uiSection('🏟️', 'Context'),
+        uiKV('•', 'Park', `${totalRuns.detail?.park?.label || prediction.venue} | Run PF ${totalRuns.detail?.park?.runFactorPct || 100} | HR PF ${totalRuns.detail?.park?.homeRunFactorPct || 100}`),
         ...lineupContextLines(prediction.lineupLine),
         '',
-        '🧾 Main Factors',
+        uiSection('🧾', 'Main Factors'),
         ...totalRuns.factors.slice(0, 4).map((factor) => `• ${factor}`)
       ]
     : ['Data total runs tidak tersedia.'];
 
   return [
-    '📊 MLB Prediction',
-    `📅 ${dateYmd}`,
+    uiTitle('📊', 'MLB Prediction'),
+    uiKV('📅', 'Tanggal', dateYmd),
     '',
-    `🏟️ ${prediction.away.name} @ ${prediction.home.name}`,
-    `🕒 ${prediction.start}`,
-    `📍 ${prediction.venue}`,
+    uiKV('🏟️', 'Matchup', `${prediction.away.name} @ ${prediction.home.name}`),
+    uiKV('🕒', 'Waktu', prediction.start),
+    uiKV('📍', 'Stadium', prediction.venue),
     '',
-    '────────────',
-    '🏆 Hasil Predict',
-    `Predicted Winner: ${pick.name}`,
-    `Win Probability: ${percent(pickProbability)}`,
-    `Opponent: ${opponent.name} ${percent(opponentProbability)}`,
-    `Confidence: ${confidence}`,
+    UI_THIN_LINE,
+    uiSection('🏆', 'Hasil Predict'),
+    uiKV('✅', 'Predicted Winner', pick.name),
+    uiKV('📈', 'Win Probability', percent(pickProbability)),
+    uiKV('🥊', 'Opponent', `${opponent.name} | ${percent(opponentProbability)}`),
+    uiKV('🎚️', 'Confidence', confidence),
     ...moneylineDecisionLines(prediction),
-    `Source: ${agentActive ? 'Analyst Agent + live MLB stats' : 'Baseline model + live MLB stats'}`,
+    uiKV('📡', 'Source', agentActive ? 'Analyst Agent + live MLB stats' : 'Baseline model + live MLB stats'),
     '',
-    '────────────',
-    '📊 Probabilitas Detail',
-    `${prediction.away.abbreviation || prediction.away.name}: ${percent(probabilities.away)} | ${prediction.home.abbreviation || prediction.home.name}: ${percent(probabilities.home)}`,
+    UI_THIN_LINE,
+    uiSection('📊', 'Probabilitas Detail'),
+    uiKV('📊', 'Model', `${prediction.away.abbreviation || prediction.away.name} ${percent(probabilities.away)} | ${prediction.home.abbreviation || prediction.home.name} ${percent(probabilities.home)}`),
     agentActive
-      ? `Baseline: ${prediction.away.abbreviation || prediction.away.name} ${percent(prediction.away.winProbability)} | ${prediction.home.abbreviation || prediction.home.name} ${percent(prediction.home.winProbability)}`
+      ? uiKV('📐', 'Baseline', `${prediction.away.abbreviation || prediction.away.name} ${percent(prediction.away.winProbability)} | ${prediction.home.abbreviation || prediction.home.name} ${percent(prediction.home.winProbability)}`)
       : null,
     '',
-    '────────────',
-    '🔥 Starting Pitcher',
+    UI_THIN_LINE,
+    uiSection('🔥', 'Starting Pitcher'),
     `${prediction.away.starterLine} vs ${prediction.home.starterLine}`,
     '',
-    '🏥 Injury Report',
+    uiSection('🏥', 'Injury Report'),
     ...injuryLines,
     '',
-    '🧠 ML Reference',
+    uiSection('🧠', 'ML Reference'),
     ...modelReferenceLines,
     '',
-    'First Inning',
-    `Will there be a run in the 1st? ${firstLabel} ${percent(firstProbability)}`,
+    uiSection('🏁', 'First Inning'),
+    uiKV('🏁', 'Run in 1st', `${firstLabel} | ${percent(firstProbability)}`),
     '',
-    '🏃 Total Runs / Over-Under',
+    uiSection('🏃', 'Total Runs / Over-Under'),
     ...totalRunLines,
     '',
-    'Alasan:',
+    uiSection('💡', 'Alasan'),
     ...reasons.slice(0, 3).map((reason) => `• ${reason}`),
-    agentActive ? `Risk: ${prediction.agentAnalysis.risk}` : null,
+    agentActive ? uiKV('⚠️', 'Risk', prediction.agentAnalysis.risk) : null,
     '',
-    '⚠️ Estimasi model, bukan jaminan hasil atau betting advice.'
+    uiBullet('⚠️', 'Estimasi model, bukan jaminan hasil atau betting advice.')
   ]
     .filter((line) => line !== null && line !== undefined)
     .join('\n');
@@ -1019,13 +1023,13 @@ async function sendPythonPrediction(bot, chatId, text) {
   if (request.menu) {
     await bot.sendMessage(
       chatId,
-      `Mengambil semua game MLB ${request.dateYmd || dateInTimezone(config.timezone)}...`
+      uiKV('⏳', 'Mengambil semua game MLB', request.dateYmd || dateInTimezone(config.timezone))
     );
     await sendPredictionGameMenu(bot, chatId, request.dateYmd);
     return;
   }
 
-  await bot.sendMessage(chatId, `Menjalankan Python prediction: ${request.away} @ ${request.home}...`);
+  await bot.sendMessage(chatId, uiKV('⏳', 'Menjalankan Python prediction', `${request.away} @ ${request.home}`));
   const output = await runPythonPrediction(request);
   await bot.sendMessage(chatId, formatPythonPredictionOutput(output));
   console.log(`Python prediction handled for ${chatId}: ${request.away} @ ${request.home}.`);
@@ -1042,17 +1046,17 @@ async function handlePredictCallback(bot, callbackQuery) {
 
   if (!chatId) return;
   if (!isValidDateYmd(dateYmd) || !Number.isFinite(gamePk) || (rawMarketLine && !Number.isFinite(marketLine))) {
-    await bot.sendMessage(chatId, 'Data tombol tidak valid. Coba kirim /predict lagi untuk refresh daftar.');
+    await bot.sendMessage(chatId, uiBullet('⚠️', 'Data tombol tidak valid. Coba kirim /predict lagi untuk refresh daftar.'));
     return;
   }
 
-  await bot.sendMessage(chatId, `Menganalisa game MLB ${dateYmd}...`);
+  await bot.sendMessage(chatId, uiKV('⏳', 'Menganalisa game MLB', dateYmd));
   const modelMemory = config.modelMemory ? storage.getMemory() : {};
   const predictions = await getMlbPredictions(dateYmd, modelMemory);
   const prediction = predictions.find((item) => item.gamePk === gamePk);
 
   if (!prediction) {
-    await bot.sendMessage(chatId, 'Game tidak ditemukan. Coba kirim /predict lagi untuk refresh daftar.');
+    await bot.sendMessage(chatId, uiBullet('⚠️', 'Game tidak ditemukan. Coba kirim /predict lagi untuk refresh daftar.'));
     return;
   }
 
@@ -1082,7 +1086,7 @@ async function handleAgentToolCallback(bot, callbackQuery) {
   }
 
   if (action === 'knowledge') {
-    await bot.sendMessage(chatId, 'Pilih topik knowledge:', {
+    await bot.sendMessage(chatId, uiTitle('📚', 'Pilih Topik | knowledge'), {
       reply_markup: agentKnowledgeKeyboard()
     });
     return;
@@ -1095,7 +1099,7 @@ async function handleAgentToolCallback(bot, callbackQuery) {
 
   if (action === 'game') {
     const payload = await runAgentBridge('game', [value]);
-    await bot.sendMessage(chatId, payload.text || 'Game tidak tersedia.', {
+    await bot.sendMessage(chatId, payload.text || uiBullet('⚠️', 'Game tidak tersedia.'), {
       reply_markup: agentToolActionKeyboard(value)
     });
     return;
@@ -1103,13 +1107,13 @@ async function handleAgentToolCallback(bot, callbackQuery) {
 
   if (['moneyline', 'total', 'context', 'full'].includes(action)) {
     const payload = await runAgentBridge(action, [value]);
-    await bot.sendMessage(chatId, payload.text || 'Output tidak tersedia.', {
+    await bot.sendMessage(chatId, payload.text || uiBullet('⚠️', 'Output tidak tersedia.'), {
       reply_markup: agentToolActionKeyboard(value)
     });
     return;
   }
 
-  await bot.sendMessage(chatId, 'Action tidak dikenal. Coba /agenttools lagi.');
+  await bot.sendMessage(chatId, uiBullet('⚠️', 'Action tidak dikenal. Coba /agenttools lagi.'));
 }
 
 async function sendAlertToAll(bot, dateYmd) {
@@ -1144,7 +1148,7 @@ function formatLineCheckMovement(movement) {
       ? `${movement.delta >= 0 ? '+' : ''}${movement.delta.toFixed(1)}`
       : `${movement.delta >= 0 ? '+' : ''}${Math.round(movement.delta)}`;
 
-  return `- ${movement.matchup}: ${market} ${movement.oldText} -> ${movement.newText} (${delta} ${movement.unit})`;
+  return uiBullet('•', `${movement.matchup} | ${market} | ${movement.oldText} -> ${movement.newText} | ${delta} ${movement.unit}`);
 }
 
 function formatLineCheckSummary(dateYmd, result, { source = 'stored predictions' } = {}) {
@@ -1152,15 +1156,15 @@ function formatLineCheckSummary(dateYmd, result, { source = 'stored predictions'
 
   if (!result.hasOddsApiKey) {
     return [
-      '📊 Linecheck MLB',
-      `Tanggal: ${dateYmd}`,
+      uiTitle('📊', 'Linecheck MLB'),
+      uiKV('📅', 'Tanggal', dateYmd),
       '',
-      'ODDS_API_KEY/THE_ODDS_API_KEY belum diisi, jadi odds live belum bisa dicek.'
+      uiBullet('⚠️', 'ODDS_API_KEY/THE_ODDS_API_KEY belum diisi, jadi odds live belum bisa dicek.')
     ].join('\n');
   }
 
   if (result.checkedGames === 0) {
-    return ['📊 Linecheck MLB', `Tanggal: ${dateYmd}`, '', 'Tidak ada game aktif untuk dicek.'].join(
+    return [uiTitle('📊', 'Linecheck MLB'), uiKV('📅', 'Tanggal', dateYmd), '', uiBullet('⚠️', 'Tidak ada game aktif untuk dicek.')].join(
       '\n'
     );
   }
@@ -1169,20 +1173,20 @@ function formatLineCheckSummary(dateYmd, result, { source = 'stored predictions'
   const hiddenMovements = Math.max(0, result.movements.length - movementLines.length);
 
   return [
-    '📊 Linecheck MLB',
-    `Tanggal: ${dateYmd}`,
-    `Sumber game: ${source}`,
-    `Matched odds: ${result.matchedGames}/${result.checkedGames}`,
-    `Threshold: ML ${settings.moneylineThreshold} cents | Total ${settings.totalThreshold} runs`,
+    uiTitle('📊', 'Linecheck MLB'),
+    uiKV('📅', 'Tanggal', dateYmd),
+    uiKV('📡', 'Sumber game', source),
+    uiKV('🎯', 'Matched odds', `${result.matchedGames}/${result.checkedGames}`),
+    uiKV('📏', 'Threshold', `ML ${settings.moneylineThreshold} cents | Total ${settings.totalThreshold} runs`),
     result.initializedSnapshots > 0
-      ? `Baseline odds tersimpan: ${result.initializedSnapshots} market`
+      ? uiKV('💾', 'Baseline odds tersimpan', `${result.initializedSnapshots} market`)
       : null,
     '',
     result.movements.length > 0
-      ? `Movement melewati threshold: ${result.movements.length} (${result.alertsSent} alert terkirim)`
-      : 'Belum ada movement yang melewati threshold.',
+      ? uiKV('📈', 'Movement melewati threshold', `${result.movements.length} | ${result.alertsSent} alert terkirim`)
+      : uiBullet('✅', 'Belum ada movement yang melewati threshold.'),
     ...movementLines,
-    hiddenMovements > 0 ? `+ ${hiddenMovements} movement lain.` : null
+    hiddenMovements > 0 ? uiBullet('➕', `${hiddenMovements} movement lain.`) : null
   ]
     .filter(Boolean)
     .join('\n');
@@ -1200,7 +1204,7 @@ async function loadLineCheckGames(dateYmd) {
 
 async function handleLineCheckCommand(bot, chatId) {
   const dateYmd = dateInTimezone(config.timezone);
-  await bot.sendMessage(chatId, `Mengecek line movement MLB ${dateYmd}...`);
+  await bot.sendMessage(chatId, uiKV('⏳', 'Mengecek line movement MLB', dateYmd));
   const { games, source } = await loadLineCheckGames(dateYmd);
   const result = await checkLineMovement(games, chatId, { sendAlerts: true });
   await bot.sendMessage(chatId, formatLineCheckSummary(dateYmd, result, { source }));
@@ -1211,38 +1215,38 @@ function formatMemorySummary() {
   const confidenceLines = Object.entries(summary.byConfidence || {})
     .map(([key, value]) => {
       const accuracy = value.total > 0 ? Math.round((value.correct / value.total) * 100) : 0;
-      return `${key}: ${value.correct}/${value.total} (${accuracy}%)`;
+      return uiKV('•', key, `${value.correct}/${value.total} | ${accuracy}%`);
     })
     .join('\n');
   const matchupMemory = summary.matchupMemory || { totalMatchups: 0, recent: [] };
   const matchupLines = (matchupMemory.recent || [])
-    .map((item) => `- ${item.note}`)
+    .map((item) => uiBullet('•', item.note))
     .join('\n');
 
   return [
-    '🧠 MLB Model Memory',
+    uiTitle('🧠', 'MLB Model Memory'),
     '',
-    `Total pick: ${summary.totalPicks}`,
-    `Benar: ${summary.correctPicks}`,
-    `Salah: ${summary.wrongPicks}`,
-    `Akurasi: ${summary.accuracy}%`,
+    uiKV('📊', 'Total pick', summary.totalPicks),
+    uiKV('✅', 'Benar', summary.correctPicks),
+    uiKV('❌', 'Salah', summary.wrongPicks),
+    uiKV('📈', 'Akurasi', `${summary.accuracy}%`),
     '',
-    'Confidence:',
+    uiSection('🎚️', 'Confidence'),
     confidenceLines || 'Belum ada data confidence.',
     '',
-    'First Inning:',
-    `Total: ${summary.firstInning.totalPicks}`,
-    `Benar: ${summary.firstInning.correctPicks}`,
-    `Salah: ${summary.firstInning.wrongPicks}`,
-    `Akurasi: ${summary.firstInning.accuracy}%`,
-    `YES: ${summary.firstInning.byPick.YES.correct}/${summary.firstInning.byPick.YES.total}`,
-    `NO: ${summary.firstInning.byPick.NO.correct}/${summary.firstInning.byPick.NO.total}`,
+    uiSection('🏁', 'First Inning'),
+    uiKV('📊', 'Total', summary.firstInning.totalPicks),
+    uiKV('✅', 'Benar', summary.firstInning.correctPicks),
+    uiKV('❌', 'Salah', summary.firstInning.wrongPicks),
+    uiKV('📈', 'Akurasi', `${summary.firstInning.accuracy}%`),
+    uiKV('YES', 'Record', `${summary.firstInning.byPick.YES.correct}/${summary.firstInning.byPick.YES.total}`),
+    uiKV('NO', 'Record', `${summary.firstInning.byPick.NO.correct}/${summary.firstInning.byPick.NO.total}`),
     '',
-    'Matchup memory:',
-    `Tracked matchups: ${matchupMemory.totalMatchups}`,
+    uiSection('🧩', 'Matchup memory'),
+    uiKV('📌', 'Tracked matchups', matchupMemory.totalMatchups),
     matchupLines || 'Belum ada matchup berulang yang tersimpan.',
     '',
-    'Recent learning:',
+    uiSection('🧠', 'Recent learning'),
     summary.recentLog.length
       ? summary.recentLog.map((item) => `${item.correct ? '✅' : '❌'} ${item.note}`).join('\n')
       : 'Belum ada post-game learning.'
@@ -1253,53 +1257,53 @@ function formatAgentStatus() {
   const summary = storage.getMemorySummary();
 
   return [
-    '🤖 MLB Analyst Agent',
+    uiTitle('🤖', 'MLB Analyst Agent'),
     '',
-    `Status: ${config.analystAgent.enabled ? 'aktif' : 'mati'}`,
-    `Mode: ${config.analystAgent.mode}`,
-    `Skill: ${ANALYST_SKILL_VERSION}`,
-    `Model: ${config.openai.model}`,
-    `Memory: ${config.modelMemory ? 'aktif' : 'mati'}`,
-    `Interactive chat: ${config.interactiveAgent ? 'aktif' : 'mati'}`,
-    `Post-game learning: ${config.postGameAlerts ? 'aktif' : 'mati'}`,
-    'Tools: /agenttools atau /kb',
+    uiKV('🟢', 'Status', config.analystAgent.enabled ? 'aktif' : 'mati'),
+    uiKV('⚙️', 'Mode', config.analystAgent.mode),
+    uiKV('🧠', 'Skill', ANALYST_SKILL_VERSION),
+    uiKV('🤖', 'Model', config.openai.model),
+    uiKV('💾', 'Memory', config.modelMemory ? 'aktif' : 'mati'),
+    uiKV('💬', 'Interactive chat', config.interactiveAgent ? 'aktif' : 'mati'),
+    uiKV('🏁', 'Post-game learning', config.postGameAlerts ? 'aktif' : 'mati'),
+    uiKV('🧰', 'Tools', '/agenttools | /kb'),
     '',
-    `Memory sample: ${summary.totalPicks} pick, akurasi ${summary.accuracy}%`,
+    uiKV('📊', 'Memory sample', `${summary.totalPicks} pick | akurasi ${summary.accuracy}%`),
     '',
     config.analystAgent.enabled
-      ? 'Agent membuat pick final dari stats, H2H, baseline model, dan memory.'
-      : 'Agent mati, bot memakai baseline model statistik.'
+      ? uiBullet('✅', 'Agent membuat pick final dari stats, H2H, baseline model, dan memory.')
+      : uiBullet('⚠️', 'Agent mati, bot memakai baseline model statistik.')
   ].join('\n');
 }
 
 function autoUpdateHelpText() {
   return [
-    'Format auto update:',
+    uiTitle('🔔', 'Auto Update MLB | help'),
     '',
-    '/autoupdate on - aktifkan update harian untuk chat ini',
-    '/autoupdate off - matikan update harian',
-    '/autoupdate time HH:mm - ubah jam update',
-    '/autoupdate status - lihat status',
+    uiCommand('/autoupdate on', 'aktifkan update harian untuk chat ini'),
+    uiCommand('/autoupdate off', 'matikan update harian'),
+    uiCommand('/autoupdate time HH:mm', 'ubah jam update'),
+    uiCommand('/autoupdate status', 'lihat status'),
     '',
-    `Timezone: ${config.timezone}`,
-    `Default time: ${config.dailyAlertTime}`
+    uiKV('🌐', 'Timezone', config.timezone),
+    uiKV('🕒', 'Default time', config.dailyAlertTime)
   ].join('\n');
 }
 
 function formatAutoUpdateStatus(chatId) {
   const status = storage.getAutoUpdate(chatId);
   return [
-    '🔔 Auto Update MLB',
+    uiTitle('🔔', 'Auto Update MLB'),
     '',
-    `Status: ${status.enabled ? 'aktif' : 'mati'}`,
-    `Jam update: ${status.dailyTime || config.dailyAlertTime}`,
-    `Timezone: ${config.timezone}`,
-    `Terakhir terkirim: ${status.lastSentDate || '-'}`,
+    uiKV('🟢', 'Status', status.enabled ? 'aktif' : 'mati'),
+    uiKV('🕒', 'Jam update', status.dailyTime || config.dailyAlertTime),
+    uiKV('🌐', 'Timezone', config.timezone),
+    uiKV('📤', 'Terakhir terkirim', status.lastSentDate || '-'),
     '',
-    'Command:',
-    '/autoupdate on',
-    '/autoupdate off',
-    '/autoupdate time 20:00'
+    uiSection('📋', 'Command'),
+    uiCommand('/autoupdate on', 'aktif'),
+    uiCommand('/autoupdate off', 'mati'),
+    uiCommand('/autoupdate time 20:00', 'ubah jam')
   ].join('\n');
 }
 
@@ -1336,7 +1340,7 @@ async function handleAutoUpdateCommand(bot, chat, args) {
   if (action === 'time') {
     const dailyTime = args[1];
     if (!isValidTime(dailyTime)) {
-      await bot.sendMessage(chatId, 'Format jam salah. Contoh: /autoupdate time 20:00');
+      await bot.sendMessage(chatId, uiKV('⌨️', 'Format jam salah', '/autoupdate time 20:00'));
       return;
     }
 
@@ -1353,16 +1357,16 @@ async function handleAutoUpdateCommand(bot, chat, args) {
 
 function lineAlertsHelpText() {
   return [
-    'Format line movement alerts:',
+    uiTitle('📈', 'Line Movement Alerts | help'),
     '',
-    '/linealerts on - aktifkan notifikasi line movement',
-    '/linealerts off - matikan notifikasi line movement',
-    '/linealerts status - lihat status',
+    uiCommand('/linealerts on', 'aktifkan notifikasi line movement'),
+    uiCommand('/linealerts off', 'matikan notifikasi line movement'),
+    uiCommand('/linealerts status', 'lihat status'),
     '',
-    'Alias:',
-    '/linemove on',
-    '/linemove off',
-    '/linemove status'
+    uiSection('🔁', 'Alias'),
+    uiCommand('/linemove on', 'aktif'),
+    uiCommand('/linemove off', 'mati'),
+    uiCommand('/linemove status', 'status')
   ].join('\n');
 }
 
@@ -1370,21 +1374,21 @@ function formatLineAlertsStatus(chatId, stoppedCount = null) {
   const status = storage.getLineMovementAlerts(chatId);
   const settings = lineMonitorSettings();
   const lines = [
-    'Line Movement Alerts',
+    uiTitle('📈', 'Line Movement Alerts'),
     '',
-    `Status chat: ${status.enabled ? 'aktif' : 'mati'}`,
-    `Status global env: ${settings.enabled ? 'aktif' : 'mati'}`,
-    `Interval cek: ${settings.intervalMinutes} menit`,
-    `Threshold ML: ${settings.moneylineThreshold} cents`,
-    `Threshold total: ${settings.totalThreshold} runs`,
-    `Odds API: ${settings.hasOddsApiKey ? 'tersedia' : 'belum diisi'}`
+    uiKV('💬', 'Status chat', status.enabled ? 'aktif' : 'mati'),
+    uiKV('🌐', 'Status global env', settings.enabled ? 'aktif' : 'mati'),
+    uiKV('⏱️', 'Interval cek', `${settings.intervalMinutes} menit`),
+    uiKV('📏', 'Threshold ML', `${settings.moneylineThreshold} cents`),
+    uiKV('📏', 'Threshold total', `${settings.totalThreshold} runs`),
+    uiKV('🔑', 'Odds API', settings.hasOddsApiKey ? 'tersedia' : 'belum diisi')
   ];
 
   if (stoppedCount !== null) {
-    lines.push(`Monitor dihentikan: ${stoppedCount}`);
+    lines.push(uiKV('🛑', 'Monitor dihentikan', stoppedCount));
   }
 
-  lines.push('', 'Command:', '/linealerts on', '/linealerts off', '/linealerts status');
+  lines.push('', uiSection('📋', 'Command'), uiCommand('/linealerts on', 'aktif'), uiCommand('/linealerts off', 'mati'), uiCommand('/linealerts status', 'status'));
   return lines.join('\n');
 }
 
@@ -1423,20 +1427,24 @@ async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.t
     await bot.sendMessage(
       chatId,
       [
-        'Format: /ask pertanyaan',
+        uiTitle('💬', 'Ask Analyst Agent | help'),
         '',
-        'Contoh:',
-        '/ask game mana yang edge-nya paling kuat hari ini?',
-        '/ask kenapa Yankees dipilih?',
-        '/ask upset risk terbesar hari ini?'
+        uiKV('⌨️', 'Format', '/ask pertanyaan'),
+        '',
+        uiSection('💡', 'Contoh'),
+        uiCommand('/ask best 5 top pick for today', 'top pick ringkas'),
+        uiCommand('/ask game mana yang edge-nya paling kuat hari ini?', 'edge terkuat'),
+        uiCommand('/ask kenapa Yankees dipilih?', 'alasan pick'),
+        uiCommand('/ask upset risk terbesar hari ini?', 'risk upset')
       ].join('\n')
     );
     return;
   }
 
-  await bot.sendMessage(chatId, `🤖 Analyst Agent membaca slate MLB ${dateYmd}...`);
+  await bot.sendMessage(chatId, uiKV('🤖', 'Analyst Agent membaca slate MLB', dateYmd));
   const predictions = await getMlbPredictions(dateYmd, config.modelMemory ? storage.getMemory() : {});
   await attachAgentAnalyses(predictions);
+  await attachMarketContext(predictions);
   storage.savePredictions(dateYmd, predictions);
 
   const answer = await answerInteractiveQuestion(config, {
@@ -1452,7 +1460,7 @@ async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.t
   await bot.sendMessage(
     chatId,
     answer ||
-      'Agent belum bisa menjawab sekarang. Coba cek /today dulu atau pastikan OPENAI_API_KEY dan ANALYST_AGENT aktif.'
+      uiBullet('⚠️', 'Agent belum bisa menjawab sekarang. Coba cek /today dulu atau pastikan OPENAI_API_KEY dan ANALYST_AGENT aktif.')
   );
   console.log(`Interactive question handled for ${chatId}.`);
 }
@@ -1487,20 +1495,20 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
 function formatPostGameRecap(dateYmd, evaluations) {
   if (evaluations.length === 0) {
     return [
-      '🏁 MLB Post-game Recap',
-      `📅 ${dateYmd}`,
+      uiTitle('🏁', 'MLB Post-game Recap'),
+      uiKV('📅', 'Tanggal', dateYmd),
       '',
-      'Belum ada game final dengan pick pre-game yang tersimpan.',
-      'Pastikan /today, /deep, atau auto-alert sudah jalan sebelum game dimulai.'
+      uiBullet('⚠️', 'Belum ada game final dengan pick pre-game yang tersimpan.'),
+      uiBullet('📌', 'Pastikan /today, /deep, atau auto-alert sudah jalan sebelum game dimulai.')
     ].join('\n');
   }
 
   const correctCount = evaluations.filter((item) => item.correct).length;
-  const separator = '━━━━━━━━━━━━━━━━━━━━';
+  const separator = UI_LINE;
   const lines = [
-    '🏁 MLB Post-game Recap',
-    `📅 ${dateYmd}`,
-    `🎯 Akurasi pick: ${correctCount}/${evaluations.length}`,
+    uiTitle('🏁', 'MLB Post-game Recap'),
+    uiKV('📅', 'Tanggal', dateYmd),
+    uiKV('🎯', 'Akurasi pick', `${correctCount}/${evaluations.length}`),
     '',
     separator
   ];
@@ -1522,21 +1530,21 @@ function formatPostGameRecap(dateYmd, evaluations) {
 
     lines.push(
       [
-        `🏟️ ${prediction.matchup}`,
-        `📍 Final: ${scoreLine}`,
-        `🏆 Winner: ${result.winner.name}`,
-        `🎯 Pick: ${prediction.pick.name} (${prediction.pick.winProbability}%)`,
-        `${correct ? '✅ Benar' : '❌ Salah'}`,
+        uiKV('🏟️', 'Matchup', prediction.matchup),
+        uiKV('📍', 'Final', scoreLine),
+        uiKV('🏆', 'Winner', result.winner.name),
+        uiKV('🎯', 'Pick', `${prediction.pick.name} | ${prediction.pick.winProbability}%`),
+        uiBullet(correct ? '✅' : '❌', correct ? 'Benar' : 'Salah'),
         prediction.firstInning
-          ? `🏁 1st inning: pick ${prediction.firstInning.pick} (${prediction.firstInning.probability}%), actual ${firstInningActual}${firstInningCorrect === null ? '' : firstInningCorrect ? ' ✅' : ' ❌'}`
+          ? uiKV('🏁', '1st inning', `pick ${prediction.firstInning.pick} | ${prediction.firstInning.probability}% | actual ${firstInningActual}${firstInningCorrect === null ? '' : firstInningCorrect ? ' ✅' : ' ❌'}`)
           : null,
-        `🧠 ${memoryLine}`
+        uiBullet('🧠', memoryLine)
       ].filter(Boolean).join('\n')
     );
     lines.push(separator);
   }
 
-  lines.push('⚠️ Memory adalah adjustment kecil, bukan jaminan hasil berikutnya.');
+  lines.push(uiBullet('⚠️', 'Memory adalah adjustment kecil, bukan jaminan hasil berikutnya.'));
   return lines.join('\n\n');
 }
 
@@ -1548,12 +1556,12 @@ async function handleMessage(bot, message) {
   const command = rawCommand?.replace(/@.+$/, '').toLowerCase();
 
   if (command === '/chatid') {
-    await bot.sendMessage(chatId, `Chat ID: ${chatId}`);
+    await bot.sendMessage(chatId, uiKV('💬', 'Chat ID', chatId));
     return;
   }
 
   if (!isAllowed(chatId)) {
-    await bot.sendMessage(chatId, 'Chat ini belum diizinkan. Tambahkan ID ini ke ALLOWED_CHAT_IDS.');
+    await bot.sendMessage(chatId, uiBullet('⛔', 'Chat ini belum diizinkan. Tambahkan ID ini ke ALLOWED_CHAT_IDS.'));
     return;
   }
 
@@ -1575,7 +1583,7 @@ async function handleMessage(bot, message) {
 
   if (command === '/unsubscribe') {
     storage.removeSubscriber(chatId);
-    await bot.sendMessage(chatId, 'Auto-alert dimatikan untuk chat ini.');
+    await bot.sendMessage(chatId, uiBullet('🛑', 'Auto-alert dimatikan untuk chat ini.'));
     return;
   }
 
@@ -1596,7 +1604,7 @@ async function handleMessage(bot, message) {
   if (command === '/date') {
     const dateYmd = args[0];
     if (!isValidDateYmd(dateYmd)) {
-      await bot.sendMessage(chatId, 'Format: /date YYYY-MM-DD');
+      await bot.sendMessage(chatId, uiKV('⌨️', 'Format', '/date YYYY-MM-DD'));
       return;
     }
 
@@ -1607,7 +1615,7 @@ async function handleMessage(bot, message) {
   if (command === '/game') {
     const teamFilter = args.join(' ').trim();
     if (!teamFilter) {
-      await bot.sendMessage(chatId, 'Format: /game Yankees atau /game LAD');
+      await bot.sendMessage(chatId, uiKV('⌨️', 'Format', '/game Yankees atau /game LAD'));
       return;
     }
 
@@ -1628,7 +1636,7 @@ async function handleMessage(bot, message) {
   if (command === '/kb' || command === '/knowledge') {
     const query = args.join(' ').trim();
     if (!query) {
-      await bot.sendMessage(chatId, 'Pilih topik knowledge:', {
+      await bot.sendMessage(chatId, uiTitle('📚', 'Pilih Topik | knowledge'), {
         reply_markup: agentKnowledgeKeyboard()
       });
       return;
@@ -1650,7 +1658,7 @@ async function handleMessage(bot, message) {
   if (command === '/sendalert') {
     const dateYmd = dateInTimezone(config.timezone);
     const sent = await sendAlertToAll(bot, dateYmd);
-    await bot.sendMessage(chatId, sent > 0 ? `Alert terkirim ke ${sent} chat.` : 'Belum ada subscriber/chat id target.');
+    await bot.sendMessage(chatId, sent > 0 ? uiKV('📤', 'Alert terkirim', `${sent} chat`) : uiBullet('⚠️', 'Belum ada subscriber/chat id target.'));
     return;
   }
 
@@ -1677,7 +1685,7 @@ async function handleMessage(bot, message) {
   if (command === '/postgame') {
     const maybeDate = args[0];
     const dateYmd = isValidDateYmd(maybeDate) ? maybeDate : dateInTimezone(config.timezone);
-    await bot.sendMessage(chatId, `Mengecek final game MLB ${dateYmd}...`);
+    await bot.sendMessage(chatId, uiKV('⏳', 'Mengecek final game MLB', dateYmd));
     const evaluations = await evaluatePostGames(dateYmd, {
       markProcessed: true,
       includeProcessed: true
@@ -1754,7 +1762,7 @@ async function processTelegramUpdate(bot, update) {
   if (update.message) {
     await handleMessage(bot, update.message).catch(async (error) => {
       console.error(error);
-      await bot.sendMessage(update.message.chat.id, `Error: ${error.message}`).catch(() => {});
+      await bot.sendMessage(update.message.chat.id, uiKV('⚠️', 'Error', error.message)).catch(() => {});
     });
   }
 
@@ -1763,7 +1771,7 @@ async function processTelegramUpdate(bot, update) {
       console.error(error);
       const chatId = update.callback_query.message?.chat?.id;
       if (chatId) {
-        await bot.sendMessage(chatId, `Error: ${error.message}`).catch(() => {});
+        await bot.sendMessage(chatId, uiKV('⚠️', 'Error', error.message)).catch(() => {});
       }
     });
   }

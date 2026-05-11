@@ -19,7 +19,7 @@
     "setup": "npm run setup:python && npm run setup:web",
     "migrate:storage": "node scripts/migrate_state_to_sqlite.js",
     "once": "node src/index.js --once",
-    "check": "node --check src/index.js && node --check src/dashboard.js && node --check dashboard/app.js && node --check src/config.js && node --check src/telegram.js && node --check src/mlb.js && node --check src/storage.js && node --check src/lineMovement.js && node --check src/llm.js && node --check src/analystSkill.js && node --check src/utils.js && node --check scripts/prepare_start.js && node --check scripts/process_runner.mjs && node --check scripts/start_all.mjs && node --check scripts/run_control_center.mjs && node --check scripts/run_api.mjs && node --check scripts/migrate_state_to_sqlite.js"
+    "check": "node --check src/index.js && node --check src/dashboard.js && node --check dashboard/app.js && node --check src/config.js && node --check src/telegram.js && node --check src/mlb.js && node --check src/storage.js && node --check src/lineMovement.js && node --check src/llm.js && node --check src/analystSkill.js && node --check src/telegramFormat.js && node --check src/utils.js && node --check scripts/prepare_start.js && node --check scripts/process_runner.mjs && node --check scripts/start_all.mjs && node --check scripts/run_control_center.mjs && node --check scripts/run_api.mjs && node --check scripts/migrate_state_to_sqlite.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.9.1"

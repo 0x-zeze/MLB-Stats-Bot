@@ -7,10 +7,11 @@ import {
   sigmoid,
   toNumber
 } from './utils.js';
+import { UI_LINE, UI_THIN_LINE, uiBullet, uiKV, uiSection, uiTitle } from './telegramFormat.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
-const GAME_SEPARATOR = '━━━━━━━━━━━━━━━━━━━━';
-const SECTION_SEPARATOR = '────────────';
+const GAME_SEPARATOR = UI_LINE;
+const SECTION_SEPARATOR = UI_THIN_LINE;
 const TOTAL_RUN_LINES = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
 const DEFAULT_MARKET_TOTAL = 8.5;
 const MONEYLINE_VALUE_EDGE_THRESHOLD = 2.0;
@@ -244,7 +245,7 @@ function firstInningPickText(firstInning) {
 
 function totalProbabilityRows(label, probabilities) {
   return TOTAL_RUN_LINES.map(
-    (line) => `• ${label} ${line}: ${percent(probabilities?.[String(line)] || 0)}`
+    (line) => uiKV('•', `${label} ${line}`, percent(probabilities?.[String(line)] || 0))
   );
 }
 
@@ -258,7 +259,7 @@ function lineupContextLines(lineupLine) {
     .split(' | ')
     .filter(Boolean);
 
-  return lines.length ? lines.map((line) => `• ${line}`) : ['• Lineup: belum tersedia'];
+  return lines.length ? lines.map((line) => uiBullet('•', line)) : [uiKV('•', 'Lineup', 'belum tersedia')];
 }
 
 function totalRunSummaryLines(item) {
@@ -274,31 +275,31 @@ function totalRunSummaryLines(item) {
   const park = totalRuns.detail?.park;
   const detail = totalRuns.detail || {};
   const driverLines = [
-    `• Offense: ${signedOneDecimal(toNumber(detail.homeOffense, 0) + toNumber(detail.awayOffense, 0))}`,
-    `• Starting pitcher: ${signedOneDecimal(toNumber(detail.homeStarterAllowed, 0) + toNumber(detail.awayStarterAllowed, 0))}`,
-    `• Bullpen: ${signedOneDecimal(toNumber(detail.homeBullpenAllowed, 0) + toNumber(detail.awayBullpenAllowed, 0))}`,
-    `• Weather: ${signedOneDecimal(detail.weather)}`,
-    `• Lineup: ${signedOneDecimal(toNumber(detail.homeLineupAdj, 0) + toNumber(detail.awayLineupAdj, 0))}`
+    uiKV('•', 'Offense', signedOneDecimal(toNumber(detail.homeOffense, 0) + toNumber(detail.awayOffense, 0))),
+    uiKV('•', 'Starting pitcher', signedOneDecimal(toNumber(detail.homeStarterAllowed, 0) + toNumber(detail.awayStarterAllowed, 0))),
+    uiKV('•', 'Bullpen', signedOneDecimal(toNumber(detail.homeBullpenAllowed, 0) + toNumber(detail.awayBullpenAllowed, 0))),
+    uiKV('•', 'Weather', signedOneDecimal(detail.weather)),
+    uiKV('•', 'Lineup', signedOneDecimal(toNumber(detail.homeLineupAdj, 0) + toNumber(detail.awayLineupAdj, 0)))
   ];
 
   return [
-    '📌 Projection',
-    `• Projected total: ${totalRuns.projectedTotal.toFixed(1)} runs`,
-    `• Expected runs: ${awayAbbrev} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${homeAbbrev} ${totalRuns.homeExpectedRuns.toFixed(1)}`,
-    `• Market total: ${totalRuns.marketLine} (${deltaText} runs vs model)`,
-    `• Best lean: ${totalRuns.bestLean} (${totalRuns.confidence})`,
+    uiSection('📌', 'Projection'),
+    uiKV('•', 'Projected total', `${totalRuns.projectedTotal.toFixed(1)} runs`),
+    uiKV('•', 'Expected runs', `${awayAbbrev} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${homeAbbrev} ${totalRuns.homeExpectedRuns.toFixed(1)}`),
+    uiKV('•', 'Market total', `${totalRuns.marketLine} | ${deltaText} runs vs model`),
+    uiKV('•', 'Best lean', `${totalRuns.bestLean} | ${totalRuns.confidence}`),
     '',
-    '📈 Over Probability',
+    uiSection('📈', 'Over Probability'),
     ...totalProbabilityRows('Over', totalRuns.over),
     '',
-    '📉 Under Probability',
+    uiSection('📉', 'Under Probability'),
     ...totalProbabilityRows('Under', totalRuns.under),
     '',
-    '⚙️ Run Drivers',
+    uiSection('⚙️', 'Run Drivers'),
     ...driverLines,
     '',
-    '🏟 Context',
-    `• Park: ${park?.label || item.venue} (Run PF ${park?.runFactorPct || 100}, HR PF ${park?.homeRunFactorPct || 100})`,
+    uiSection('🏟️', 'Context'),
+    uiKV('•', 'Park', `${park?.label || item.venue} | Run PF ${park?.runFactorPct || 100} | HR PF ${park?.homeRunFactorPct || 100}`),
     ...lineupContextLines(item.lineupLine)
   ];
 }
@@ -308,7 +309,7 @@ function openerAlertLines(item) {
     .filter((team) => team?.openerSituation?.isOpener)
     .map((team) => {
       const pitcherName = team.starter?.fullName || team.starter?.name || 'Listed pitcher';
-      return `⚠️ Opener situation — ${pitcherName} may not be the primary pitcher`;
+      return uiKV('⚠️', 'Opener situation', `${pitcherName} may not be the primary pitcher`);
     });
 }
 
@@ -442,32 +443,32 @@ export function moneylineDecisionLines(item) {
 
   if (decision.status === 'VALUE') {
     return [
-      `Value Pick: ${decision.teamName} ${formatMoneylineOdds(decision.odds)} (${decision.book})`,
-      `Bet Decision: VALUE | model ${decision.modelProbability.toFixed(1)}% vs implied ${decision.impliedProbability.toFixed(1)}%, edge +${decision.edge.toFixed(1)}%`
+      uiKV('💰', 'Value Pick', `${decision.teamName} ${formatMoneylineOdds(decision.odds)} | ${decision.book}`),
+      uiKV('🎯', 'Bet Decision', `VALUE | model ${decision.modelProbability.toFixed(1)}% vs implied ${decision.impliedProbability.toFixed(1)}% | edge +${decision.edge.toFixed(1)}%`)
     ];
   }
 
   if (decision.status === 'NO BET') {
     const pick = item.valuePick;
     const valueLine = pick
-      ? `Value Check: ${pick.teamName} ${formatMoneylineOdds(pick.odds)} (${pick.book}), edge ${pick.edge >= 0 ? '+' : ''}${pick.edge.toFixed(1)}%`
+      ? uiKV('🔎', 'Value Check', `${pick.teamName} ${formatMoneylineOdds(pick.odds)} | ${pick.book} | edge ${pick.edge >= 0 ? '+' : ''}${pick.edge.toFixed(1)}%`)
       : null;
     return [
       valueLine,
-      `Bet Decision: NO BET - ${decision.reason}`
+      uiKV('🛑', 'Bet Decision', `NO BET | ${decision.reason}`)
     ].filter(Boolean);
   }
 
-  return [`Bet Decision: LEAN ONLY - ${decision.reason}`];
+  return [uiKV('ℹ️', 'Bet Decision', `LEAN ONLY | ${decision.reason}`)];
 }
 
 function compactPredictionBlock(item) {
   return [
-    `${item.away.name} @ ${item.home.name}`,
-    `${item.start}`,
-    `${item.venue}`,
-    `Probabilitas: ${winProbText(item.away)} | ${winProbText(item.home)}`,
-    `Pick Model: ${item.winner?.name || (item.home.winProbability >= item.away.winProbability ? item.home.name : item.away.name)}`
+    uiKV('🏟️', 'Matchup', `${item.away.name} @ ${item.home.name}`),
+    uiKV('🕒', 'Waktu', item.start),
+    uiKV('📍', 'Stadium', item.venue),
+    uiKV('📊', 'Probabilitas', `${winProbText(item.away)} | ${winProbText(item.home)}`),
+    uiKV('✅', 'Pick Model', item.winner?.name || (item.home.winProbability >= item.away.winProbability ? item.home.name : item.away.name))
   ].join('\n');
 }
 
@@ -475,7 +476,7 @@ function splitInfoLine(value) {
   return String(value || '-')
     .split(' | ')
     .filter(Boolean)
-    .map((part) => `• ${part}`);
+    .map((part) => uiBullet('•', part));
 }
 
 function splitRecord(standing, type) {
@@ -2648,12 +2649,12 @@ export function formatPredictions(
 
   if (filtered.length === 0) {
     return normalizedFilter
-      ? `Tidak ada game MLB untuk filter "${teamFilter}" pada ${dateYmd}.`
-      : `Tidak ada game MLB pada ${dateYmd}.`;
+      ? [uiTitle('⚾', 'MLB Pre-game Alert'), uiKV('📅', 'Tanggal', dateYmd), '', uiBullet('⚠️', `Tidak ada game MLB untuk filter "${teamFilter}".`)].join('\n')
+      : [uiTitle('⚾', 'MLB Pre-game Alert'), uiKV('📅', 'Tanggal', dateYmd), '', uiBullet('⚠️', 'Tidak ada game MLB pada tanggal ini.')].join('\n');
   }
 
   const shown = filtered.slice(0, maxGames);
-  const lines = [`⚾ MLB Pre-game Alert\n📅 ${dateYmd}`, GAME_SEPARATOR];
+  const lines = [[uiTitle('⚾', 'MLB Pre-game Alert'), uiKV('📅', 'Tanggal', dateYmd)].join('\n'), GAME_SEPARATOR];
 
   if (!includeAdvanced) {
     for (const item of shown) {
@@ -2662,10 +2663,10 @@ export function formatPredictions(
     }
 
     if (filtered.length > shown.length) {
-      lines.push(`+ ${filtered.length - shown.length} game lain. Pakai /deep untuk semua statistik detail.`);
+      lines.push(uiBullet('➕', `${filtered.length - shown.length} game lain | pakai /deep untuk semua statistik detail.`));
     }
 
-    lines.push('âš ï¸ Note: probabilitas adalah estimasi model, bukan kepastian.');
+    lines.push(uiBullet('⚠️', 'Probabilitas adalah estimasi model, bukan kepastian.'));
     return lines.join('\n\n');
   }
 
@@ -2676,97 +2677,97 @@ export function formatPredictions(
     const openerLines = openerAlertLines(item);
     const contextLines = [
       ...splitInfoLine(item.contextLine),
-      ...(item.matchupMemory?.games > 0 ? [`- Memory matchup: ${item.matchupMemory.note}`] : [])
+      ...(item.matchupMemory?.games > 0 ? [uiKV('•', 'Memory matchup', item.matchupMemory.note)] : [])
     ];
     const splitLines = splitInfoLine(item.matchupSplitLine);
     const bullpenLines = splitInfoLine(item.bullpenLine);
     const fatigueLines = item.fatigueLines?.length
-      ? item.fatigueLines.map((line) => `• ${line}`)
+      ? item.fatigueLines.map((line) => uiBullet('•', line))
       : [];
     const pitcherRecentLines = splitInfoLine(item.pitcherRecentLine);
     const advancedLines = splitInfoLine(item.advancedLine);
     const modelReferenceLines = item.modelReferenceLines?.length
-      ? item.modelReferenceLines.map((line) => `• ${line}`)
+      ? item.modelReferenceLines.map((line) => uiBullet('•', line))
       : splitInfoLine(item.modelReferenceLine);
     const injuryLines = item.injuryDetailLines?.length
-      ? item.injuryDetailLines.map((line) => `• ${line}`)
+      ? item.injuryDetailLines.map((line) => uiBullet('•', line))
       : splitInfoLine(item.injuryLine);
     const firstInningReasonLines = item.firstInning.agent?.reasons?.length
-      ? item.firstInning.agent.reasons.map((reason) => `• ${reason}`)
-      : item.firstInning.reasons.map((reason) => `• ${reason}`);
+      ? item.firstInning.agent.reasons.map((reason) => uiBullet('•', reason))
+      : item.firstInning.reasons.map((reason) => uiBullet('•', reason));
     const h2hSummary =
       item.headToHead?.games > 0
         ? `${item.away.abbreviation || item.away.name} ${item.headToHead.awayWins}-${item.headToHead.homeWins} ${item.home.abbreviation || item.home.name}`
         : 'Belum ada final H2H musim ini';
     lines.push(
       [
-        `🏟️ ${item.away.name} @ ${item.home.name}`,
-        `🕒 ${item.start}`,
-        `📍 ${item.venue}`,
+        uiKV('🏟️', 'Matchup', `${item.away.name} @ ${item.home.name}`),
+        uiKV('🕒', 'Waktu', item.start),
+        uiKV('📍', 'Stadium', item.venue),
         '',
         SECTION_SEPARATOR,
-        '📊 Probabilitas',
+        uiSection('📊', 'Probabilitas'),
         agentActive
-          ? `🤖 Agent: ${displayedWinProbText(item.away, displayProb.away)}  |  ${displayedWinProbText(item.home, displayProb.home)}`
-          : `Model: ${winProbText(item.away)}  |  ${winProbText(item.home)}`,
-        agentActive ? `📐 Baseline: ${winProbText(item.away)}  |  ${winProbText(item.home)}` : null,
-        `🤝 H2H: ${h2hSummary}`,
-        `🎯 H2H Prob: ${h2hProbText(item.away, item.headToHead?.awayProbability ?? 50)}  |  ${h2hProbText(item.home, item.headToHead?.homeProbability ?? 50)}`,
-        item.modelBreakdownLine ? `Model source: ${item.modelBreakdownLine}` : null,
+          ? uiKV('🤖', 'Agent', `${displayedWinProbText(item.away, displayProb.away)} | ${displayedWinProbText(item.home, displayProb.home)}`)
+          : uiKV('📊', 'Model', `${winProbText(item.away)} | ${winProbText(item.home)}`),
+        agentActive ? uiKV('📐', 'Baseline', `${winProbText(item.away)} | ${winProbText(item.home)}`) : null,
+        uiKV('🤝', 'H2H', h2hSummary),
+        uiKV('🎯', 'H2H Prob', `${h2hProbText(item.away, item.headToHead?.awayProbability ?? 50)} | ${h2hProbText(item.home, item.headToHead?.homeProbability ?? 50)}`),
+        item.modelBreakdownLine ? uiKV('🧮', 'Model source', item.modelBreakdownLine) : null,
         '',
         SECTION_SEPARATOR,
-        `✅ Pick ${agentActive ? 'Agent' : 'Model'}: ${pick.name}${agentActive ? ` (${item.agentAnalysis.confidence})` : ''}`,
+        uiKV('✅', `Pick ${agentActive ? 'Agent' : 'Model'}`, `${pick.name}${agentActive ? ` | ${item.agentAnalysis.confidence}` : ''}`),
         ...moneylineDecisionLines(item),
         ...openerLines,
-        `🔥 SP: ${item.away.starterLine} vs ${item.home.starterLine}`,
+        uiKV('🔥', 'SP', `${item.away.starterLine} vs ${item.home.starterLine}`),
         '',
         SECTION_SEPARATOR,
-        '📌 Context',
+        uiSection('📌', 'Context'),
         ...contextLines,
         '',
-        '⚾ Splits',
+        uiSection('⚾', 'Splits'),
         ...splitLines,
         '',
-        '🧤 Bullpen',
+        uiSection('🧤', 'Bullpen'),
         ...bullpenLines,
         ...fatigueLines,
         '',
-        '🏥 Injury Report',
+        uiSection('🏥', 'Injury Report'),
         ...injuryLines,
         '',
-        '📈 SP Recent',
+        uiSection('📈', 'SP Recent'),
         ...pitcherRecentLines,
         includeAdvanced ? '' : null,
-        includeAdvanced ? '🔎 Advanced' : null,
+        includeAdvanced ? uiSection('🔎', 'Advanced') : null,
         ...(includeAdvanced ? advancedLines : []),
         includeAdvanced ? '' : null,
-        includeAdvanced ? '🧠 ML Reference' : null,
+        includeAdvanced ? uiSection('🧠', 'ML Reference') : null,
         ...(includeAdvanced ? modelReferenceLines : []),
         '',
         SECTION_SEPARATOR,
-        agentActive ? '💡 Analisa Agent' : '💡 Alasan',
+        agentActive ? uiSection('💡', 'Analisa Agent') : uiSection('💡', 'Alasan'),
         agentActive
-          ? item.agentAnalysis.reasons.map((reason) => `• ${reason}`).join('\n')
+          ? item.agentAnalysis.reasons.map((reason) => uiBullet('•', reason)).join('\n')
           : item.reasons.join(' '),
-        agentActive ? `⚠️ Risk: ${item.agentAnalysis.risk}` : null,
-        agentActive ? `🧠 Memory: ${item.agentAnalysis.memoryNote}` : null,
+        agentActive ? uiKV('⚠️', 'Risk', item.agentAnalysis.risk) : null,
+        agentActive ? uiKV('🧠', 'Memory', item.agentAnalysis.memoryNote) : null,
         '',
         SECTION_SEPARATOR,
-        '🏁 First Inning',
-        `Will there be a run in the 1st? ${firstInningPickText(item.firstInning)}`,
-        `Baseline: ${item.firstInning.baselinePick} ${percent(item.firstInning.baselineProbability)}`,
-        `Top 1: ${percent(item.firstInning.topRate)}  |  Bottom 1: ${percent(item.firstInning.bottomRate)}`,
+        uiSection('🏁', 'First Inning'),
+        uiKV('🏁', 'Run in 1st', firstInningPickText(item.firstInning)),
+        uiKV('📐', 'Baseline', `${item.firstInning.baselinePick} | ${percent(item.firstInning.baselineProbability)}`),
+        uiKV('📊', 'Top/Bottom 1', `${percent(item.firstInning.topRate)} | ${percent(item.firstInning.bottomRate)}`),
         '',
         ...splitInfoLine(`${item.firstInning.awayProfileLine} | ${item.firstInning.homeProfileLine}`),
         '',
         ...firstInningReasonLines,
         '',
         SECTION_SEPARATOR,
-        '🏃 Total Runs / Over-Under',
+        uiSection('🏃', 'Total Runs / Over-Under'),
         ...totalRunSummaryLines(item),
         '',
-        '🧾 Main Factors',
-        ...(item.totalRuns?.factors || []).slice(0, 3).map((factor) => `• ${factor}`)
+        uiSection('🧾', 'Main Factors'),
+        ...(item.totalRuns?.factors || []).slice(0, 3).map((factor) => uiBullet('•', factor))
       ]
         .filter((line) => line !== null)
         .join('\n')
@@ -2775,9 +2776,9 @@ export function formatPredictions(
   }
 
   if (filtered.length > shown.length) {
-    lines.push(`➕ ${filtered.length - shown.length} game lain. Pakai /game TEAM untuk cek spesifik.`);
+    lines.push(uiBullet('➕', `${filtered.length - shown.length} game lain | pakai /game TEAM untuk cek spesifik.`));
   }
 
-  lines.push('⚠️ Note: probabilitas adalah estimasi model, bukan kepastian.');
+  lines.push(uiBullet('⚠️', 'Probabilitas adalah estimasi model, bukan kepastian.'));
   return lines.join('\n\n');
 }
