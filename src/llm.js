@@ -525,6 +525,9 @@ function topPickWarnings(prediction) {
   if (prediction.betDecision?.status === 'NO BET') {
     warnings.push(prediction.betDecision.reason || 'no-bet filter aktif');
   }
+  for (const reason of prediction.auditAdjustments || prediction.betDecision?.auditAdjustments || []) {
+    warnings.push(reason);
+  }
   return [...new Set(warnings)].slice(0, 3);
 }
 

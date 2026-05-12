@@ -2,7 +2,7 @@ import unittest
 
 from evolution_helpers import isolated_evolution_store
 from src.evolution.evolution_audit import build_evolution_audit
-from src.evolution.memory_store import append_jsonl, append_prediction_outcome, read_jsonl
+from src.evolution.memory_store import append_jsonl, append_prediction_outcome, read_json, read_jsonl
 
 
 class EvolutionAuditTests(unittest.TestCase):
@@ -140,6 +140,52 @@ class EvolutionAuditTests(unittest.TestCase):
         self.assertTrue(audit["confidence_cap_candidates"])
         self.assertTrue(audit["priority_recommendations"])
         self.assertEqual(len(reports), 1)
+
+    def test_audit_apply_safe_versions_conservative_rules_and_weights(self):
+        with isolated_evolution_store():
+            for index in range(6):
+                append_prediction_outcome(
+                    {
+                        "game_id": f"weak-edge-{index}",
+                        "date": "2026-05-02",
+                        "market": "moneyline",
+                        "prediction": "Home Team",
+                        "confidence": "medium",
+                        "result": "win" if index == 5 else "loss",
+                        "edge": 1.2,
+                        "data_quality": 76,
+                        "predicted_probability": 54,
+                        "main_factors": ["Starter edge looked strongest."],
+                    }
+                )
+            for index in range(10):
+                append_jsonl(
+                    "language_losses",
+                    {
+                        "loss_id": f"sp-loss-{index}",
+                        "game_id": f"weak-edge-{index % 6}",
+                        "market": "moneyline",
+                        "loss_type": "pitcher_misread",
+                        "affected_factor": "starting_pitcher",
+                        "severity": "medium",
+                        "loss_summary": "Starter signal was too strong relative to the final result.",
+                    },
+                )
+
+            audit = build_evolution_audit(min_segment_sample=3, persist=True, apply_safe=True)
+            approved = read_json("approved_rules")
+            weights = read_json("weight_versions")
+            active_weights = next(version for version in weights["versions"] if version["version"] == weights["active_version"])
+            second_audit = build_evolution_audit(min_segment_sample=3, persist=False, apply_safe=True)
+
+        active_rule_keys = {rule["rule_key"] for rule in approved["active_controls"]}
+        self.assertIn("audit:no_bet:weak_edge", active_rule_keys)
+        self.assertNotEqual(approved["active_rule_version"], "rules-v1.0")
+        self.assertTrue(audit["applied_updates"]["rules_added"])
+        self.assertTrue(audit["applied_updates"]["weight_versions_added"])
+        self.assertLess(active_weights["weights"]["moneyline"]["starting_pitcher"], 0.24)
+        self.assertEqual(second_audit["applied_updates"]["rules_added"], [])
+        self.assertEqual(second_audit["applied_updates"]["weight_versions_added"], [])
 
 
 if __name__ == "__main__":

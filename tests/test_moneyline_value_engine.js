@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { applyMoneylineValueMarket } from '../src/mlb.js';
 
@@ -82,4 +85,82 @@ test('record dominated favorite is downgraded to no bet even with positive value
   assert.equal(game.valuePick.teamName, 'Record Favorite');
   assert.equal(game.betDecision.status, 'NO BET');
   assert.match(game.betDecision.reason, /record\/H2H/);
+});
+
+test('approved audit guardrail can downgrade weak model edge to no bet', () => {
+  const previousDir = process.env.MLB_EVOLUTION_DATA_DIR;
+  const dir = mkdtempSync(join(tmpdir(), 'mlb-evolution-controls-'));
+  process.env.MLB_EVOLUTION_DATA_DIR = dir;
+
+  try {
+    writeFileSync(
+      join(dir, 'approved_rules.json'),
+      JSON.stringify({
+        active_rule_version: 'rules-v1.1',
+        active_controls: [
+          {
+            rule_key: 'audit:no_bet:weak_edge',
+            candidate_id: 'audit-safe-no-bet-weak-edge',
+            type: 'no_bet_rule',
+            status: 'active',
+            production_update_allowed: true,
+            parameters: {
+              max_value_edge: 2,
+              max_probability_edge: 5,
+              max_matchup_edge: 0.08
+            }
+          }
+        ],
+        approved: []
+      })
+    );
+    writeFileSync(
+      join(dir, 'weight_versions.json'),
+      JSON.stringify({
+        active_version: 'weights-v1.0',
+        versions: [{ version: 'weights-v1.0', status: 'active', weights: { moneyline: {} } }]
+      })
+    );
+
+    const game = sampleGame({
+      away: {
+        id: 1,
+        name: 'Away Team',
+        abbreviation: 'AWY',
+        winProbability: 48,
+        starter: { fullName: 'Away Starter' }
+      },
+      home: {
+        id: 2,
+        name: 'Thin Favorite',
+        abbreviation: 'THN',
+        winProbability: 52,
+        starter: { fullName: 'Home Starter' }
+      },
+      currentOdds: {
+        awayMoneyline: -130,
+        homeMoneyline: 120,
+        moneylineBook: 'FanDuel'
+      },
+      modelBreakdown: {
+        matchupEdge: 0.04,
+        recordContextEdge: 0.01,
+        recordDominated: false
+      }
+    });
+
+    applyMoneylineValueMarket(game);
+
+    assert.equal(game.valuePick.teamName, 'Thin Favorite');
+    assert.equal(game.betDecision.status, 'NO BET');
+    assert.match(game.betDecision.reason, /audit guardrail/);
+    assert.deepEqual(game.activeEvolutionVersions, { rule: 'rules-v1.1', weights: 'weights-v1.0' });
+  } finally {
+    if (previousDir === undefined) {
+      delete process.env.MLB_EVOLUTION_DATA_DIR;
+    } else {
+      process.env.MLB_EVOLUTION_DATA_DIR = previousDir;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

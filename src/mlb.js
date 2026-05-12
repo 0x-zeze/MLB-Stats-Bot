@@ -8,6 +8,7 @@ import {
   toNumber
 } from './utils.js';
 import { UI_LINE, UI_THIN_LINE, uiBullet, uiKV, uiSection, uiTitle } from './telegramFormat.js';
+import { getEvolutionRule, loadEvolutionControls, moneylineWeightMultiplier } from './evolutionControls.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const GAME_SEPARATOR = UI_LINE;
@@ -387,7 +388,7 @@ function moneylineValueOption(item, side) {
   };
 }
 
-function valueSafetyReasons(item, option) {
+function valueSafetyReasons(item, option, evolutionControls = loadEvolutionControls()) {
   const reasons = [];
   if (!option) return ['odds moneyline belum tersedia'];
 
@@ -401,8 +402,25 @@ function valueSafetyReasons(item, option) {
     reasons.push('record/H2H lebih dominan daripada matchup hari ini');
   }
 
+  const recordBiasRule = getEvolutionRule(evolutionControls, 'audit:confidence_cap:record_bias');
+  if (recordBiasRule && (item.modelBreakdown?.recordDominated || (recordContextEdge > matchupEdge * 1.25 && matchupEdge < 0.18))) {
+    reasons.push('audit guardrail: record/recent-form bias aktif');
+  }
+
   if (matchupEdge < 0.08 && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
     reasons.push('matchup edge game ini masih tipis');
+  }
+
+  const weakEdgeRule = getEvolutionRule(evolutionControls, 'audit:no_bet:weak_edge');
+  if (weakEdgeRule) {
+    const params = weakEdgeRule.parameters || {};
+    const maxValueEdge = toNumber(params.max_value_edge, MONEYLINE_VALUE_EDGE_THRESHOLD);
+    const maxProbabilityEdge = toNumber(params.max_probability_edge, 5);
+    const maxMatchupEdge = toNumber(params.max_matchup_edge, 0.08);
+    const modelProbabilityEdge = Math.abs(toNumber(option.modelProbability, 50) - 50);
+    if ((option.edge < maxValueEdge || modelProbabilityEdge < maxProbabilityEdge) && matchupEdge < maxMatchupEdge) {
+      reasons.push('audit guardrail: edge model/value masih lemah');
+    }
   }
 
   const lineups = [item.lineups?.away, item.lineups?.home].filter(Boolean);
@@ -429,16 +447,23 @@ function valueSafetyReasons(item, option) {
 
 export function applyMoneylineValueMarket(item) {
   if (!item) return item;
+  const evolutionControls = loadEvolutionControls();
 
   const options = ['away', 'home']
     .map((side) => moneylineValueOption(item, side))
     .filter(Boolean)
     .sort((left, right) => right.edge - left.edge);
   const best = options[0] || null;
-  const reasons = valueSafetyReasons(item, best);
+  const reasons = valueSafetyReasons(item, best, evolutionControls);
+  const auditAdjustments = reasons.filter((reason) => String(reason).toLowerCase().includes('audit guardrail'));
 
   item.valuePick = best;
   item.moneylineValueOptions = options;
+  item.auditAdjustments = auditAdjustments;
+  item.activeEvolutionVersions = {
+    rule: evolutionControls.activeRuleVersion,
+    weights: evolutionControls.activeWeightVersion
+  };
   item.betDecision = best
     ? {
         market: 'moneyline',
@@ -452,13 +477,15 @@ export function applyMoneylineValueMarket(item) {
         impliedProbability: best.impliedProbability,
         edge: best.edge,
         reason: reasons[0] || `model ${best.modelProbability.toFixed(1)}% vs implied ${best.impliedProbability.toFixed(1)}%`,
-        reasons
+        reasons,
+        auditAdjustments
       }
     : {
         market: 'moneyline',
         status: 'LEAN ONLY',
         reason: 'odds moneyline belum tersedia',
-        reasons
+        reasons,
+        auditAdjustments
       };
 
   return item;
@@ -2319,42 +2346,55 @@ function predictGame(
   const bullpenEdge = bullpenAvailabilityEdge(homeBullpen, awayBullpen);
   const offenseFatigueEdge =
     homeScheduleFatigue.offenseAdjustment - awayScheduleFatigue.offenseAdjustment;
+  const evolutionControls = loadEvolutionControls();
+  const offenseWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'offense');
+  const starterWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'starting_pitcher');
+  const bullpenWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'bullpen');
+  const recentFormWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'recent_form');
+  const homeAdvantageWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'home_advantage');
+  const offenseComponent = clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.3 * offenseWeightMultiplier;
+  const preventionComponent = clamp(preventionEdge, -1.35, 1.35) * 0.24;
+  const starterComponent = clamp(spEdge, -1.35, 1.35) * 0.38 * starterWeightMultiplier;
+  const bullpenComponent = bullpenEdge * 0.9 * bullpenWeightMultiplier;
+  const formComponent = clamp(formEdge, -0.3, 0.3) * 0.28 * recentFormWeightMultiplier;
+  const homeFieldComponent = 0.12 * homeAdvantageWeightMultiplier;
   const matchupEdge =
-    clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.3 +
-    clamp(preventionEdge, -1.35, 1.35) * 0.24 +
-    clamp(spEdge, -1.35, 1.35) * 0.38 +
+    offenseComponent +
+    preventionComponent +
+    starterComponent +
     lineupEdge * 0.85 +
-    bullpenEdge * 0.9 +
+    bullpenComponent +
     fatigueEdge * 0.7;
   const recordContextEdge =
     winPctEdge * 0.18 +
     pythagoreanEdge * 0.14 +
     log5Edge * 0.16 +
-    clamp(formEdge, -0.3, 0.3) * 0.28 +
+    formComponent +
     h2hEdge * 0.025 +
     memoryEdge;
   const recordDominated =
     Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
-  const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + 0.12;
+  const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent;
   const homeProbability = clamp(sigmoid(edge) * 100, 30, 70);
   const awayProbability = 100 - homeProbability;
   const modelBreakdown = {
     matchupEdge,
     recordContextEdge,
-    offenseEdge: clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.3,
-    preventionEdge: clamp(preventionEdge, -1.35, 1.35) * 0.24,
-    starterEdge: clamp(spEdge, -1.35, 1.35) * 0.38,
+    offenseEdge: offenseComponent,
+    preventionEdge: preventionComponent,
+    starterEdge: starterComponent,
     lineupEdge: lineupEdge * 0.85,
-    bullpenEdge: bullpenEdge * 0.9,
+    bullpenEdge: bullpenComponent,
     fatigueEdge: fatigueEdge * 0.7,
     winPctEdge: winPctEdge * 0.18,
     pythagoreanEdge: pythagoreanEdge * 0.14,
     log5Edge: log5Edge * 0.16,
-    formEdge: clamp(formEdge, -0.3, 0.3) * 0.28,
+    formEdge: formComponent,
     h2hEdge: h2hEdge * 0.025,
     memoryEdge,
-    homeFieldEdge: 0.12,
-    recordDominated
+    homeFieldEdge: homeFieldComponent,
+    recordDominated,
+    activeWeightVersion: evolutionControls.activeWeightVersion
   };
 
   const home = {

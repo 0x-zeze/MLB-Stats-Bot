@@ -10,7 +10,7 @@ from statistics import mean
 from typing import Any
 
 from ..utils import safe_float
-from .memory_store import append_jsonl, read_json, read_jsonl, read_prediction_outcomes, utc_now
+from .memory_store import append_jsonl, read_json, read_jsonl, read_prediction_outcomes, record_evolution_event, utc_now, write_json
 
 
 RECOMMENDATION_MAP = {
@@ -38,6 +38,18 @@ TYPE_PRIORITY = {
     "prompt_update": 2,
     "explanation_update": 1,
 }
+
+NON_ACTIONABLE_LOSS_TYPES = {
+    "correct_pick",
+    "wrong_pick",
+    "good_risk_handling",
+    "good_data_quality_warning",
+    "good_no_bet",
+}
+
+SAFE_APPLY_MIN_SAMPLE = 5
+SAFE_APPLY_MAX_WEIGHT_DELTA = 0.05
+SAFE_APPLY_MIN_LOSS_RATE = 55.0
 
 CONFIDENCE_PROBABILITY_FALLBACK = {
     "low": 54.0,
@@ -415,6 +427,8 @@ def root_causes(losses: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for loss in losses:
         key = str(loss.get("loss_type") or loss.get("affected_factor") or "general")
+        if key in NON_ACTIONABLE_LOSS_TYPES:
+            continue
         grouped[key].append(loss)
     records = []
     for key, items in grouped.items():
@@ -438,6 +452,8 @@ def recommendations(causes: list[dict[str, Any]], segments: list[dict[str, Any]]
     seen: set[str] = set()
     for cause in causes:
         key = str(cause.get("loss_type") or "")
+        if key in NON_ACTIONABLE_LOSS_TYPES:
+            continue
         text = RECOMMENDATION_MAP.get(key)
         if not text:
             factor = str(cause.get("primary_factor") or "general")
@@ -515,6 +531,266 @@ def candidate_priorities(limit: int = 10) -> list[dict[str, Any]]:
     return sorted(records, key=lambda item: item["priority_score"], reverse=True)[:limit]
 
 
+def _next_minor_version(current: str, default_prefix: str) -> str:
+    match = re.match(r"(.+v)(\d+)\.(\d+)$", str(current or ""))
+    if not match:
+        return f"{default_prefix}v1.1"
+    prefix, major, minor = match.groups()
+    return f"{prefix}{int(major)}.{int(minor) + 1}"
+
+
+def _rule_candidate_from_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(entry.get("candidate"), dict):
+        return entry["candidate"]
+    return entry
+
+
+def _active_rule_keys(payload: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for entry in [*payload.get("active_controls", []), *payload.get("approved", [])]:
+        if not isinstance(entry, dict):
+            continue
+        candidate = _rule_candidate_from_entry(entry)
+        key = candidate.get("rule_key") or candidate.get("candidate_id")
+        if key:
+            keys.add(str(key))
+    return keys
+
+
+def _safe_rule_candidates_from_audit(audit: dict[str, Any]) -> list[dict[str, Any]]:
+    generated_at = audit.get("summary", {}).get("generated_at") or utc_now()
+    candidates: list[dict[str, Any]] = []
+
+    weak_edge = next((item for item in audit.get("weakest_segments", []) if item.get("segment") == "edge:weak <2"), None)
+    if (
+        weak_edge
+        and weak_edge.get("decided", 0) >= SAFE_APPLY_MIN_SAMPLE
+        and safe_float(weak_edge.get("loss_rate"), 0.0) >= SAFE_APPLY_MIN_LOSS_RATE
+    ):
+        candidates.append(
+            {
+                "candidate_id": "audit-safe-no-bet-weak-edge",
+                "rule_key": "audit:no_bet:weak_edge",
+                "type": "no_bet_rule",
+                "target": "moneyline",
+                "rule": "Return NO BET when moneyline value/model edge is weak and no stronger Tier 1 signal confirms the side.",
+                "parameters": {
+                    "max_value_edge": 2.0,
+                    "max_probability_edge": 5.0,
+                    "max_matchup_edge": 0.08,
+                },
+                "reason": f"Audit found edge:weak <2 at {weak_edge.get('wins')}-{weak_edge.get('losses')} with {weak_edge.get('loss_rate')}% loss rate.",
+                "evidence": weak_edge,
+                "status": "active",
+                "promotion_status": "approved_conservative_guardrail",
+                "backtest_status": "audit_min_sample_gate",
+                "source": "evolution_audit",
+                "date_created": generated_at,
+                "rollback_supported": True,
+                "production_update_allowed": True,
+            }
+        )
+
+    record_bias = next((item for item in audit.get("root_causes", []) if item.get("loss_type") == "record_bias"), None)
+    if record_bias and record_bias.get("count", 0) >= 2:
+        candidates.append(
+            {
+                "candidate_id": "audit-safe-confidence-cap-record-bias",
+                "rule_key": "audit:confidence_cap:record_bias",
+                "type": "confidence_cap",
+                "target": "moneyline",
+                "rule": "Cap to LEAN ONLY/NO BET when record, H2H, or recent form dominates weak game-specific matchup edge.",
+                "parameters": {
+                    "record_context_multiplier": 1.25,
+                    "max_matchup_edge": 0.18,
+                },
+                "reason": f"Audit found record_bias {record_bias.get('count')} times.",
+                "evidence": record_bias,
+                "status": "active",
+                "promotion_status": "approved_conservative_guardrail",
+                "backtest_status": "audit_repeated_pattern_gate",
+                "source": "evolution_audit",
+                "date_created": generated_at,
+                "rollback_supported": True,
+                "production_update_allowed": True,
+            }
+        )
+
+    for bucket in audit.get("calibration_buckets", []):
+        if bucket.get("verdict") != "overconfident" or bucket.get("sample_size", 0) < SAFE_APPLY_MIN_SAMPLE:
+            continue
+        bucket_id = str(bucket.get("bucket") or "unknown").replace(":", "-").replace("+", "plus")
+        candidates.append(
+            {
+                "candidate_id": f"audit-safe-confidence-cap-{bucket_id}",
+                "rule_key": f"audit:confidence_cap:{bucket_id}",
+                "type": "confidence_cap",
+                "target": bucket.get("bucket"),
+                "rule": f"Cap confidence one level lower for {bucket.get('bucket')} until calibration improves.",
+                "parameters": {
+                    "probability_bucket": bucket.get("bucket"),
+                    "cap_one_level": True,
+                },
+                "reason": f"Observed win rate {bucket.get('observed_win_rate')}% vs predicted {bucket.get('avg_predicted_probability')}%.",
+                "evidence": bucket,
+                "status": "active",
+                "promotion_status": "approved_conservative_guardrail",
+                "backtest_status": "audit_calibration_gate",
+                "source": "evolution_audit",
+                "date_created": generated_at,
+                "rollback_supported": True,
+                "production_update_allowed": True,
+            }
+        )
+
+    return candidates
+
+
+def _apply_safe_rule_candidates(audit: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = read_json("approved_rules")
+    existing = _active_rule_keys(payload)
+    new_rules = [candidate for candidate in _safe_rule_candidates_from_audit(audit) if candidate.get("rule_key") not in existing]
+    if not new_rules:
+        return []
+
+    next_version = _next_minor_version(str(payload.get("active_rule_version") or "rules-v1.0"), "rules-")
+    payload["active_rule_version"] = next_version
+    payload.setdefault("rollback_supported", True)
+    payload.setdefault("approved", [])
+    active_controls = [_rule_candidate_from_entry(entry) for entry in payload.get("active_controls", []) if isinstance(entry, dict)]
+
+    for rule in new_rules:
+        rule["rule_version"] = next_version
+        decision = {
+            "candidate_id": rule.get("candidate_id"),
+            "status": "approved",
+            "reason": "Conservative audit guardrail only reduces risk; it does not increase confidence.",
+            "sample_size": rule.get("evidence", {}).get("decided") or rule.get("evidence", {}).get("sample_size") or rule.get("evidence", {}).get("count") or 0,
+            "rule_version": next_version,
+        }
+        payload["approved"].append(
+            {
+                "candidate": rule,
+                "decision": decision,
+                "date": utc_now(),
+                "rollback_supported": True,
+            }
+        )
+        active_controls.append(rule)
+        record_evolution_event("audit_safe_rule_applied", {"rule": rule, "decision": decision})
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for rule in active_controls:
+        key = str(rule.get("rule_key") or rule.get("candidate_id") or rule)
+        deduped[key] = rule
+    payload["active_controls"] = list(deduped.values())
+    write_json("approved_rules", payload)
+    return new_rules
+
+
+def _normalize_weights(weights: dict[str, Any]) -> dict[str, float]:
+    total = sum(max(0.0, safe_float(value, 0.0)) for value in weights.values()) or 1.0
+    return {key: round(max(0.0, safe_float(value, 0.0)) / total, 4) for key, value in weights.items()}
+
+
+def _active_weight_version(store: dict[str, Any]) -> dict[str, Any]:
+    active_version = store.get("active_version")
+    versions = store.get("versions", [])
+    return next((item for item in versions if item.get("version") == active_version), versions[0] if versions else {})
+
+
+def _apply_safe_weight_update(audit: dict[str, Any]) -> list[dict[str, Any]]:
+    pitcher_reason = next((item for item in audit.get("reason_quality", []) if item.get("factor") == "starting_pitcher"), None)
+    if not pitcher_reason:
+        return []
+
+    enough_evidence = pitcher_reason.get("loss_mentions", 0) >= 10 or (
+        pitcher_reason.get("sample_size", 0) >= SAFE_APPLY_MIN_SAMPLE and safe_float(pitcher_reason.get("accuracy"), 100.0) < 45.0
+    )
+    if pitcher_reason.get("verdict") not in {"weak_signal", "needs_review"} or not enough_evidence:
+        return []
+
+    store = read_json("weight_versions")
+    active = _active_weight_version(store)
+    previous_keys = set(active.get("audit_adjustment_keys") or [])
+    adjustment_key = "audit:weight:starting_pitcher:needs_review"
+    if adjustment_key in previous_keys:
+        return []
+
+    active_weights = active.get("weights", {})
+    moneyline = dict(active_weights.get("moneyline", {}))
+    current_sp = safe_float(moneyline.get("starting_pitcher"), 0.0)
+    if current_sp <= SAFE_APPLY_MAX_WEIGHT_DELTA:
+        return []
+
+    delta = min(SAFE_APPLY_MAX_WEIGHT_DELTA, current_sp)
+    moneyline["starting_pitcher"] = round(current_sp - delta, 4)
+    moneyline["offense"] = round(safe_float(moneyline.get("offense"), 0.0) + delta * 0.4, 4)
+    moneyline["bullpen"] = round(safe_float(moneyline.get("bullpen"), 0.0) + delta * 0.2, 4)
+    moneyline["data_quality"] = round(safe_float(moneyline.get("data_quality"), 0.0) + delta * 0.4, 4)
+    moneyline = _normalize_weights(moneyline)
+
+    if max(moneyline.values(), default=0.0) > 0.35:
+        return []
+
+    previous_version = str(store.get("active_version") or active.get("version") or "weights-v1.0")
+    next_version = _next_minor_version(previous_version, "weights-")
+    for version in store.get("versions", []):
+        if version.get("status") == "active":
+            version["status"] = "archived"
+
+    new_version = {
+        "version": next_version,
+        "date_created": audit.get("summary", {}).get("generated_at") or utc_now(),
+        "reason": "Audit found repeated starting-pitcher signal misses; reduce SP weight by a conservative 5 percentage points.",
+        "previous_version": previous_version,
+        "status": "active",
+        "weights": {**active_weights, "moneyline": moneyline},
+        "audit_adjustment_keys": sorted([*previous_keys, adjustment_key]),
+        "source_reason_quality": pitcher_reason,
+        "rollback_supported": True,
+        "production_update_allowed": True,
+        "promotion_status": "approved_conservative_weight_reduction",
+        "backtest_status": "audit_min_sample_gate",
+    }
+    store["active_version"] = next_version
+    store.setdefault("versions", []).append(new_version)
+    write_json("weight_versions", store)
+    record_evolution_event("audit_safe_weight_applied", new_version)
+    return [new_version]
+
+
+def apply_safe_audit_updates(audit: dict[str, Any]) -> dict[str, Any]:
+    """Apply only conservative, versioned guardrails derived from audit evidence."""
+
+    applied_rules = _apply_safe_rule_candidates(audit)
+    applied_weights = _apply_safe_weight_update(audit)
+    result = {
+        "rules_added": [
+            {
+                "candidate_id": rule.get("candidate_id"),
+                "type": rule.get("type"),
+                "rule": rule.get("rule"),
+                "rule_version": rule.get("rule_version"),
+                "reason": rule.get("reason"),
+            }
+            for rule in applied_rules
+        ],
+        "weight_versions_added": [
+            {
+                "version": version.get("version"),
+                "previous_version": version.get("previous_version"),
+                "reason": version.get("reason"),
+                "moneyline_weights": version.get("weights", {}).get("moneyline", {}),
+            }
+            for version in applied_weights
+        ],
+        "note": "Only conservative risk-reducing updates were eligible. No confidence-increasing or safety-removing change is applied.",
+    }
+    record_evolution_event("audit_safe_apply_summary", result)
+    return result
+
+
 def _risk_warnings(causes: list[dict[str, Any]], weakest: list[dict[str, Any]]) -> list[dict[str, str]]:
     warnings: list[dict[str, str]] = []
     for cause in causes[:5]:
@@ -543,6 +819,7 @@ def build_evolution_audit(
     min_segment_sample: int = 3,
     candidate_limit: int = 10,
     persist: bool = False,
+    apply_safe: bool = False,
 ) -> dict[str, Any]:
     rows = _evaluation_rows()
     losses = read_jsonl("language_losses")
@@ -602,8 +879,11 @@ def build_evolution_audit(
         "confidence_cap_candidates": cap_candidates,
         "risk_warnings": _risk_warnings(causes, weakest),
         "segment_performance": segments[:30],
-        "safety": "Audit only. It does not auto-promote candidates or change production behavior.",
+        "applied_updates": None,
+        "safety": "Audit can apply only conservative, versioned risk guardrails when --apply-safe is used. It never increases confidence or removes NO BET protections.",
     }
+    if apply_safe:
+        audit["applied_updates"] = apply_safe_audit_updates(audit)
     if persist:
         append_jsonl("audit_reports", audit)
     return audit
@@ -614,6 +894,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary", action="store_true", help="Print audit summary JSON.")
     parser.add_argument("--min-segment-sample", type=int, default=3)
     parser.add_argument("--candidate-limit", type=int, default=10)
+    parser.add_argument("--apply-safe", action="store_true", help="Apply conservative versioned guardrails derived from audit evidence.")
     return parser.parse_args()
 
 
@@ -628,6 +909,7 @@ def main() -> None:
                 min_segment_sample=max(1, args.min_segment_sample),
                 candidate_limit=max(1, args.candidate_limit),
                 persist=True,
+                apply_safe=args.apply_safe,
             ),
             indent=2,
         )

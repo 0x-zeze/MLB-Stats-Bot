@@ -117,8 +117,8 @@ const EVOLUTION_ALIASES = {
 };
 const AUDIT_COMMAND = {
   module: 'src.evolution.evolution_audit',
-  args: ['--summary'],
-  label: 'Evolution audit'
+  args: ['--summary', '--apply-safe'],
+  label: 'Evolution audit + safe apply'
 };
 
 function helpText() {
@@ -130,7 +130,7 @@ function helpText() {
     uiCommand('/deep', 'semua game dengan statistik lengkap'),
     uiCommand('/game TEAM', 'cek tim tertentu hari ini'),
     uiCommand('/ask pertanyaan', 'tanya Analyst Agent, termasuk top pick'),
-    uiCommand('/audit', 'diagnosis kelemahan Agent Evolution'),
+    uiCommand('/audit', 'audit kelemahan + apply guardrail aman'),
     uiCommand('/linealerts on|off|status', 'atur notifikasi line movement'),
     '',
     uiBullet('💬', 'Pertanyaan biasa tanpa slash tetap masuk ke Analyst Agent.'),
@@ -144,7 +144,7 @@ function botCommandList() {
     { command: 'deep', description: 'Semua game dengan statistik lengkap' },
     { command: 'game', description: 'Cek tim tertentu hari ini' },
     { command: 'ask', description: 'Tanya Analyst Agent' },
-    { command: 'audit', description: 'Diagnosis kelemahan agent' },
+    { command: 'audit', description: 'Audit + safe guardrail' },
     { command: 'linealerts', description: 'Atur line movement alerts' }
   ];
 }
@@ -639,6 +639,10 @@ function formatConfidenceCapCandidate(item) {
   return uiBullet('•', `${item.target || item.type} | ${item.update || item.reason}`);
 }
 
+function formatAppliedAuditUpdate(item) {
+  return uiBullet('•', `${item.type || 'weight'} | ${item.rule || item.reason || item.version}`);
+}
+
 function formatEvolutionAudit(payload) {
   const summary = payload.summary || {};
   const weakest = payload.weakest_segments || [];
@@ -649,6 +653,9 @@ function formatEvolutionAudit(payload) {
   const clv = payload.clv_report || {};
   const reasonQuality = payload.reason_quality || [];
   const confidenceCaps = payload.confidence_cap_candidates || [];
+  const applied = payload.applied_updates || {};
+  const appliedRules = applied.rules_added || [];
+  const appliedWeights = applied.weight_versions_added || [];
 
   return [
     uiTitle('🔎', 'MLB Agent Evolution | audit'),
@@ -688,7 +695,15 @@ function formatEvolutionAudit(payload) {
       ? candidates.slice(0, 3).map((item) => uiBullet('•', `${item.type} | score ${item.priority_score} | backtest ${item.backtest_status}`))
       : [uiBullet('•', 'Belum ada candidate prioritas.')]),
     '',
-    uiBullet('🛡️', 'Audit hanya diagnosis. Tidak auto-ubah rules/prompt/weights.')
+    uiSection('🔧', 'Applied safe updates'),
+    ...(appliedRules.length || appliedWeights.length
+      ? [
+          ...appliedRules.map(formatAppliedAuditUpdate),
+          ...appliedWeights.map((item) => uiBullet('•', `weight_version | ${item.version} | SP weight adjusted safely`))
+        ]
+      : [uiBullet('•', 'Tidak ada update baru. Guardrail aktif yang sama tidak ditulis ulang.')]),
+    '',
+    uiBullet('🛡️', 'Audit boleh apply guardrail konservatif. Tidak menaikkan confidence dan tidak menghapus NO BET protection.')
   ]
     .filter((line) => line !== null && line !== undefined)
     .join('\n');
