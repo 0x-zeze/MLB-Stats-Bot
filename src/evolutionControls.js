@@ -71,13 +71,20 @@ export function loadEvolutionControls() {
     active_version: 'weights-v1.0',
     versions: [{ version: 'weights-v1.0', status: 'active', weights: { moneyline: DEFAULT_MONEYLINE_WEIGHTS } }]
   });
+  const memory = readJsonFile('audit_memory.json', {
+    version: 'audit-memory-v1.0',
+    mistake_patterns: [],
+    next_game_cautions: [],
+    production_authority: 'advisory_memory_only'
+  });
   const activeWeights = activeWeightVersion(weightStore);
 
   return {
     activeRuleVersion: approvedRules.active_rule_version || 'rules-v1.0',
     rules: normalizeRules(approvedRules),
     activeWeightVersion: weightStore.active_version || activeWeights?.version || 'weights-v1.0',
-    weights: activeWeights?.weights || { moneyline: DEFAULT_MONEYLINE_WEIGHTS }
+    weights: activeWeights?.weights || { moneyline: DEFAULT_MONEYLINE_WEIGHTS },
+    memory
   };
 }
 

@@ -175,6 +175,7 @@ class EvolutionAuditTests(unittest.TestCase):
             audit = build_evolution_audit(min_segment_sample=3, persist=True, apply_safe=True)
             approved = read_json("approved_rules")
             weights = read_json("weight_versions")
+            memory = read_json("audit_memory")
             active_weights = next(version for version in weights["versions"] if version["version"] == weights["active_version"])
             second_audit = build_evolution_audit(min_segment_sample=3, persist=False, apply_safe=True)
 
@@ -183,6 +184,9 @@ class EvolutionAuditTests(unittest.TestCase):
         self.assertNotEqual(approved["active_rule_version"], "rules-v1.0")
         self.assertTrue(audit["applied_updates"]["rules_added"])
         self.assertTrue(audit["applied_updates"]["weight_versions_added"])
+        self.assertGreater(audit["memory_update"]["patterns_written"], 0)
+        self.assertGreater(len(memory["mistake_patterns"]), 0)
+        self.assertTrue(memory["next_game_cautions"])
         self.assertLess(active_weights["weights"]["moneyline"]["starting_pitcher"], 0.24)
         self.assertEqual(second_audit["applied_updates"]["rules_added"], [])
         self.assertEqual(second_audit["applied_updates"]["weight_versions_added"], [])

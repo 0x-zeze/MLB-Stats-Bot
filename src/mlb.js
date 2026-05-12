@@ -445,6 +445,49 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
   return [...new Set(reasons)];
 }
 
+function auditMemoryNotes(item, option, evolutionControls = loadEvolutionControls()) {
+  const patterns = Array.isArray(evolutionControls?.memory?.mistake_patterns)
+    ? evolutionControls.memory.mistake_patterns
+    : [];
+  if (patterns.length === 0) return [];
+
+  const notes = [];
+  const breakdown = item.modelBreakdown || {};
+  const matchupEdge = Math.abs(toNumber(breakdown.matchupEdge, 0));
+  const recordContextEdge = Math.abs(toNumber(breakdown.recordContextEdge, 0));
+  const starterEdge = Math.abs(toNumber(breakdown.starterEdge, 0));
+  const offenseEdge = Math.abs(toNumber(breakdown.offenseEdge, 0));
+  const lineupEdge = Math.abs(toNumber(breakdown.lineupEdge, 0));
+  const bullpenEdge = Math.abs(toNumber(breakdown.bullpenEdge, 0));
+  const modelProbabilityEdge = option ? Math.abs(toNumber(option.modelProbability, 50) - 50) : 0;
+  const valueEdge = option ? toNumber(option.edge, 0) : 0;
+  const lineups = [item.lineups?.away, item.lineups?.home].filter(Boolean);
+  const hasIncompleteLineup = lineups.some((lineup) => !lineup.confirmed || toNumber(lineup.count, 0) < 9);
+
+  for (const pattern of patterns.slice(0, 12)) {
+    const type = String(pattern.type || '').toLowerCase();
+    const factor = String(pattern.factor || '').toLowerCase();
+    const caution = String(pattern.caution || '').trim();
+    if (!caution) continue;
+
+    if ((type.includes('weak_edge') || factor.includes('edge:weak') || factor === 'market_edge') && (valueEdge < STRONG_VALUE_EDGE_THRESHOLD || modelProbabilityEdge < 5)) {
+      notes.push(caution);
+    } else if ((type === 'record_bias' || factor === 'record_context') && (breakdown.recordDominated || (recordContextEdge > matchupEdge * 1.25 && matchupEdge < 0.18))) {
+      notes.push(caution);
+    } else if (factor === 'starting_pitcher' && starterEdge >= 0.18 && starterEdge > Math.max(offenseEdge, lineupEdge, bullpenEdge)) {
+      notes.push(caution);
+    } else if (factor === 'lineup' && hasIncompleteLineup) {
+      notes.push(caution);
+    } else if (factor === 'bullpen' && bullpenEdge >= 0.04) {
+      notes.push(caution);
+    } else if (type === 'factor_needs_review' && factor === 'unknown') {
+      notes.push(caution);
+    }
+  }
+
+  return [...new Set(notes)].slice(0, 3);
+}
+
 export function applyMoneylineValueMarket(item) {
   if (!item) return item;
   const evolutionControls = loadEvolutionControls();
@@ -456,13 +499,16 @@ export function applyMoneylineValueMarket(item) {
   const best = options[0] || null;
   const reasons = valueSafetyReasons(item, best, evolutionControls);
   const auditAdjustments = reasons.filter((reason) => String(reason).toLowerCase().includes('audit guardrail'));
+  const memoryNotes = auditMemoryNotes(item, best, evolutionControls);
 
   item.valuePick = best;
   item.moneylineValueOptions = options;
   item.auditAdjustments = auditAdjustments;
+  item.auditMemoryNotes = memoryNotes;
   item.activeEvolutionVersions = {
     rule: evolutionControls.activeRuleVersion,
-    weights: evolutionControls.activeWeightVersion
+    weights: evolutionControls.activeWeightVersion,
+    memory: evolutionControls.memory?.version || 'audit-memory-v1.0'
   };
   item.betDecision = best
     ? {
@@ -478,14 +524,16 @@ export function applyMoneylineValueMarket(item) {
         edge: best.edge,
         reason: reasons[0] || `model ${best.modelProbability.toFixed(1)}% vs implied ${best.impliedProbability.toFixed(1)}%`,
         reasons,
-        auditAdjustments
+        auditAdjustments,
+        auditMemoryNotes: memoryNotes
       }
     : {
         market: 'moneyline',
         status: 'LEAN ONLY',
         reason: 'odds moneyline belum tersedia',
         reasons,
-        auditAdjustments
+        auditAdjustments,
+        auditMemoryNotes: memoryNotes
       };
 
   return item;

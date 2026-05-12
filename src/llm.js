@@ -142,6 +142,7 @@ function compactGameForAgent(item) {
       currentOdds: item.currentOdds,
       valuePick: item.valuePick,
       betDecision: item.betDecision,
+      auditMemoryNotes: item.auditMemoryNotes,
       rule: 'LLM may explain and flag risk, but must not invent probabilities or totals.'
     },
     signalPriority: {
@@ -181,6 +182,7 @@ function compactGameForAgent(item) {
     valuePick: item.valuePick,
     moneylineValueOptions: item.moneylineValueOptions,
     betDecision: item.betDecision,
+    auditMemoryNotes: item.auditMemoryNotes,
     totalRuns: item.totalRuns,
     baselineReasons: item.reasons,
     firstInning: item.firstInning
@@ -527,6 +529,9 @@ function topPickWarnings(prediction) {
   }
   for (const reason of prediction.auditAdjustments || prediction.betDecision?.auditAdjustments || []) {
     warnings.push(reason);
+  }
+  for (const note of prediction.auditMemoryNotes || prediction.betDecision?.auditMemoryNotes || []) {
+    warnings.push(note);
   }
   return [...new Set(warnings)].slice(0, 3);
 }

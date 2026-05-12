@@ -298,6 +298,8 @@ function compactPrediction(prediction, dateYmd) {
     valuePick: prediction.valuePick || null,
     moneylineValueOptions: prediction.moneylineValueOptions || [],
     betDecision: prediction.betDecision || null,
+    auditMemoryNotes: prediction.auditMemoryNotes || [],
+    auditAdjustments: prediction.auditAdjustments || [],
     agentRisk: agent?.risk || '',
     agentMemoryNote: agent?.memoryNote || '',
     savedAt: new Date().toISOString()

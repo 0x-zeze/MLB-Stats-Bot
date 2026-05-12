@@ -28,6 +28,7 @@ JSON_FILES = {
     "rejected_rules": "rejected_rules.json",
     "weight_versions": "weight_versions.json",
     "prompt_versions": "prompt_versions.json",
+    "audit_memory": "audit_memory.json",
 }
 
 PREDICTION_OUTCOME_FIELDS = [
@@ -125,6 +126,15 @@ def _default_json(file_key: str) -> dict[str, Any]:
                     "rollback_supported": True,
                 }
             ],
+        }
+    if file_key == "audit_memory":
+        return {
+            "version": "audit-memory-v1.0",
+            "updated_at": utc_now(),
+            "mistake_patterns": [],
+            "next_game_cautions": [],
+            "production_authority": "advisory_memory_only",
+            "rollback_supported": True,
         }
     return {}
 

@@ -154,7 +154,62 @@ test('approved audit guardrail can downgrade weak model edge to no bet', () => {
     assert.equal(game.valuePick.teamName, 'Thin Favorite');
     assert.equal(game.betDecision.status, 'NO BET');
     assert.match(game.betDecision.reason, /audit guardrail/);
-    assert.deepEqual(game.activeEvolutionVersions, { rule: 'rules-v1.1', weights: 'weights-v1.0' });
+    assert.deepEqual(game.activeEvolutionVersions, { rule: 'rules-v1.1', weights: 'weights-v1.0', memory: 'audit-memory-v1.0' });
+  } finally {
+    if (previousDir === undefined) {
+      delete process.env.MLB_EVOLUTION_DATA_DIR;
+    } else {
+      process.env.MLB_EVOLUTION_DATA_DIR = previousDir;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('audit memory adds caution notes without forcing a bet decision by itself', () => {
+  const previousDir = process.env.MLB_EVOLUTION_DATA_DIR;
+  const dir = mkdtempSync(join(tmpdir(), 'mlb-audit-memory-'));
+  process.env.MLB_EVOLUTION_DATA_DIR = dir;
+
+  try {
+    writeFileSync(join(dir, 'approved_rules.json'), JSON.stringify({ active_rule_version: 'rules-v1.0', active_controls: [], approved: [] }));
+    writeFileSync(
+      join(dir, 'weight_versions.json'),
+      JSON.stringify({
+        active_version: 'weights-v1.0',
+        versions: [{ version: 'weights-v1.0', status: 'active', weights: { moneyline: {} } }]
+      })
+    );
+    writeFileSync(
+      join(dir, 'audit_memory.json'),
+      JSON.stringify({
+        version: 'audit-memory-v1.0',
+        mistake_patterns: [
+          {
+            type: 'factor_needs_review',
+            factor: 'starting_pitcher',
+            caution: 'Memory: starting pitcher signal has misled recent picks.'
+          }
+        ],
+        next_game_cautions: []
+      })
+    );
+
+    const game = sampleGame({
+      modelBreakdown: {
+        matchupEdge: 0.3,
+        recordContextEdge: 0.02,
+        starterEdge: 0.28,
+        offenseEdge: 0.05,
+        lineupEdge: 0.02,
+        bullpenEdge: 0.01,
+        recordDominated: false
+      }
+    });
+
+    applyMoneylineValueMarket(game);
+
+    assert.equal(game.betDecision.status, 'VALUE');
+    assert.deepEqual(game.auditMemoryNotes, ['Memory: starting pitcher signal has misled recent picks.']);
   } finally {
     if (previousDir === undefined) {
       delete process.env.MLB_EVOLUTION_DATA_DIR;

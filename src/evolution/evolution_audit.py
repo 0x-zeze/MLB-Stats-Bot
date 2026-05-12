@@ -51,6 +51,17 @@ SAFE_APPLY_MIN_SAMPLE = 5
 SAFE_APPLY_MAX_WEIGHT_DELTA = 0.05
 SAFE_APPLY_MIN_LOSS_RATE = 55.0
 
+MEMORY_CAUTION_BY_PATTERN = {
+    "weak_edge": "Prefer NO BET or LEAN ONLY when edge is marginal and no Tier 1 signal confirms the side.",
+    "record_bias": "Do not let record, H2H, or recent form dominate weak game-specific matchup evidence.",
+    "overconfidence": "Cap confidence unless multiple independent signals agree.",
+    "pitcher_misread": "Do not let starting-pitcher edge dominate without offense, lineup, and bullpen confirmation.",
+    "lineup_misread": "Downgrade confidence when lineup status is projected or missing.",
+    "bullpen_misread": "Re-check bullpen fatigue and short-start risk before trusting the side.",
+    "market_misread": "Compare model probability to implied odds and line movement before calling value.",
+    "bad_data_quality": "Prefer NO BET when data quality is low or key inputs are stale.",
+}
+
 CONFIDENCE_PROBABILITY_FALLBACK = {
     "low": 54.0,
     "medium": 60.0,
@@ -791,6 +802,158 @@ def apply_safe_audit_updates(audit: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _pattern_id(prefix: str, value: Any) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "general").lower()).strip("-")
+    return f"{prefix}-{normalized or 'general'}"
+
+
+def _loss_ids_for_pattern(losses: list[dict[str, Any]], *, loss_type: str | None = None, factor: str | None = None) -> list[str]:
+    selected = []
+    for loss in losses:
+        if loss_type and str(loss.get("loss_type")) != loss_type:
+            continue
+        if factor and str(loss.get("affected_factor") or "") != factor:
+            continue
+        if loss.get("loss_id"):
+            selected.append(str(loss["loss_id"]))
+    return selected[-8:]
+
+
+def _caution_for_pattern(pattern_type: str, factor: str | None = None) -> str:
+    if pattern_type in MEMORY_CAUTION_BY_PATTERN:
+        return MEMORY_CAUTION_BY_PATTERN[pattern_type]
+    if factor == "starting_pitcher":
+        return MEMORY_CAUTION_BY_PATTERN["pitcher_misread"]
+    if factor == "market_edge":
+        return MEMORY_CAUTION_BY_PATTERN["weak_edge"]
+    if factor == "record_context":
+        return MEMORY_CAUTION_BY_PATTERN["record_bias"]
+    return "Use this repeated miss pattern as caution context; current validated data still wins."
+
+
+def build_audit_memory(
+    audit: dict[str, Any],
+    rows: list[dict[str, Any]],
+    losses: list[dict[str, Any]],
+    lessons: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build advisory memory from repeated misses for future analysis."""
+
+    patterns: list[dict[str, Any]] = []
+    generated_at = audit.get("summary", {}).get("generated_at") or utc_now()
+    wrong_rows = [row for row in rows if row.get("result") == "loss"]
+
+    for cause in audit.get("root_causes", [])[:8]:
+        loss_type = str(cause.get("loss_type") or "general")
+        factor = str(cause.get("primary_factor") or "general")
+        if loss_type in NON_ACTIONABLE_LOSS_TYPES or cause.get("count", 0) < 2:
+            continue
+        patterns.append(
+            {
+                "pattern_id": _pattern_id("loss", loss_type),
+                "type": loss_type,
+                "factor": factor,
+                "count": cause.get("count", 0),
+                "severity": "high" if cause.get("severity_score", 0) >= 10 else "medium",
+                "caution": _caution_for_pattern(loss_type, factor),
+                "source_loss_ids": _loss_ids_for_pattern(losses, loss_type=loss_type),
+                "latest_summary": cause.get("latest_summary"),
+                "production_authority": "advisory_only",
+            }
+        )
+
+    for segment in audit.get("weakest_segments", [])[:8]:
+        if segment.get("decided", 0) < SAFE_APPLY_MIN_SAMPLE or safe_float(segment.get("loss_rate"), 0.0) < SAFE_APPLY_MIN_LOSS_RATE:
+            continue
+        patterns.append(
+            {
+                "pattern_id": _pattern_id("segment", segment.get("segment")),
+                "type": "weak_segment",
+                "factor": str(segment.get("segment") or "segment"),
+                "count": segment.get("losses", 0),
+                "severity": "high" if safe_float(segment.get("loss_rate"), 0.0) >= 65 else "medium",
+                "caution": f"Be cautious with {segment.get('segment')}; recent evaluated record is {segment.get('wins')}-{segment.get('losses')}.",
+                "segment": segment,
+                "production_authority": "advisory_only",
+            }
+        )
+
+    for reason in audit.get("reason_quality", [])[:8]:
+        if reason.get("verdict") not in {"weak_signal", "needs_review"}:
+            continue
+        if reason.get("loss_mentions", 0) < 3 and reason.get("sample_size", 0) < SAFE_APPLY_MIN_SAMPLE:
+            continue
+        factor = str(reason.get("factor") or "general")
+        patterns.append(
+            {
+                "pattern_id": _pattern_id("factor", factor),
+                "type": "factor_needs_review",
+                "factor": factor,
+                "count": reason.get("loss_mentions") or reason.get("losses", 0),
+                "severity": "medium",
+                "caution": _caution_for_pattern(factor, factor),
+                "reason_quality": reason,
+                "source_loss_ids": _loss_ids_for_pattern(losses, factor=factor),
+                "production_authority": "advisory_only",
+            }
+        )
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for pattern in patterns:
+        key = str(pattern["pattern_id"])
+        existing = deduped.get(key)
+        if not existing or safe_float(pattern.get("count"), 0.0) > safe_float(existing.get("count"), 0.0):
+            deduped[key] = pattern
+
+    ordered = sorted(
+        deduped.values(),
+        key=lambda item: (item.get("severity") == "high", safe_float(item.get("count"), 0.0)),
+        reverse=True,
+    )[:12]
+    cautions = []
+    for pattern in ordered:
+        caution = str(pattern.get("caution") or "")
+        if caution and caution not in cautions:
+            cautions.append(caution)
+
+    return {
+        "version": "audit-memory-v1.0",
+        "updated_at": generated_at,
+        "sample": {
+            "evaluated": len(rows),
+            "wrong_predictions": len(wrong_rows),
+            "lessons": len(lessons),
+            "language_losses": len(losses),
+        },
+        "mistake_patterns": ordered,
+        "next_game_cautions": cautions[:8],
+        "production_authority": "advisory_memory_only",
+        "current_data_wins": True,
+        "rollback_supported": True,
+    }
+
+
+def update_audit_memory(audit: dict[str, Any], rows: list[dict[str, Any]], losses: list[dict[str, Any]], lessons: list[dict[str, Any]]) -> dict[str, Any]:
+    memory = build_audit_memory(audit, rows, losses, lessons)
+    write_json("audit_memory", memory)
+    result = {
+        "patterns_written": len(memory.get("mistake_patterns", [])),
+        "wrong_predictions": memory.get("sample", {}).get("wrong_predictions", 0),
+        "top_patterns": [
+            {
+                "type": pattern.get("type"),
+                "factor": pattern.get("factor"),
+                "count": pattern.get("count"),
+                "caution": pattern.get("caution"),
+            }
+            for pattern in memory.get("mistake_patterns", [])[:3]
+        ],
+        "updated_at": memory.get("updated_at"),
+    }
+    record_evolution_event("audit_memory_updated", result)
+    return result
+
+
 def _risk_warnings(causes: list[dict[str, Any]], weakest: list[dict[str, Any]]) -> list[dict[str, str]]:
     warnings: list[dict[str, str]] = []
     for cause in causes[:5]:
@@ -820,6 +983,7 @@ def build_evolution_audit(
     candidate_limit: int = 10,
     persist: bool = False,
     apply_safe: bool = False,
+    update_memory: bool = False,
 ) -> dict[str, Any]:
     rows = _evaluation_rows()
     losses = read_jsonl("language_losses")
@@ -880,8 +1044,11 @@ def build_evolution_audit(
         "risk_warnings": _risk_warnings(causes, weakest),
         "segment_performance": segments[:30],
         "applied_updates": None,
+        "memory_update": None,
         "safety": "Audit can apply only conservative, versioned risk guardrails when --apply-safe is used. It never increases confidence or removes NO BET protections.",
     }
+    if apply_safe or update_memory:
+        audit["memory_update"] = update_audit_memory(audit, rows, losses, lessons)
     if apply_safe:
         audit["applied_updates"] = apply_safe_audit_updates(audit)
     if persist:
@@ -895,6 +1062,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-segment-sample", type=int, default=3)
     parser.add_argument("--candidate-limit", type=int, default=10)
     parser.add_argument("--apply-safe", action="store_true", help="Apply conservative versioned guardrails derived from audit evidence.")
+    parser.add_argument("--update-memory", action="store_true", help="Refresh advisory audit memory from wrong predictions and lessons.")
     return parser.parse_args()
 
 
@@ -910,6 +1078,7 @@ def main() -> None:
                 candidate_limit=max(1, args.candidate_limit),
                 persist=True,
                 apply_safe=args.apply_safe,
+                update_memory=args.update_memory,
             ),
             indent=2,
         )
