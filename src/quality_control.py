@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from .data_freshness import check_data_freshness
-from .utils import safe_float
+from .utils import clamp, safe_float
 
 
 CONFIRMED = "Confirmed"
@@ -405,6 +405,193 @@ def apply_confidence_downgrade(
         }
     )
     return output
+
+
+def late_news_penalty(game_context: dict[str, Any]) -> dict[str, Any]:
+    """Detect late-breaking changes that may not be captured in the model.
+
+    Late news — scratch-starts, sudden bullpen unavailable, lineup
+    overhauls, weather changes — can materially shift the true edge
+    after the model runs.  This function detects known signals and
+    returns a penalty score (0-15 points) and list of flags.
+
+    Returns:
+        dict with keys:
+        - penalty: int (0-15) to subtract from data quality score
+        - flags: list[str] describing the late news risk factors
+        - severity: "none", "low", "medium", or "high"
+    """
+    flags: list[str] = []
+    penalty = 0
+
+    # Check for projected lineups close to game time — likely last-minute
+    lineup = game_context.get("lineup") or game_context.get("lineups")
+    if isinstance(lineup, dict):
+        for side in ("home", "away"):
+            side_data = lineup.get(side) if isinstance(lineup.get(side), dict) else None
+            if side_data and not _as_bool(side_data.get("confirmed")):
+                lineup_timestamp = _field(side_data, "last_update") or _field(side_data, "updated_at")
+                if lineup_timestamp:
+                    freshness = check_data_freshness(lineup_timestamp, 120)
+                    if freshness.lower() == "stale":
+                        flags.append(f"{side} lineup last updated 2+ hours ago")
+                        penalty += 2
+
+    # Check if injury news was recent (last 30 min) — may indicate scratch
+    injury = game_context.get("injury_news") or game_context.get("injuries")
+    if isinstance(injury, dict):
+        injury_ts = _field(injury, "data_timestamp") or _field(injury, "updated_at")
+        if injury_ts:
+            freshness = check_data_freshness(injury_ts, 30)
+            if freshness.lower() == "fresh":
+                # Fresh injury news close to game time = potential disruption
+                injury_items = injury.get("items") or injury.get("reports") or []
+                if isinstance(injury_items, list) and len(injury_items) > 0:
+                    flags.append("Recent injury news — lineup/pitching may have shifted")
+                    penalty += 3
+
+    # Check for probable pitcher changes: projected → absent or different
+    pitchers = game_context.get("probable_pitchers")
+    if isinstance(pitchers, dict):
+        for side in ("home", "away"):
+            side_data = pitchers.get(side) if isinstance(pitchers.get(side), dict) else None
+            if side_data:
+                status = str(_field(side_data, "status", "")).lower()
+                if status in {"tbd", "unknown", "scratched"}:
+                    flags.append(f"{side} probable pitcher status: {status}")
+                    penalty += 5
+
+    # Weather changes: if weather data is stale for an outdoor game
+    weather = game_context.get("weather") or {}
+    roof = str(_field(weather, "roof", "open")).strip().lower()
+    is_outdoor = roof not in {"closed", "dome", "retractable closed"}
+    weather_ts = _field(weather, "data_timestamp") or _field(weather, "updated_at")
+    if is_outdoor and weather_ts:
+        freshness = check_data_freshness(weather_ts, 60)
+        if freshness.lower() == "stale":
+            flags.append("Weather data stale for outdoor game — conditions may have changed")
+            penalty += 2
+
+    # Heavy line movement = possible information asymmetry
+    market = game_context.get("market") or game_context.get("odds") or {}
+    opening_total = safe_float(_field(market, "opening_total"), 0.0)
+    current_total = safe_float(_field(market, "current_total"), 0.0) or safe_float(
+        _field(market, "market_total"), 0.0
+    )
+    if opening_total > 0 and current_total > 0:
+        movement = abs(current_total - opening_total)
+        if movement >= 1.5:
+            flags.append(f"Major line movement: {opening_total:.1f} → {current_total:.1f}")
+            penalty += 3
+        elif movement >= 0.75:
+            flags.append(f"Notable line movement: {opening_total:.1f} → {current_total:.1f}")
+            penalty += 2
+
+    penalty = min(penalty, 15)
+    if penalty >= 10:
+        severity = "high"
+    elif penalty >= 5:
+        severity = "medium"
+    elif penalty > 0:
+        severity = "low"
+    else:
+        severity = "none"
+
+    return {
+        "penalty": penalty,
+        "flags": flags,
+        "severity": severity,
+    }
+
+
+def compute_risk_uncertainty(
+    prediction: dict[str, Any],
+    quality_report: dict[str, Any],
+    game_context: dict[str, Any],
+) -> dict[str, Any]:
+    """Compute an overall risk/uncertainty score for the prediction.
+
+    Combines model confidence, data quality, market alignment, late news
+    risk, and contextual volatility into a single 0-100 risk score
+    (0 = very low risk/certainty, 100 = very high risk/uncertainty).
+
+    Returns:
+        dict with:
+        - risk_score: int (0-100) where higher = more uncertain
+        - risk_level: "low", "moderate", "elevated", or "extreme"
+        - components: dict[str, float] of individual risk contributions
+        - warnings: list[str] of actionable risk warnings
+    """
+    components: dict[str, float] = {}
+    warnings: list[str] = []
+
+    # 1. Model edge uncertainty: small edge = high uncertainty
+    edge = safe_float(prediction.get("model_edge"), 0.0)
+    edge_risk = clamp((1.0 - min(abs(edge) * 10, 1.0)) * 25, 0, 25)
+    components["edge_uncertainty"] = round(edge_risk, 1)
+    if abs(edge) < 0.03:
+        warnings.append("Model edge is very small — prediction is near a coin flip")
+
+    # 2. Data quality risk
+    score = int(quality_report.get("score", 0))
+    data_risk = clamp((100 - score) * 0.25, 0, 25)
+    components["data_quality_risk"] = round(data_risk, 1)
+    if score < 70:
+        warnings.append(f"Low data quality ({score}/100) increases prediction uncertainty")
+
+    # 3. Market alignment risk: model and market disagree
+    moneyline_edge = safe_float(
+        (game_context.get("market_comparison") or {}).get("moneyline", {}).get("pick_edge")
+    )
+    market_risk = 0.0
+    if moneyline_edge is not None:
+        # If model agrees with market direction → lower risk
+        market_risk = clamp((1.0 - min(abs(moneyline_edge) * 5, 1.0)) * 15, 0, 15)
+    else:
+        market_risk = 12.0  # no market data = higher risk
+        warnings.append("No market odds available for comparison")
+    components["market_alignment_risk"] = round(market_risk, 1)
+
+    # 4. Late news risk
+    news_info = late_news_penalty(game_context)
+    news_risk = clamp(news_info["penalty"] * 1.5, 0, 20)
+    components["late_news_risk"] = round(news_risk, 1)
+    if news_info["severity"] in ("medium", "high"):
+        warnings.extend(news_info["flags"])
+
+    # 5. Contextual volatility: opener, stale weather, projected lineup
+    context_risk = 0.0
+    if quality_report.get("opener_situation") in ("high", "medium"):
+        context_risk += 5
+        warnings.append("Opener situation adds bullpen unpredictability")
+    if quality_report.get("lineup") == PROJECTED:
+        context_risk += 3
+    if quality_report.get("probable_pitchers") == PROJECTED:
+        context_risk += 3
+    if quality_report.get("market_movement") == MOVED_HEAVILY:
+        context_risk += 4
+        warnings.append("Heavy line movement suggests sharp money or late info")
+    components["contextual_volatility"] = round(min(context_risk, 15), 1)
+
+    # Total risk score
+    total_risk = sum(components.values())
+    risk_score = int(min(100, total_risk))
+
+    if risk_score >= 60:
+        risk_level = "extreme"
+    elif risk_score >= 40:
+        risk_level = "elevated"
+    elif risk_score >= 20:
+        risk_level = "moderate"
+    else:
+        risk_level = "low"
+
+    return {
+        "risk_score": risk_score,
+        "risk_level": risk_level,
+        "components": components,
+        "warnings": warnings,
+    }
 
 
 def format_quality_report(quality_report: dict[str, Any]) -> str:

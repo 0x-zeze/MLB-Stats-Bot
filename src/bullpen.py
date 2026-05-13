@@ -73,3 +73,65 @@ def load_bullpen_usage(path: str | Path | None = None) -> dict[str, BullpenUsage
 def get_bullpen_usage(usage: dict[str, BullpenUsage], team: str) -> BullpenUsage | None:
     """Find bullpen usage by team."""
     return usage.get(clean_name(team))
+
+
+def expected_bullpen_quality_remaining(
+    bullpen: BullpenUsage | None,
+    expected_starter_ip: float = 5.5,
+    league_avg_bullpen_era: float = 4.10,
+) -> dict[str, float]:
+    """Estimate the quality of bullpen innings the team has available.
+
+    Returns a dict with:
+    - expected_bullpen_ip: how many innings the bullpen must cover
+    - bullpen_quality_score: 0-1 scale (1 = elite bullpen remaining)
+    - fatigue_penalty: how many runs of penalty from fatigue
+    - effective_era: expected ERA for remaining bullpen innings
+
+    This upgrades the simple fatigue flags into a continuous quality
+    estimate that the totals and moneyline models can use directly.
+    """
+    if bullpen is None:
+        return {
+            "expected_bullpen_ip": max(0.0, 9.0 - expected_starter_ip),
+            "bullpen_quality_score": 0.5,
+            "fatigue_penalty": 0.0,
+            "effective_era": league_avg_bullpen_era,
+        }
+
+    expected_bullpen_ip = max(0.0, 9.0 - expected_starter_ip)
+
+    # Base quality from recent ERA
+    era = max(1.0, bullpen.bullpen_era_last_7)
+    era_quality = clamp((league_avg_bullpen_era - era) / 2.0, -0.5, 0.5)
+
+    # Availability score: closer + high-leverage arms
+    availability_score = 0.0
+    if not bullpen.closer_available:
+        availability_score -= 0.15
+    if not bullpen.high_leverage_available:
+        availability_score -= 0.10
+
+    # Fatigue from recent workload
+    innings_fatigue = max(0.0, bullpen.bullpen_innings_last_3_days - 9.0) * 0.03
+    reliever_fatigue = max(0, bullpen.relievers_used_yesterday - 3) * 0.04
+    b2b_fatigue = bullpen.back_to_back_usage * 0.05
+    total_fatigue = clamp(innings_fatigue + reliever_fatigue + b2b_fatigue, 0.0, 0.4)
+
+    # Composite quality score (0-1 scale, 0.5 = league average)
+    raw_quality = 0.5 + era_quality + availability_score - total_fatigue
+    quality_score = clamp(raw_quality, 0.1, 0.95)
+
+    # Effective ERA: how many runs the bullpen is likely to allow
+    era_adjustment = (1.0 - quality_score) * 2.0  # scale quality to ERA modifier
+    effective_era = clamp(league_avg_bullpen_era + era_adjustment, 2.5, 7.0)
+
+    # Fatigue penalty in expected runs
+    fatigue_penalty = total_fatigue * expected_bullpen_ip * 0.5
+
+    return {
+        "expected_bullpen_ip": round(expected_bullpen_ip, 1),
+        "bullpen_quality_score": round(quality_score, 3),
+        "fatigue_penalty": round(fatigue_penalty, 2),
+        "effective_era": round(effective_era, 2),
+    }

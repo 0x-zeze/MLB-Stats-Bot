@@ -531,3 +531,92 @@ def recent_form_score(
 def home_field_adjustment(home_team: bool = True) -> float:
     """Return a normalized home-field feature used by the weighted model."""
     return 1.0 if home_team else 0.0
+
+
+def matchup_difficulty(
+    opponent_win_pct: float,
+    opponent_runs_per_game: float,
+    opponent_ops: float,
+    opponent_wrc_plus: float,
+    opponent_pitcher_era: float,
+    opponent_pitcher_fip: float,
+) -> float:
+    """Rate how tough the opponent is on a 0-1 scale (1 = hardest).
+
+    Combines opponent overall strength, offensive firepower, and starting
+    pitcher quality so downstream models can weight or flag difficult
+    matchups before making predictions.
+    """
+    # Opponent overall strength: win% vs league .500
+    strength_component = clamp((opponent_win_pct - 0.500) * 2.0, -1.0, 1.0)
+
+    # Offense component: league-avg OPS ~.720, wRC+ ~100
+    offense_component = clamp(
+        (opponent_ops - 0.720) * 3.0 + (opponent_wrc_plus - 100.0) * 0.02,
+        -1.0,
+        1.0,
+    )
+
+    # Pitcher component: lower ERA/FIP = harder matchup for your offense
+    # League avg ERA ~4.20 — lower means tougher
+    pitcher_component = clamp(
+        (4.20 - opponent_pitcher_era) * 0.25 + (4.20 - opponent_pitcher_fip) * 0.20,
+        -1.0,
+        1.0,
+    )
+
+    # Weighted composite mapped to 0-1 scale
+    raw = (
+        strength_component * 0.35
+        + offense_component * 0.35
+        + pitcher_component * 0.30
+    )
+    return clamp((raw + 1.0) / 2.0, 0.0, 1.0)
+
+
+def expected_length_of_start(
+    pitcher_era: float,
+    innings_per_start: float,
+    pitch_count_last_start: float,
+    pitch_count_avg: float,
+    days_rest: int,
+    batters_faced_third_time_pct: float,
+    season_ip: float,
+) -> float:
+    """Estimate how many innings the starter will pitch (4.0-7.5 range).
+
+    Uses workload trends, pitch count patterns, rest days, and third-time-
+    through-order penalty to project starter length — critical for
+    estimating bullpen workload and total-runs projections.
+    """
+    # Base expectation from season average
+    base_ip = clamp(innings_per_start, 3.0, 7.5)
+
+    # Recent workload: high last-start pitch count → manager may pull earlier
+    pitch_ratio = pitch_count_last_start / max(pitch_count_avg, 1.0)
+    workload_adj = 0.0
+    if pitch_ratio > 1.10:
+        workload_adj = -0.3  # overworked last start
+    elif pitch_ratio < 0.85:
+        workload_adj = 0.1  # short outing last time, likely stretched
+
+    # Rest day adjustment
+    rest_adj = 0.0
+    if days_rest <= 3:
+        rest_adj = -0.3  # short rest, likely shorter outing
+    elif days_rest >= 6:
+        rest_adj = -0.1  # extra rest may mean slightly shorter
+
+    # Third-time-through penalty: if pitcher gets hit hard 3rd time through
+    tto_adj = 0.0
+    if batters_faced_third_time_pct > 0.15:
+        tto_adj = -0.2 * min(batters_faced_third_time_pct, 0.30)
+
+    # ERA-based quality: better pitchers get longer leash
+    era_adj = clamp((4.20 - pitcher_era) * 0.15, -0.3, 0.4)
+
+    # Season workload: high-IP arms get longer leash
+    workload_bonus = clamp((season_ip - 50.0) * 0.003, -0.2, 0.3)
+
+    projected = base_ip + workload_adj + rest_adj + tto_adj + era_adj + workload_bonus
+    return clamp(projected, 3.0, 7.5)
