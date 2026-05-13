@@ -504,6 +504,118 @@ def late_news_penalty(game_context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def detect_factor_conflicts(
+    prediction: dict[str, Any],
+    quality_report: dict[str, Any],
+    game_context: dict[str, Any],
+) -> dict[str, Any]:
+    """Detect opposing signals between model components that increase risk.
+
+    When model components point in different directions (e.g., strong
+    starting pitching for the pick but strong offense for the opponent),
+    the prediction is inherently more uncertain.  This function flags
+    those conflicts and computes a conflict penalty.
+
+    Returns:
+        dict with:
+        - conflict_count: int number of detected conflicts
+        - conflict_score: float (0-15) risk penalty from conflicts
+        - conflicts: list of conflict descriptions
+        - component_alignment: "aligned", "mild_disagreement", "strong_disagreement"
+    """
+    conflicts: list[str] = []
+    conflict_score = 0.0
+
+    model_breakdown = game_context.get("model_breakdown") or prediction.get("model_breakdown") or {}
+    if not isinstance(model_breakdown, dict):
+        model_breakdown = {}
+
+    market_comparison = game_context.get("market_comparison") or {}
+    if not isinstance(market_comparison, dict):
+        market_comparison = {}
+
+    # Extract individual model component edges (positive = favors pick)
+    starter_edge = safe_float(
+        model_breakdown.get("starterEdge") or model_breakdown.get("starter_edge"), 0.0
+    )
+    lineup_edge = safe_float(
+        model_breakdown.get("lineupEdge") or model_breakdown.get("lineup_edge"), 0.0
+    )
+    bullpen_edge = safe_float(
+        model_breakdown.get("bullpenEdge") or model_breakdown.get("bullpen_edge"), 0.0
+    )
+    offense_edge = safe_float(
+        model_breakdown.get("offenseEdge") or model_breakdown.get("offense_edge"), 0.0
+    )
+    matchup_edge = safe_float(
+        model_breakdown.get("matchupEdge") or model_breakdown.get("matchup_edge"), 0.0
+    )
+
+    edges = {
+        "starter": starter_edge,
+        "lineup": lineup_edge,
+        "bullpen": bullpen_edge,
+        "offense": offense_edge,
+    }
+
+    # Find opposing-sign pairs
+    positive_components = [name for name, val in edges.items() if val > 0.05]
+    negative_components = [name for name, val in edges.items() if val < -0.05]
+
+    if positive_components and negative_components:
+        magnitude = max(
+            min(abs(edges[p]) for p in positive_components),
+            min(abs(edges[n]) for n in negative_components),
+        )
+        if magnitude >= 0.15:
+            conflicts.append(
+                f"Strong disagreement: {', '.join(positive_components)} favor the pick "
+                f"but {', '.join(negative_components)} oppose it"
+            )
+            conflict_score += 8.0
+        else:
+            conflicts.append(
+                f"Mild disagreement: {', '.join(positive_components)} vs "
+                f"{', '.join(negative_components)}"
+            )
+            conflict_score += 4.0
+
+    # Model vs market conflict: model leans one way but market edge is thin
+    ml_edge = safe_float(market_comparison.get("moneyline", {}).get("pick_edge"), None)
+    if ml_edge is not None:
+        model_sign = 1 if starter_edge + lineup_edge + bullpen_edge + offense_edge > 0 else -1
+        market_sign = 1 if ml_edge > 0 else -1
+        if model_sign != market_sign and abs(ml_edge) > 0.03:
+            conflicts.append(
+                "Model direction conflicts with market implied edge"
+            )
+            conflict_score += 3.0
+
+    # High variance components present simultaneously
+    high_variance_count = sum(1 for val in edges.values() if abs(val) >= 0.20)
+    if high_variance_count >= 3:
+        conflicts.append(
+            f"{high_variance_count} components have extreme edges — system may be overfitting"
+        )
+        conflict_score += 4.0
+
+    conflict_score = min(conflict_score, 15.0)
+
+    if conflict_score >= 7:
+        alignment = "strong_disagreement"
+    elif conflict_score >= 3:
+        alignment = "mild_disagreement"
+    else:
+        alignment = "aligned"
+
+    return {
+        "conflict_count": len(conflicts),
+        "conflict_score": round(conflict_score, 1),
+        "conflicts": conflicts,
+        "component_alignment": alignment,
+    }
+
+
 def compute_risk_uncertainty(
     prediction: dict[str, Any],
     quality_report: dict[str, Any],
@@ -512,8 +624,8 @@ def compute_risk_uncertainty(
     """Compute an overall risk/uncertainty score for the prediction.
 
     Combines model confidence, data quality, market alignment, late news
-    risk, and contextual volatility into a single 0-100 risk score
-    (0 = very low risk/certainty, 100 = very high risk/uncertainty).
+    risk, contextual volatility, and factor conflicts into a single 0-100
+    risk score (0 = very low risk/certainty, 100 = very high risk/uncertainty).
 
     Returns:
         dict with:
@@ -521,6 +633,7 @@ def compute_risk_uncertainty(
         - risk_level: "low", "moderate", "elevated", or "extreme"
         - components: dict[str, float] of individual risk contributions
         - warnings: list[str] of actionable risk warnings
+        - factor_conflicts: dict with conflict detection details
     """
     components: dict[str, float] = {}
     warnings: list[str] = []
@@ -573,6 +686,13 @@ def compute_risk_uncertainty(
         warnings.append("Heavy line movement suggests sharp money or late info")
     components["contextual_volatility"] = round(min(context_risk, 15), 1)
 
+    # 6. Factor conflict risk: opposing signals between model components
+    conflict_info = detect_factor_conflicts(prediction, quality_report, game_context)
+    conflict_risk = clamp(conflict_info["conflict_score"], 0, 15)
+    components["factor_conflict_risk"] = round(conflict_risk, 1)
+    if conflict_info["conflicts"]:
+        warnings.extend(conflict_info["conflicts"])
+
     # Total risk score
     total_risk = sum(components.values())
     risk_score = int(min(100, total_risk))
@@ -591,6 +711,7 @@ def compute_risk_uncertainty(
         "risk_level": risk_level,
         "components": components,
         "warnings": warnings,
+        "factor_conflicts": conflict_info,
     }
 
 

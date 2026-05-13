@@ -22,6 +22,17 @@ LESSON_CATEGORIES = {
     "totals_projection_error": "totals",
     "correct_pick": "moneyline",
     "wrong_pick": "moneyline",
+    # New lesson types for enhanced analysis
+    "pitching_misread": "pitching",
+    "bullpen_fatigue_miss": "bullpen",
+    "market_disagreement_miss": "market_movement",
+    "steam_move_ignored": "market_movement",
+    "starter_tier_miscalibration": "calibration",
+    "lineup_impact_underestimated": "lineup",
+    "opener_situation_misread": "pitching",
+    "edge_decomposition_drift": "model_breakdown",
+    "segment_calibration_warning": "calibration",
+    "variance_conflict_miss": "risk",
 }
 
 

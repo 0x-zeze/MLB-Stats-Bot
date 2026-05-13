@@ -284,3 +284,172 @@ def retrieve_similar_lessons(game_context: dict[str, Any], top_k: int = 5) -> di
         "repeated_risk_patterns": repeated,
         "recommended_caution_notes": caution,
     }
+
+
+def _recency_weight(created_at: str | None, half_life_days: float = 14.0) -> float:
+    """Exponential decay weight based on how recent the record is.
+
+    half_life_days controls how fast old records lose influence.
+    14-day half-life means a 2-week-old lesson has 50% weight, 4-week-old has 25%, etc.
+    """
+    if not created_at:
+        return 0.3  # unknown date gets low base weight
+    try:
+        created = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        age_days = max(0.0, (datetime.now(timezone.utc) - created).total_seconds() / 86400.0)
+        return max(0.05, 2.0 ** (-age_days / half_life_days))
+    except (ValueError, TypeError):
+        return 0.3
+
+
+def _market_regimen(context: dict[str, Any]) -> str:
+    """Classify the market regime for matching."""
+    market = str(context.get("market") or "moneyline").lower()
+    if market == "totals":
+        total = safe_float(context.get("market_total"), 8.5)
+        if total >= 10.0:
+            return "totals_high"
+        if total >= 8.5:
+            return "totals_moderate"
+        return "totals_low"
+    return "moneyline"
+
+
+def _weighted_lesson_similarity(context: dict[str, Any], lesson: dict[str, Any]) -> dict[str, float]:
+    """Compute multi-dimensional weighted similarity between context and lesson.
+
+    Returns individual dimension scores and a composite weighted score.
+    """
+    # Base similarity from existing function
+    base_sim = _lesson_similarity(context, lesson)
+
+    # Recency weight
+    created_at = lesson.get("created_at")
+    recency = _recency_weight(created_at)
+
+    # Market regime match
+    context_regime = _market_regimen(context)
+    supporting = lesson.get("supporting_data") or {}
+    lesson_context = {**lesson, **supporting}
+    lesson_regime = _market_regimen(lesson_context)
+    regime_match = 1.0 if context_regime == lesson_regime else 0.3
+
+    # Confidence tier match
+    context_conf = str(context.get("confidence") or "").lower()
+    lesson_conf = str(supporting.get("confidence") or lesson.get("confidence") or "").lower()
+    conf_match = 1.0 if context_conf == lesson_conf else 0.5
+
+    # Sample size bonus: lessons derived from more outcomes are more reliable
+    sample_size = safe_float(lesson.get("sample_size") or supporting.get("sample_size"), 1.0)
+    sample_weight = min(1.0, 0.5 + sample_size * 0.1)  # 1.0 at 5+ samples, 0.5 at 1
+
+    # Composite weighted score
+    composite = (
+        base_sim * 0.40
+        + recency * 8.0 * 0.25
+        + regime_match * 4.0 * 0.15
+        + conf_match * 3.0 * 0.10
+        + sample_weight * 3.0 * 0.10
+    )
+
+    return {
+        "base_similarity": round(base_sim, 3),
+        "recency_weight": round(recency, 4),
+        "regime_match": round(regime_match, 3),
+        "confidence_match": round(conf_match, 3),
+        "sample_weight": round(sample_weight, 3),
+        "composite_score": round(composite, 3),
+    }
+
+
+def retrieve_weighted_memory(
+    game_context: dict[str, Any],
+    top_k: int = 8,
+    min_composite: float = 1.0,
+) -> dict[str, Any]:
+    """Return weighted memory with recency, similarity, sample size, and market regime.
+
+    Unlike retrieve_similar_lessons, this function produces a weighted
+    influence score for each memory entry and aggregates risk patterns
+    with confidence-weighted frequencies.
+
+    Memory is advisory only — it adjusts risk framing, never raw probabilities.
+    """
+    lessons = read_jsonl("lessons")
+    outcomes = read_prediction_outcomes()
+
+    # Build outcome lookup for sample size enrichment
+    outcome_by_market: dict[str, int] = {}
+    for row in outcomes:
+        mkt = str(row.get("market") or "moneyline").lower()
+        outcome_by_market[mkt] = outcome_by_market.get(mkt, 0) + 1
+
+    scored: list[dict[str, Any]] = []
+    for lesson in lessons:
+        dims = _weighted_lesson_similarity(game_context, lesson)
+        if dims["composite_score"] < min_composite:
+            continue
+        scored.append({
+            "lesson": lesson,
+            "dimensions": dims,
+        })
+
+    scored.sort(key=lambda x: x["dimensions"]["composite_score"], reverse=True)
+    selected = scored[:top_k]
+
+    # Aggregate risk patterns with confidence weighting
+    pattern_scores: dict[str, float] = {}
+    pattern_counts: dict[str, int] = {}
+    for entry in selected:
+        lesson = entry["lesson"]
+        weight = entry["dimensions"]["composite_score"]
+        key = str(lesson.get("lesson_type") or lesson.get("category") or "general")
+        pattern_scores[key] = pattern_scores.get(key, 0.0) + weight
+        pattern_counts[key] = pattern_counts.get(key, 0) + 1
+
+    # Risk patterns that appear multiple times AND have high composite scores
+    repeated = [
+        key for key, count in pattern_counts.items()
+        if count >= 2 or pattern_scores.get(key, 0) >= 5.0
+    ]
+
+    # Build caution notes with weighted confidence
+    caution: list[str] = []
+    for pattern in sorted(repeated, key=lambda k: pattern_scores.get(k, 0), reverse=True):
+        score = pattern_scores.get(pattern, 0)
+        count = pattern_counts.get(pattern, 0)
+        if score >= 8.0:
+            caution.append(f"⚠ Strong signal: {pattern} (weight: {score:.1f}, seen {count}x)")
+        elif score >= 4.0:
+            caution.append(f"⚡ Moderate signal: {pattern} (weight: {score:.1f}, seen {count}x)")
+        else:
+            caution.append(f"• Weak signal: {pattern} (weight: {score:.1f}, seen {count}x)")
+
+    if selected and not caution:
+        caution.append("Similar lessons found; use as caution context, not as an override.")
+
+    # Compute overall memory confidence
+    total_composite = sum(e["dimensions"]["composite_score"] for e in selected)
+    avg_composite = total_composite / len(selected) if selected else 0.0
+    memory_confidence = "high" if avg_composite >= 5.0 and len(selected) >= 3 else \
+                        "medium" if avg_composite >= 2.5 else "low"
+
+    return {
+        "weighted_lessons": [
+            {
+                "lesson": e["lesson"],
+                "similarity_dimensions": e["dimensions"],
+            }
+            for e in selected
+        ],
+        "risk_patterns": repeated,
+        "pattern_scores": {k: round(v, 2) for k, v in sorted(pattern_scores.items(), key=lambda x: -x[1])},
+        "caution_notes": caution,
+        "memory_confidence": memory_confidence,
+        "sample_context": {
+            "total_lessons_available": len(lessons),
+            "total_outcomes_recorded": len(outcomes),
+            "lessons_selected": len(selected),
+            "market_regime": _market_regimen(game_context),
+        },
+    }

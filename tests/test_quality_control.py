@@ -5,6 +5,8 @@ from src.quality_control import (
     apply_confidence_downgrade,
     calculate_data_quality_score,
     check_prediction_inputs,
+    compute_risk_uncertainty,
+    detect_factor_conflicts,
     generate_quality_report,
 )
 
@@ -59,6 +61,112 @@ def _prediction(**overrides) -> dict:
     }
     payload.update(overrides)
     return payload
+
+
+class TestDetectFactorConflicts(unittest.TestCase):
+    """Tests for detect_factor_conflicts."""
+
+    def test_aligned_components(self) -> None:
+        """All components pointing the same direction → no conflicts."""
+        ctx = _context()
+        ctx["model_breakdown"] = {
+            "starterEdge": 0.20,
+            "lineupEdge": 0.08,
+            "bullpenEdge": 0.05,
+            "offenseEdge": 0.10,
+        }
+        result = detect_factor_conflicts(_prediction(), generate_quality_report(ctx), ctx)
+        self.assertEqual(result["conflict_count"], 0)
+        self.assertEqual(result["component_alignment"], "aligned")
+
+    def test_strong_disagreement(self) -> None:
+        """Starter favors pick but offense opposes → strong disagreement."""
+        ctx = _context()
+        ctx["model_breakdown"] = {
+            "starterEdge": 0.25,
+            "lineupEdge": 0.02,
+            "bullpenEdge": 0.02,
+            "offenseEdge": -0.20,
+        }
+        result = detect_factor_conflicts(_prediction(), generate_quality_report(ctx), ctx)
+        self.assertGreater(result["conflict_count"], 0)
+        self.assertEqual(result["component_alignment"], "strong_disagreement")
+        self.assertGreater(result["conflict_score"], 5)
+
+    def test_mild_disagreement(self) -> None:
+        """Small opposing edges → mild disagreement."""
+        ctx = _context()
+        ctx["model_breakdown"] = {
+            "starterEdge": 0.10,
+            "lineupEdge": 0.02,
+            "bullpenEdge": 0.02,
+            "offenseEdge": -0.08,
+        }
+        result = detect_factor_conflicts(_prediction(), generate_quality_report(ctx), ctx)
+        self.assertEqual(result["component_alignment"], "mild_disagreement")
+
+    def test_model_vs_market_conflict(self) -> None:
+        """Model components positive but market edge negative."""
+        ctx = _context()
+        ctx["model_breakdown"] = {
+            "starterEdge": 0.20,
+            "lineupEdge": 0.08,
+            "bullpenEdge": 0.05,
+            "offenseEdge": 0.10,
+        }
+        ctx["market_comparison"] = {
+            "moneyline": {"pick_edge": -0.05},
+        }
+        result = detect_factor_conflicts(_prediction(), generate_quality_report(ctx), ctx)
+        self.assertTrue(any("market" in c.lower() for c in result["conflicts"]))
+
+    def test_high_variance_components(self) -> None:
+        """Three or more extreme edges → overfitting warning."""
+        ctx = _context()
+        ctx["model_breakdown"] = {
+            "starterEdge": 0.25,
+            "lineupEdge": 0.22,
+            "bullpenEdge": 0.21,
+            "offenseEdge": 0.01,
+        }
+        result = detect_factor_conflicts(_prediction(), generate_quality_report(ctx), ctx)
+        self.assertTrue(any("overfitting" in c.lower() for c in result["conflicts"]))
+
+    def test_empty_breakdown(self) -> None:
+        """No model breakdown → aligned with zero conflicts."""
+        result = detect_factor_conflicts(_prediction(), generate_quality_report(_context()), _context())
+        self.assertEqual(result["conflict_count"], 0)
+        self.assertEqual(result["component_alignment"], "aligned")
+
+
+class TestRiskUncertaintyWithConflicts(unittest.TestCase):
+    """Test that factor_conflict_risk is included in risk uncertainty."""
+
+    def test_conflict_adds_to_risk(self) -> None:
+        ctx = _context()
+        ctx["model_breakdown"] = {
+            "starterEdge": 0.25,
+            "lineupEdge": 0.02,
+            "bullpenEdge": 0.02,
+            "offenseEdge": -0.20,
+        }
+        report = generate_quality_report(ctx)
+        result = compute_risk_uncertainty(_prediction(), report, ctx)
+        self.assertIn("factor_conflicts", result)
+        self.assertIn("factor_conflict_risk", result["components"])
+        self.assertGreater(result["components"]["factor_conflict_risk"], 0)
+
+    def test_aligned_has_zero_conflict_risk(self) -> None:
+        ctx = _context()
+        ctx["model_breakdown"] = {
+            "starterEdge": 0.15,
+            "lineupEdge": 0.08,
+            "bullpenEdge": 0.05,
+            "offenseEdge": 0.10,
+        }
+        report = generate_quality_report(ctx)
+        result = compute_risk_uncertainty(_prediction(), report, ctx)
+        self.assertEqual(result["components"]["factor_conflict_risk"], 0.0)
 
 
 class QualityControlTests(unittest.TestCase):

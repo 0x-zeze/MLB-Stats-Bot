@@ -8,6 +8,92 @@ from typing import Any
 from ..utils import clamp, safe_float
 
 
+# ── Segment classification helpers ──────────────────────────────────────
+
+def _starter_tier(trajectory: dict[str, Any]) -> str:
+    """Classify the starting pitcher into a tier based on ERA or model edge."""
+    prediction = trajectory.get("prediction") or {}
+    breakdown = trajectory.get("model_breakdown") or {}
+    starter_edge = abs(safe_float(
+        breakdown.get("starterEdge") or breakdown.get("starter_edge"), 0.0
+    ))
+    # If we have ERA info, use it; otherwise fall back to edge magnitude
+    context = trajectory.get("input_snapshot") or {}
+    home_era = safe_float(context.get("home_pitcher_era"), None)
+    away_era = safe_float(context.get("away_pitcher_era"), None)
+    if home_era is not None and away_era is not None:
+        avg_era = (home_era + away_era) / 2.0
+        if avg_era <= 3.20:
+            return "ace"
+        if avg_era <= 3.90:
+            return "above_avg"
+        if avg_era <= 4.60:
+            return "average"
+        return "below_avg"
+    # Fall back to edge magnitude
+    if starter_edge >= 0.30:
+        return "ace"
+    if starter_edge >= 0.15:
+        return "above_avg"
+    if starter_edge >= 0.05:
+        return "average"
+    return "below_avg"
+
+
+def _lineup_segment(trajectory: dict[str, Any]) -> str:
+    """Classify the lineup context."""
+    context = trajectory.get("input_snapshot") or {}
+    lineup_status = str(context.get("lineup_status") or "").lower()
+    if lineup_status in ("confirmed", "available"):
+        return "confirmed"
+    if lineup_status in ("projected",):
+        return "projected"
+    return "missing"
+
+
+def _market_movement_bucket(trajectory: dict[str, Any]) -> str:
+    """Classify the market movement magnitude."""
+    prediction = trajectory.get("prediction") or {}
+    breakdown = trajectory.get("model_breakdown") or {}
+    # Try to get movement from market data
+    context = trajectory.get("input_snapshot") or {}
+    market = context.get("market") or context.get("odds") or {}
+    opening_total = safe_float(market.get("opening_total"), 0.0)
+    current_total = safe_float(
+        market.get("current_total") or market.get("market_total"), 0.0
+    )
+    if opening_total > 0 and current_total > 0:
+        movement = abs(current_total - opening_total)
+        if movement >= 1.5:
+            return "heavy"
+        if movement >= 0.75:
+            return "moderate"
+        return "stable"
+    # Fall back to moneyline movement
+    opening_ml = safe_float(market.get("opening_moneyline"), 0.0)
+    current_ml = safe_float(
+        market.get("current_moneyline") or market.get("moneyline"), 0.0
+    )
+    if opening_ml != 0 and current_ml != 0:
+        ml_movement = abs(current_ml - opening_ml)
+        if ml_movement >= 25:
+            return "heavy"
+        if ml_movement >= 10:
+            return "moderate"
+    return "stable"
+
+
+def _totals_environment(trajectory: dict[str, Any]) -> str:
+    """Classify the totals environment."""
+    prediction = trajectory.get("prediction") or {}
+    market_total = safe_float(prediction.get("market_total"), 8.5)
+    if market_total >= 10.0:
+        return "high_scoring"
+    if market_total >= 8.5:
+        return "moderate"
+    return "low_scoring"
+
+
 def american_profit(odds: Any, won: bool, stake: float = 1.0) -> float:
     if not won:
         return -stake
@@ -72,7 +158,70 @@ def _market_odds(trajectory: dict[str, Any], lean: str) -> Any:
     return odds
 
 
-def _closing_moneyline(final_result: dict[str, Any], trajectory: dict[str, Any], lean: str) -> Any:
+def compute_segment_metrics(evaluations: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Aggregate Brier score, accuracy, and calibration by segment.
+
+    Returns a dict keyed by segment name (e.g. "starter_tier:ace",
+    "lineup_status:confirmed", "market_movement:heavy", "totals_env:high_scoring").
+    Each value contains:
+    - count: number of evaluated predictions in that segment
+    - accuracy: fraction of correct picks (excluding no-bet/push)
+    - avg_brier: average Brier score (lower is better)
+    - calibration_gap: avg predicted probability - actual win rate
+    - overconfidence_rate: fraction of losses with medium/high confidence
+    - recommended_confidence_cap: suggested max confidence for this segment
+    """
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for eval_row in evaluations:
+        if eval_row.get("result") in ("no_bet", "push"):
+            continue
+        segments = [
+            f"starter_tier:{eval_row.get('segment_starter_tier', 'unknown')}",
+            f"lineup_status:{eval_row.get('segment_lineup_status', 'unknown')}",
+            f"market_movement:{eval_row.get('segment_market_movement', 'unknown')}",
+        ]
+        totals_env = eval_row.get("segment_totals_env")
+        if totals_env:
+            segments.append(f"totals_env:{totals_env}")
+        for segment in segments:
+            buckets.setdefault(segment, []).append(eval_row)
+
+    result: dict[str, dict[str, Any]] = {}
+    for segment_name, rows in sorted(buckets.items()):
+        count = len(rows)
+        if count == 0:
+            continue
+        wins = sum(1 for r in rows if r.get("result") == "win")
+        accuracy = round(wins / count, 4) if count > 0 else 0.0
+        brier_scores = [r["brier_score"] for r in rows if r.get("brier_score") is not None]
+        avg_brier = round(sum(brier_scores) / len(brier_scores), 6) if brier_scores else None
+        predicted_probs = [r.get("predicted_probability", 50.0) / 100.0 for r in rows]
+        avg_predicted = sum(predicted_probs) / len(predicted_probs) if predicted_probs else 0.5
+        calibration_gap = round(avg_predicted - accuracy, 4)
+        overconf_count = sum(1 for r in rows if r.get("overconfidence"))
+        overconf_rate = round(overconf_count / count, 4) if count > 0 else 0.0
+
+        # Recommend confidence cap based on segment calibration
+        if count >= 5 and accuracy < 0.45:
+            cap = "Low"
+        elif count >= 5 and (accuracy < 0.52 or calibration_gap > 0.08):
+            cap = "Medium"
+        elif count >= 10 and avg_brier is not None and avg_brier > 0.28:
+            cap = "Medium"
+        else:
+            cap = "High"
+
+        result[segment_name] = {
+            "count": count,
+            "accuracy": accuracy,
+            "avg_brier": avg_brier,
+            "calibration_gap": calibration_gap,
+            "overconfidence_rate": overconf_rate,
+            "recommended_confidence_cap": cap,
+        }
+
+    return result
+def _closing_moneyline(final_result: dict[str, Any], trajectory: dict[str, Any], lean: str) -> Any:  # noqa: E501
     away_team = str(trajectory.get("away_team") or "").lower()
     home_team = str(trajectory.get("home_team") or "").lower()
     lean_text = str(lean or "").lower()
@@ -166,6 +315,12 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
     if no_bet and no_bet_appropriate is False:
         notes.append("NO BET may have been too conservative.")
 
+    # Segment classification for calibration analysis
+    segment_starter = _starter_tier(trajectory)
+    segment_lineup = _lineup_segment(trajectory)
+    segment_movement = _market_movement_bucket(trajectory)
+    segment_totals = _totals_environment(trajectory) if market == "totals" else None
+
     return {
         "game_id": trajectory.get("game_id"),
         "date": trajectory.get("date"),
@@ -201,4 +356,9 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         "bet_decision": trajectory.get("bet_decision") or {},
         "value_pick": trajectory.get("value_pick") or {},
         "evaluation_notes": notes,
+        # Segment metadata for calibration analysis
+        "segment_starter_tier": segment_starter,
+        "segment_lineup_status": segment_lineup,
+        "segment_market_movement": segment_movement,
+        "segment_totals_env": segment_totals,
     }

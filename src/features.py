@@ -620,3 +620,63 @@ def expected_length_of_start(
 
     projected = base_ip + workload_adj + rest_adj + tto_adj + era_adj + workload_bonus
     return clamp(projected, 3.0, 7.5)
+
+
+def lineup_impact_score(
+    lineup_status: str,
+    missing_star_hitters: int = 0,
+    top5_wrc_plus: float = 100.0,
+    platoon_advantage: float = 0.0,
+    lineup_order_wrc_plus: list[float] | None = None,
+) -> dict[str, Any]:
+    """Quantify the offensive impact of a lineup's quality and missing bats.
+
+    Replaces the simple confirmed/projected boolean with a continuous
+    score that reflects how much lineup uncertainty affects run creation.
+
+    Returns:
+    - impact_score: 0-1 (1 = elite full-strength lineup)
+    - missing_penalty: how many runs of impact from missing hitters
+    - top_heavy_factor: how much the top of the order carries the offense
+    - platoon_edge: handedness advantage value
+    - lineup_confirmed: whether the lineup is officially posted
+    """
+    confirmed = lineup_status.lower() in {"confirmed", "available"}
+
+    # Base quality from top-5 wRC+
+    base_quality = clamp((top5_wrc_plus - 80.0) / 60.0, 0.0, 1.0)
+
+    # Missing star penalty: each missing top bat hurts significantly
+    # Scale: 0 = no missing, 1-2 = moderate, 3+ = severe
+    missing_penalty = 0.0
+    if missing_star_hitters > 0:
+        missing_penalty = min(missing_star_hitters * 0.08, 0.30)
+
+    # Top-heavy factor: if lineup_order_wrc_plus is provided,
+    # calculate how much the top 3 spots carry the offense
+    top_heavy_factor = 0.5  # default: balanced
+    if lineup_order_wrc_plus and len(lineup_order_wrc_plus) >= 4:
+        top3_avg = mean(lineup_order_wrc_plus[:3])
+        bottom_avg = mean(lineup_order_wrc_plus[3:])
+        if bottom_avg > 0:
+            ratio = top3_avg / max(bottom_avg, 1.0)
+            top_heavy_factor = clamp(ratio / 2.5, 0.2, 1.0)
+
+    # Platoon advantage
+    platoon_edge = clamp(platoon_advantage, -1.0, 1.0) * 0.12
+
+    # Confirmation penalty
+    confirmation_adj = 0.0 if confirmed else -0.05
+
+    # Composite impact score
+    raw = base_quality - missing_penalty + platoon_edge + confirmation_adj
+    impact_score = clamp(raw, 0.1, 1.0)
+
+    return {
+        "impact_score": round(impact_score, 3),
+        "missing_penalty": round(missing_penalty, 3),
+        "top_heavy_factor": round(top_heavy_factor, 3),
+        "platoon_edge": round(platoon_edge, 3),
+        "lineup_confirmed": confirmed,
+        "missing_star_hitters": missing_star_hitters,
+    }
