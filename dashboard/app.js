@@ -189,7 +189,7 @@ function barRow(label, value, alt = false) {
 
 function factorList(items = []) {
   if (!items.length) return '<p class="muted">No factors available.</p>';
-  return `<div class="pill-row">${items.slice(0, 6).map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join('')}</div>`;
+  return `<div class="factor-list">${items.slice(0, 6).map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join('')}</div>`;
 }
 
 function statusText(enabled) {
@@ -311,10 +311,8 @@ function renderEmpty(message) {
   els.matchupMeta.textContent = sourceHelp();
   els.analysisBody.className = 'analysis-body empty-state';
   els.analysisBody.innerHTML = `
-    <div class="empty-copy">
-      <strong>${escapeHtml(sourceLabel())}</strong>
-      <p>${escapeHtml(message)}</p>
-    </div>
+    <div class="empty-icon">&#9918;</div>
+    <p>${escapeHtml(message)}</p>
   `;
 }
 

@@ -3,121 +3,134 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MLB Stats Bot Dashboard</title>
+    <title>MLB Stats Bot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">MLB Stats Bot</p>
-        <h1>Prediction Dashboard</h1>
+    <div class="bg-orbs" aria-hidden="true">
+      <div class="orb orb-1"></div>
+      <div class="orb orb-2"></div>
+      <div class="orb orb-3"></div>
+    </div>
+
+    <header class="topbar glass">
+      <div class="topbar-brand">
+        <span class="logo">&#9918;</span>
+        <div>
+          <h1>MLB Stats Bot</h1>
+          <p class="subtitle" id="selectedSource">Live MLB StatsAPI</p>
+        </div>
       </div>
       <div class="topbar-actions">
-        <div class="segmented" aria-label="Data source">
-          <button id="sourceLive" class="active" type="button">Live Games</button>
-          <button id="sourceSample" type="button">Sample CSV</button>
+        <div class="segmented glass" aria-label="Data source">
+          <button id="sourceLive" class="active" type="button">Live</button>
+          <button id="sourceSample" type="button">Sample</button>
         </div>
-        <label class="date-control">
-          <span>Date</span>
-          <input id="dateInput" type="date" />
-        </label>
-        <button id="refreshButton" class="primary" type="button">Refresh</button>
+        <input id="dateInput" type="date" class="glass-input" />
+        <button id="refreshButton" class="btn-accent" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+        </button>
       </div>
     </header>
 
     <main>
-      <section class="status-grid" aria-label="System overview">
-        <article class="metric">
-          <span>Telegram</span>
-          <strong id="telegramStatus">-</strong>
-          <small id="telegramDetail">Loading</small>
+      <section class="status-row">
+        <article class="glass-card stat-card">
+          <div class="stat-icon">&#128225;</div>
+          <div class="stat-body">
+            <span class="stat-label">Telegram</span>
+            <strong id="telegramStatus">-</strong>
+            <small id="telegramDetail">Loading</small>
+          </div>
         </article>
-        <article class="metric">
-          <span>Agent</span>
-          <strong id="agentStatus">-</strong>
-          <small id="agentDetail">Loading</small>
+        <article class="glass-card stat-card">
+          <div class="stat-icon">&#129302;</div>
+          <div class="stat-body">
+            <span class="stat-label">Agent</span>
+            <strong id="agentStatus">-</strong>
+            <small id="agentDetail">Loading</small>
+          </div>
         </article>
-        <article class="metric">
-          <span>Memory</span>
-          <strong id="memoryAccuracy">-</strong>
-          <small id="memoryDetail">Loading</small>
+        <article class="glass-card stat-card">
+          <div class="stat-icon">&#129504;</div>
+          <div class="stat-body">
+            <span class="stat-label">Memory</span>
+            <strong id="memoryAccuracy">-</strong>
+            <small id="memoryDetail">Loading</small>
+          </div>
         </article>
-        <article class="metric">
-          <span>Backtest</span>
-          <strong id="backtestRoi">-</strong>
-          <small id="backtestDetail">Loading</small>
+        <article class="glass-card stat-card">
+          <div class="stat-icon">&#128200;</div>
+          <div class="stat-body">
+            <span class="stat-label">Backtest</span>
+            <strong id="backtestRoi">-</strong>
+            <small id="backtestDetail">Loading</small>
+          </div>
         </article>
       </section>
 
       <section class="workspace">
-        <aside class="game-rail">
+        <aside class="glass-card game-rail">
           <div class="rail-header">
-            <div>
-              <h2>Games</h2>
-              <p id="gameCount">-</p>
-            </div>
-            <input id="gameSearch" type="search" placeholder="Search team" />
+            <h2>Games <span id="gameCount" class="badge">-</span></h2>
+            <input id="gameSearch" type="search" placeholder="Search team..." class="glass-input" />
           </div>
           <div id="gameList" class="game-list"></div>
         </aside>
 
-        <section class="analysis">
+        <section class="glass-card analysis">
           <div class="analysis-header">
             <div>
-              <p class="eyebrow" id="selectedSource">Live MLB StatsAPI</p>
               <h2 id="matchupTitle">Select a game</h2>
-              <p id="matchupMeta">Moneyline, total runs, quality control, and agent context.</p>
+              <p id="matchupMeta" class="meta">Moneyline, total runs, quality control, and agent context.</p>
             </div>
-            <div class="tabbar" aria-label="Analysis view">
+            <div class="tabbar glass" aria-label="Analysis view">
               <button class="active" data-view="overview" type="button">Overview</button>
               <button data-view="moneyline" type="button">Moneyline</button>
               <button data-view="totals" type="button">Totals</button>
               <button data-view="quality" type="button">Quality</button>
             </div>
           </div>
-
           <div id="analysisBody" class="analysis-body empty-state">
+            <div class="empty-icon">&#9918;</div>
             <p>Choose a matchup from the left to inspect the model.</p>
           </div>
         </section>
       </section>
 
-      <section class="lower-grid">
-        <section class="tool-panel">
+      <section class="lower-row">
+        <section class="glass-card tool-panel">
           <div class="panel-header">
-            <div>
-              <h2>Backtest And Calibration</h2>
-              <p>Run sample backtests, then inspect ROI, CLV, and calibration output.</p>
-            </div>
+            <h2>Backtest & Calibration</h2>
             <div class="compact-actions">
-              <select id="backtestMarket">
+              <select id="backtestMarket" class="glass-input">
                 <option value="totals">Totals</option>
                 <option value="moneyline">Moneyline</option>
               </select>
-              <input id="backtestSeason" type="number" value="2025" min="2000" max="2100" />
-              <button id="runBacktestButton" type="button">Run</button>
+              <input id="backtestSeason" type="number" value="2025" min="2000" max="2100" class="glass-input season-input" />
+              <button id="runBacktestButton" class="btn-accent btn-sm" type="button">Run</button>
             </div>
           </div>
           <pre id="evaluationReport" class="report-box">Loading evaluation report...</pre>
         </section>
 
-        <section class="tool-panel">
+        <section class="glass-card tool-panel">
           <div class="panel-header">
-            <div>
-              <h2>Knowledge Base</h2>
-              <p>Ask the sabermetrics and betting-market layer.</p>
-            </div>
+            <h2>Knowledge Base</h2>
           </div>
           <div class="knowledge-box">
             <div class="quick-questions">
               <button data-question="Why is wRC+ better than OPS for offense evaluation?" type="button">wRC+</button>
               <button data-question="Why does FIP matter more than ERA for pitcher prediction?" type="button">FIP</button>
               <button data-question="Why is bullpen fatigue important for totals?" type="button">Bullpen</button>
-              <button data-question="What does it mean if model total is 9.2 but market total is 8.5?" type="button">Market total</button>
+              <button data-question="What does it mean if model total is 9.2 but market total is 8.5?" type="button">Market</button>
             </div>
             <div class="ask-row">
-              <input id="knowledgeInput" type="text" placeholder="Ask a baseball model question" />
-              <button id="askButton" type="button">Ask</button>
+              <input id="knowledgeInput" type="text" placeholder="Ask a baseball model question..." class="glass-input" />
+              <button id="askButton" class="btn-accent btn-sm" type="button">Ask</button>
             </div>
             <div id="knowledgeAnswer" class="answer-box">Pick a question or ask your own.</div>
           </div>
@@ -125,7 +138,7 @@
       </section>
     </main>
 
-    <div id="toast" class="toast" hidden></div>
+    <div id="toast" class="toast glass" hidden></div>
     <script src="/app.js" type="module"></script>
   </body>
 </html>

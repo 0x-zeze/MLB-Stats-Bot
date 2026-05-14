@@ -1892,14 +1892,32 @@ async function processPendingPostGames(bot) {
   if (targetChatIds().length === 0) return;
 
   postGameCheckRunning = true;
+  let newGamesLearned = 0;
   try {
     for (const dateYmd of storage.listPendingPredictionDates()) {
       const evaluations = await evaluatePostGames(dateYmd, { markProcessed: true });
       if (evaluations.length === 0) continue;
 
+      newGamesLearned += evaluations.filter((evaluation) => evaluation.learned).length;
       const text = formatPostGameRecap(dateYmd, evaluations);
       const sent = await sendTextToAll(bot, text);
       console.log(`Post-game recap ${dateYmd} terkirim ke ${sent} chat.`);
+    }
+
+    if (newGamesLearned > 0) {
+      try {
+        console.log(`Post-game: ${newGamesLearned} new game(s) learned. Running evolution ingest...`);
+        const ingestOutput = await runPythonModule('src.evolution.evolution_engine', ['--ingest-bot-history'], {
+          timeoutMessage: 'Evolution ingest timeout (post-game). Skipped.',
+          timeoutMs: 90_000
+        });
+        const ingestResult = parseJsonOutput(ingestOutput);
+        if (ingestResult.evaluated > 0) {
+          console.log(`Evolution ingest: ${ingestResult.evaluated} prediction(s) evaluated, ${ingestResult.language_losses || 0} loss(es) generated.`);
+        }
+      } catch (error) {
+        console.error('Evolution ingest after post-game failed:', error.message);
+      }
     }
   } finally {
     postGameCheckRunning = false;
