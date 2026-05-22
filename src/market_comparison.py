@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .odds import american_odds_to_implied_probability, calculate_edge
+from .sharp_money import detect_sharp_money_signal, sharp_money_risk_factor
 from .utils import safe_float
 
 
@@ -91,10 +92,39 @@ def compare_markets(
             "moneyline": {},
             "totals": {},
             "line_movement": detect_line_movement(market),
+            "sharp_money": None,
         }
+
+    moneyline_comparison = compare_moneyline_market(predictions["moneyline"], market)
+    totals_comparison = compare_total_market(predictions["totals"], market)
+
+    model_pick = predictions["moneyline"].get("predicted_winner", "")
+    model_prob = predictions["moneyline"].get("home_win_probability", 0.5)
+    opening_odds = {
+        "home": market.get("opening_home_moneyline") or market.get("home_moneyline"),
+        "away": market.get("opening_away_moneyline") or market.get("away_moneyline"),
+    }
+    closing_odds = {
+        "home": market.get("home_moneyline"),
+        "away": market.get("away_moneyline"),
+    }
+    sharp_signal = detect_sharp_money_signal(
+        model_pick=model_pick,
+        model_probability=model_prob,
+        opening_odds=opening_odds,
+        closing_odds=closing_odds,
+    )
+
     return {
         "available": True,
-        "moneyline": compare_moneyline_market(predictions["moneyline"], market),
-        "totals": compare_total_market(predictions["totals"], market),
+        "moneyline": moneyline_comparison,
+        "totals": totals_comparison,
         "line_movement": detect_line_movement(market),
+        "sharp_money": {
+            "direction": sharp_signal.sharp_money_direction,
+            "movement_magnitude": sharp_signal.movement_magnitude,
+            "reverse_line_movement": sharp_signal.reverse_line_movement,
+            "steam_move": sharp_signal.steam_move_detected,
+            "risk_factor": sharp_money_risk_factor(sharp_signal),
+        },
     }

@@ -19,6 +19,10 @@ from .explanation_layer import build_prediction_explanation
 from .feature_engineering_layer import build_game_features
 from .market_comparison import compare_markets
 from .prediction_layer import build_predictions
+from .prediction_tier import (
+    apply_tier_confidence_cap,
+    determine_prediction_tier,
+)
 from .quality_control import apply_confidence_downgrade, generate_quality_report
 
 
@@ -59,12 +63,28 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
     market_comparison = compare_markets(raw_predictions, collected)
     quality_report = generate_quality_report(collected["context"])
 
+    # Determine prediction tier based on game timing and data availability
+    game = collected.get("game")
+    game_start_time = getattr(game, "game_time", None) or getattr(game, "start_time", None)
+    lineup_confirmed = quality_report.get("lineup") == "Confirmed"
+    pitcher_confirmed = quality_report.get("probable_pitchers") == "Confirmed"
+    tier = determine_prediction_tier(
+        game_start_time=game_start_time,
+        lineup_confirmed=lineup_confirmed,
+        pitcher_confirmed=pitcher_confirmed,
+    )
+
     moneyline_prediction = _apply_market_to_moneyline(
         raw_predictions["moneyline"],
         market_comparison,
     )
     moneyline = apply_confidence_downgrade(moneyline_prediction, quality_report)
     totals = apply_confidence_downgrade(raw_predictions["totals"], quality_report)
+
+    # Apply tier confidence cap
+    moneyline["confidence"] = apply_tier_confidence_cap(moneyline["confidence"], tier)
+    totals["confidence"] = apply_tier_confidence_cap(totals["confidence"], tier)
+
     supporting_factors = _supporting_factors(moneyline, totals)
 
     result = {
@@ -83,6 +103,14 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
         "raw_predictions": raw_predictions,
         "market_comparison": market_comparison,
         "quality_report": totals.get("quality_report", quality_report),
+        "prediction_tier": {
+            "tier": tier.tier,
+            "label": tier.label,
+            "hours_to_game": tier.hours_to_game,
+            "confidence_cap": tier.confidence_cap,
+            "data_completeness": tier.data_completeness,
+            "refresh_recommended": tier.refresh_recommended,
+        },
         "moneyline": moneyline,
         "totals": totals,
         "supporting_factors": supporting_factors,

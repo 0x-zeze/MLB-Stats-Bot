@@ -77,6 +77,73 @@ const DEFAULTS = {
   gameFirstInningRunRate: 0.46
 };
 
+// --- Situational Weight Adjustment ---
+const BASE_WEIGHTS = {
+  offense: 0.30,
+  starting_pitcher: 0.38,
+  bullpen: 0.90,
+  recent_form: 0.28,
+  home_advantage: 1.0
+};
+const MAX_WEIGHT_SHIFT = 0.15;
+
+function situationalWeightAdjustment(venueId, openerDetected, gameDateYmd) {
+  const parkInfo = PARK_FACTOR_BASELINES.get(venueId);
+  const runFactor = parkInfo ? parkInfo.runFactor : 1.0;
+  const parkType = runFactor >= 1.05 ? 'hitter_park' : runFactor <= 0.95 ? 'pitcher_park' : 'neutral';
+  const month = gameDateYmd ? parseInt(gameDateYmd.slice(5, 7), 10) : 6;
+  const phase = month <= 4 ? 'early' : month >= 8 ? 'late' : 'mid';
+
+  const adj = { offense: 0, starting_pitcher: 0, bullpen: 0, recent_form: 0, home_advantage: 0 };
+
+  if (parkType === 'hitter_park') { adj.offense += 0.08; adj.starting_pitcher -= 0.05; }
+  else if (parkType === 'pitcher_park') { adj.starting_pitcher += 0.08; adj.offense -= 0.05; }
+
+  if (openerDetected) { adj.starting_pitcher -= 0.12; adj.bullpen += 0.15; }
+
+  if (phase === 'early') { adj.recent_form -= 0.10; adj.starting_pitcher += 0.03; }
+  else if (phase === 'late') { adj.recent_form += 0.08; adj.bullpen += 0.05; }
+
+  const multipliers = {};
+  for (const key of Object.keys(BASE_WEIGHTS)) {
+    const shift = clamp(adj[key] || 0, -MAX_WEIGHT_SHIFT, MAX_WEIGHT_SHIFT);
+    multipliers[key] = 1.0 + shift;
+  }
+  return multipliers;
+}
+
+// --- Sharp Money Detection ---
+function detectSharpMoneySignal(modelPick, openingOdds, closingOdds) {
+  if (!openingOdds || !closingOdds) return { direction: 'neutral', magnitude: 0, steam: false, risk: 0 };
+  const opening = toNumber(openingOdds[modelPick], 0);
+  const closing = toNumber(closingOdds[modelPick], 0);
+  if (!opening || !closing) return { direction: 'neutral', magnitude: 0, steam: false, risk: 0 };
+
+  const movement = closing - opening;
+  const magnitude = Math.abs(movement);
+  const direction = magnitude < 3 ? 'neutral' : movement < 0 ? 'toward_model' : 'against_model';
+  const steam = magnitude >= 20;
+
+  let risk = 0;
+  if (direction === 'against_model') risk += Math.min(magnitude * 0.015, 0.30);
+  if (steam && direction === 'against_model') risk += 0.20;
+  if (direction === 'toward_model') risk -= Math.min(magnitude * 0.008, 0.15);
+
+  return { direction, magnitude, steam, risk: clamp(risk, 0, 1) };
+}
+
+// --- Prediction Tier ---
+function determinePredictionTier(gameStartTime) {
+  if (!gameStartTime) return { tier: 'standard', label: 'Standard', confidenceCap: 85 };
+  const now = new Date();
+  const start = new Date(gameStartTime);
+  const hoursToGame = Math.max(0, (start - now) / 3600000);
+
+  if (hoursToGame >= 6) return { tier: 'early_preview', label: 'Early Preview', confidenceCap: 60 };
+  if (hoursToGame >= 2) return { tier: 'standard', label: 'Standard', confidenceCap: 85 };
+  return { tier: 'final', label: 'Final Prediction', confidenceCap: 95 };
+}
+
 async function fetchJson(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
@@ -2407,12 +2474,18 @@ function predictGame(
   const bullpenWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'bullpen');
   const recentFormWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'recent_form');
   const homeAdvantageWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'home_advantage');
-  const offenseComponent = clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.3 * offenseWeightMultiplier;
+
+  // Situational weight adjustment
+  const venueId = game.venue?.id || 0;
+  const openerDetected = homeOpenerSituation.isOpener || awayOpenerSituation.isOpener;
+  const sitWeights = situationalWeightAdjustment(venueId, openerDetected, gameDateYmd);
+
+  const offenseComponent = clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.3 * offenseWeightMultiplier * sitWeights.offense;
   const preventionComponent = clamp(preventionEdge, -1.35, 1.35) * 0.24;
-  const starterComponent = clamp(spEdge, -1.35, 1.35) * 0.38 * starterWeightMultiplier;
-  const bullpenComponent = bullpenEdge * 0.9 * bullpenWeightMultiplier;
-  const formComponent = clamp(formEdge, -0.3, 0.3) * 0.28 * recentFormWeightMultiplier;
-  const homeFieldComponent = 0.12 * homeAdvantageWeightMultiplier;
+  const starterComponent = clamp(spEdge, -1.35, 1.35) * 0.38 * starterWeightMultiplier * sitWeights.starting_pitcher;
+  const bullpenComponent = bullpenEdge * 0.9 * bullpenWeightMultiplier * sitWeights.bullpen;
+  const formComponent = clamp(formEdge, -0.3, 0.3) * 0.28 * recentFormWeightMultiplier * sitWeights.recent_form;
+  const homeFieldComponent = 0.12 * homeAdvantageWeightMultiplier * sitWeights.home_advantage;
   const matchupEdge =
     offenseComponent +
     preventionComponent +
@@ -2449,7 +2522,14 @@ function predictGame(
     memoryEdge,
     homeFieldEdge: homeFieldComponent,
     recordDominated,
-    activeWeightVersion: evolutionControls.activeWeightVersion
+    activeWeightVersion: evolutionControls.activeWeightVersion,
+    situationalWeights: sitWeights,
+    predictionTier: determinePredictionTier(game.gameDate),
+    sharpMoney: detectSharpMoneySignal(
+      homeProbability >= awayProbability ? homeTeam.name : awayTeam.name,
+      item?.openingOdds || null,
+      item?.closingOdds || null
+    )
   };
 
   const home = {

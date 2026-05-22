@@ -44,6 +44,8 @@ class TeamStats:
     runs_last_5: float = 0.0
     runs_allowed_last_5: float = 0.0
     ops_last_7_days: float | None = None
+    xwoba_last_14: float | None = None
+    xslg_last_14: float | None = None
 
     @property
     def win_pct(self) -> float:
@@ -83,6 +85,8 @@ class TeamStats:
             runs_last_5=safe_float(row.get("runs_last_5")),
             runs_allowed_last_5=safe_float(row.get("runs_allowed_last_5")),
             ops_last_7_days=safe_float(row.get("ops_last_7_days"), 0.0) or None,
+            xwoba_last_14=safe_float(row.get("xwoba_last_14"), 0.0) or None,
+            xslg_last_14=safe_float(row.get("xslg_last_14"), 0.0) or None,
         )
 
 
@@ -107,6 +111,19 @@ class PitcherStats:
     days_rest: float | None = None
     recent_3_start_era: float | None = None
     recent_3_start_whip: float | None = None
+    era_vs_lhh: float | None = None
+    era_vs_rhh: float | None = None
+    whip_vs_lhh: float | None = None
+    whip_vs_rhh: float | None = None
+    woba_vs_lhh: float | None = None
+    woba_vs_rhh: float | None = None
+    tto_woba: float | None = None
+    pitch_count_trend_last_5: str | None = None
+    whiff_rate: float | None = None
+    chase_rate: float | None = None
+    first_inning_era: float | None = None
+    first_inning_whip: float | None = None
+    first_pitch_strike_rate: float | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, str]) -> "PitcherStats":
@@ -128,6 +145,19 @@ class PitcherStats:
             days_rest=safe_float(row.get("days_rest"), 0.0) or None,
             recent_3_start_era=safe_float(row.get("recent_3_start_era"), 0.0) or None,
             recent_3_start_whip=safe_float(row.get("recent_3_start_whip"), 0.0) or None,
+            era_vs_lhh=safe_float(row.get("era_vs_lhh"), 0.0) or None,
+            era_vs_rhh=safe_float(row.get("era_vs_rhh"), 0.0) or None,
+            whip_vs_lhh=safe_float(row.get("whip_vs_lhh"), 0.0) or None,
+            whip_vs_rhh=safe_float(row.get("whip_vs_rhh"), 0.0) or None,
+            woba_vs_lhh=safe_float(row.get("woba_vs_lhh"), 0.0) or None,
+            woba_vs_rhh=safe_float(row.get("woba_vs_rhh"), 0.0) or None,
+            tto_woba=safe_float(row.get("tto_woba"), 0.0) or None,
+            pitch_count_trend_last_5=row.get("pitch_count_trend_last_5") or None,
+            whiff_rate=safe_float(row.get("whiff_rate"), 0.0) or None,
+            chase_rate=safe_float(row.get("chase_rate"), 0.0) or None,
+            first_inning_era=safe_float(row.get("first_inning_era"), 0.0) or None,
+            first_inning_whip=safe_float(row.get("first_inning_whip"), 0.0) or None,
+            first_pitch_strike_rate=safe_float(row.get("first_pitch_strike_rate"), 0.0) or None,
         )
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .batter_vs_pitcher import aggregate_bvp_for_lineup, bvp_adjustment
 from .bullpen import bullpen_fatigue_adjustment
 from .features import (
     bullpen_score,
@@ -22,9 +23,18 @@ from .features import (
     recent_form_score,
 )
 from .lineup import lineup_adjustment
+from .lineup_depth import LineupDepthContext, enhanced_lineup_impact
 from .odds import american_odds_to_implied_probability
 from .park_factors import park_factor_adjustment
-from .utils import clamp
+from .pitcher_matchup import (
+    PitcherMatchupContext,
+    classify_lineup_handedness,
+    enhanced_pitcher_score,
+)
+from .rolling_expected_stats import xstats_offense_adjustment
+from .travel_fatigue import travel_fatigue_adjustment
+from .umpire import umpire_adjustment
+from .utils import clamp, safe_float
 from .weather import weather_adjustment
 
 
@@ -47,6 +57,9 @@ SIGNAL_PRIORITY = {
         "public_betting_percentage",
         "news_sentiment",
         "head_to_head_trends",
+        "travel_fatigue",
+        "batter_vs_pitcher",
+        "day_after_night",
     ],
 }
 
@@ -87,6 +100,36 @@ def _pitcher_feature(
     return clamp(score, -1.0, 1.0)
 
 
+def _enhanced_pitcher_feature(
+    pitcher,
+    opponent_lineup: Any,
+    rest_days: int | None = None,
+    opener_detection: dict[str, Any] | None = None,
+) -> float:
+    """Pitcher feature using enhanced matchup scoring when data is available."""
+    if pitcher is None:
+        return 0.0
+    if opener_detection and opener_detection.get("is_opener"):
+        return 0.0
+
+    lineup_for_handedness = None
+    if isinstance(opponent_lineup, (dict, list)):
+        lineup_for_handedness = opponent_lineup
+    handedness = classify_lineup_handedness(lineup_for_handedness)
+    context = PitcherMatchupContext(
+        pitcher=pitcher,
+        opponent_lineup_handedness=handedness,
+        tto_woba=getattr(pitcher, "tto_woba", None),
+        pitch_count_trend=getattr(pitcher, "pitch_count_trend", None),
+        whiff_rate=getattr(pitcher, "whiff_rate", None),
+        chase_rate=getattr(pitcher, "chase_rate", None),
+    )
+    score = enhanced_pitcher_score(context)
+    if rest_days is not None:
+        score *= _pitcher_rest_multiplier(rest_days)
+    return clamp(score, -1.0, 1.0)
+
+
 def _offense_feature(team, fatigue: dict[str, Any] | None = None) -> float:
     score = offense_score(team.ops, team.wrc_plus, team.runs_per_game)
     if fatigue:
@@ -106,6 +149,45 @@ def _market_probability(odds: Any) -> float | None:
     if odds in (None, ""):
         return None
     return american_odds_to_implied_probability(str(odds))
+
+
+def _build_lineup_depth(lineup_data: Any) -> dict[str, Any] | None:
+    """Build lineup depth context from lineup data."""
+    if lineup_data is None:
+        return None
+
+    wrc_plus_list = None
+    total_war = 0.0
+    missing_wars = None
+    catcher_framing = 0.0
+
+    if hasattr(lineup_data, "batting_order_wrc_plus"):
+        wrc_plus_list = lineup_data.batting_order_wrc_plus
+    elif isinstance(lineup_data, dict):
+        wrc_plus_list = lineup_data.get("batting_order_wrc_plus")
+
+    if hasattr(lineup_data, "total_lineup_war"):
+        total_war = safe_float(lineup_data.total_lineup_war, 0.0)
+    elif isinstance(lineup_data, dict):
+        total_war = safe_float(lineup_data.get("total_lineup_war"), 0.0)
+
+    if hasattr(lineup_data, "missing_player_wars"):
+        missing_wars = lineup_data.missing_player_wars
+    elif isinstance(lineup_data, dict):
+        missing_wars = lineup_data.get("missing_player_wars")
+
+    if hasattr(lineup_data, "catcher_framing_runs"):
+        catcher_framing = safe_float(lineup_data.catcher_framing_runs, 0.0)
+    elif isinstance(lineup_data, dict):
+        catcher_framing = safe_float(lineup_data.get("catcher_framing_runs"), 0.0)
+
+    context = LineupDepthContext(
+        batting_order_wrc_plus=wrc_plus_list,
+        total_lineup_war=total_war,
+        missing_player_wars=missing_wars,
+        catcher_framing_runs=catcher_framing,
+    )
+    return enhanced_lineup_impact(context)
 
 
 def _attr(value: Any, *names: str) -> Any:
@@ -190,15 +272,42 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
     away_strength = clamp(_team_strength(away_team) + away_team_adjustment, 0.05, 0.95)
     log5_home = log5_probability(home_strength, away_strength)
 
+    # New signals: umpire, travel, BvP, rolling xstats
+    umpire_ctx = collected.get("umpire_context")
+    umpire_adj = umpire_adjustment(umpire_ctx)
+
+    home_travel_ctx = collected.get("home_travel_context")
+    away_travel_ctx = collected.get("away_travel_context")
+    home_travel_adj = travel_fatigue_adjustment(home_travel_ctx)
+    away_travel_adj = travel_fatigue_adjustment(away_travel_ctx)
+
+    home_bvp = collected.get("home_bvp")
+    away_bvp = collected.get("away_bvp")
+    home_bvp_adj = bvp_adjustment(home_bvp)
+    away_bvp_adj = bvp_adjustment(away_bvp)
+
+    home_xstats = collected.get("home_rolling_xstats")
+    away_xstats = collected.get("away_rolling_xstats")
+    home_xstats_adj = xstats_offense_adjustment(home_xstats)
+    away_xstats_adj = xstats_offense_adjustment(away_xstats)
+
+    # Lineup depth analysis
+    home_lineup_data = collected.get("home_lineup")
+    away_lineup_data = collected.get("away_lineup")
+    home_lineup_depth = _build_lineup_depth(home_lineup_data)
+    away_lineup_depth = _build_lineup_depth(away_lineup_data)
+
     components = {
         "team_strength": (log5_home - 0.5) * 5.0,
-        "starting_pitcher": _pitcher_feature(
+        "starting_pitcher": _enhanced_pitcher_feature(
             home_pitcher,
+            away_lineup_data,
             home_pitcher_rest_days,
             opener_situation["home"],
         )
-        - _pitcher_feature(
+        - _enhanced_pitcher_feature(
             away_pitcher,
+            home_lineup_data,
             away_pitcher_rest_days,
             opener_situation["away"],
         ),
@@ -251,6 +360,23 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
         "opener_situation": opener_situation,
         "notes": opener_notes,
         "signal_priority": SIGNAL_PRIORITY,
+        "umpire_adjustment": umpire_adj,
+        "travel_fatigue": {
+            "home": home_travel_adj,
+            "away": away_travel_adj,
+        },
+        "bvp_adjustment": {
+            "home": home_bvp_adj,
+            "away": away_bvp_adj,
+        },
+        "rolling_xstats_adjustment": {
+            "home": home_xstats_adj,
+            "away": away_xstats_adj,
+        },
+        "lineup_depth": {
+            "home": home_lineup_depth,
+            "away": away_lineup_depth,
+        },
     }
 
 
@@ -259,6 +385,19 @@ def build_total_features(collected: dict[str, Any]) -> dict[str, Any]:
     context = collected["total_context"]
     home_team = collected["home_team"]
     away_team = collected["away_team"]
+
+    umpire_ctx = collected.get("umpire_context")
+    umpire_adj = umpire_adjustment(umpire_ctx)
+
+    home_travel_ctx = collected.get("home_travel_context")
+    away_travel_ctx = collected.get("away_travel_context")
+    home_travel_adj = travel_fatigue_adjustment(home_travel_ctx)
+    away_travel_adj = travel_fatigue_adjustment(away_travel_ctx)
+
+    home_xstats = collected.get("home_rolling_xstats")
+    away_xstats = collected.get("away_rolling_xstats")
+    home_xstats_adj = xstats_offense_adjustment(home_xstats)
+    away_xstats_adj = xstats_offense_adjustment(away_xstats)
 
     return {
         "park_factor_adjustment": park_factor_adjustment(context.park),
@@ -271,6 +410,15 @@ def build_total_features(collected: dict[str, Any]) -> dict[str, Any]:
         "away_recent_form_score": _recent_feature(away_team),
         "market_total": collected["market"].get("market_total") if collected["market"].get("available") else None,
         "signal_priority": SIGNAL_PRIORITY,
+        "umpire_adjustment": umpire_adj,
+        "travel_fatigue": {
+            "home": home_travel_adj,
+            "away": away_travel_adj,
+        },
+        "rolling_xstats_adjustment": {
+            "home": home_xstats_adj,
+            "away": away_xstats_adj,
+        },
     }
 
 

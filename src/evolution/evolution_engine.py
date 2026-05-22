@@ -12,6 +12,7 @@ from typing import Any
 
 from ..evaluate import load_prediction_log
 from ..utils import DATA_DIR, safe_float
+from .calibration_auto_adjust import find_miscalibrated_buckets
 from .language_gradient import generate_language_gradient
 from .language_loss import calculate_language_loss
 from .lesson_generator import attribute_prediction_result, generate_lesson
@@ -23,6 +24,7 @@ from .memory_store import (
     record_evolution_event,
 )
 from .evolution_report import build_evolution_summary
+from .time_decay import apply_time_decay_to_lessons
 from .trajectory_logger import build_prediction_trajectory
 from .prediction_evaluator import evaluate_prediction
 from .rule_candidate_generator import generate_rule_candidates
@@ -273,7 +275,16 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
 def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
     ingest = ingest_bot_history(state_path)
     symbolic_candidates = propose_symbolic_updates(read_jsonl("language_gradients"))
-    rule_candidates = generate_rule_candidates(read_jsonl("lessons"), read_jsonl("language_gradients"))
+
+    # Apply time-decay to lessons before generating rule candidates
+    raw_lessons = read_jsonl("lessons")
+    decayed_lessons = apply_time_decay_to_lessons(raw_lessons, min_weight=0.05)
+    rule_candidates = generate_rule_candidates(decayed_lessons, read_jsonl("language_gradients"))
+
+    # Check for persistent miscalibration
+    calibration_history = read_jsonl("calibration_history")
+    miscalibrated = find_miscalibrated_buckets(calibration_history)
+
     backtest = backtest_candidates()
     summary = build_evolution_summary(limit=10)
     record_evolution_event(
@@ -283,6 +294,9 @@ def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
             "symbolic_candidates": len(symbolic_candidates),
             "rule_candidates": len(rule_candidates),
             "backtest": backtest,
+            "miscalibrated_buckets": len(miscalibrated),
+            "lessons_after_decay": len(decayed_lessons),
+            "lessons_before_decay": len(raw_lessons),
         },
     )
     return {
@@ -291,6 +305,8 @@ def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
         "rule_candidates": len(rule_candidates),
         "backtest": backtest,
         "summary": summary.get("summary", {}),
+        "miscalibrated_buckets": miscalibrated,
+        "lessons_decayed": len(raw_lessons) - len(decayed_lessons),
         "safety": "Candidates are pending only. Production rules, prompts, and weights were not auto-promoted.",
     }
 

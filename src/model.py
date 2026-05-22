@@ -97,8 +97,11 @@ class BaselinePredictionModel:
         away_team: TeamStats,
         home_pitcher: PitcherStats | None = None,
         away_pitcher: PitcherStats | None = None,
+        weight_overrides: dict[str, float] | None = None,
     ) -> PredictionResult:
         """Predict home/away win probability for a matchup."""
+        weights = weight_overrides if weight_overrides else self.weights
+
         home_strength = self._team_strength(home_team)
         away_strength = self._team_strength(away_team)
         log5_home = log5_probability(home_strength, away_strength)
@@ -112,7 +115,7 @@ class BaselinePredictionModel:
             "home_field": home_field_adjustment(True),
         }
         rating_difference = sum(
-            self.weights.get(name, 0.0) * value for name, value in components.items()
+            weights.get(name, 0.0) * value for name, value in components.items()
         )
         home_probability = clamp(logistic(rating_difference), 0.05, 0.95)
         away_probability = 1.0 - home_probability

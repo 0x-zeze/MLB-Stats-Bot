@@ -6,6 +6,12 @@ from copy import deepcopy
 from typing import Any
 
 from .data_freshness import check_data_freshness
+from .sharp_money import (
+    LineMovementSignal,
+    detect_sharp_money_signal,
+    sharp_money_confidence_adjustment,
+    sharp_money_risk_factor,
+)
 from .utils import clamp, safe_float
 
 
@@ -175,6 +181,48 @@ def _opener_quality_penalty(game_context: dict[str, Any]) -> int:
     return 0
 
 
+def _build_sharp_money_signal(game_context: dict[str, Any]) -> dict[str, Any] | None:
+    """Build sharp money signal from market data in game context."""
+    market = game_context.get("market") or game_context.get("odds") or {}
+    if not _available(market):
+        return None
+
+    opening_odds = {}
+    closing_odds = {}
+    for side in ("home", "away"):
+        ml_key = f"{side}_moneyline"
+        opening_key = f"opening_{side}_moneyline"
+        if _field(market, opening_key) not in (None, ""):
+            opening_odds[side] = _field(market, opening_key)
+        elif _field(market, ml_key) not in (None, ""):
+            opening_odds[side] = _field(market, ml_key)
+        if _field(market, ml_key) not in (None, ""):
+            closing_odds[side] = _field(market, ml_key)
+
+    if not opening_odds or not closing_odds:
+        return None
+
+    model_pick = game_context.get("predicted_winner") or game_context.get("model_pick") or "home"
+    model_prob = safe_float(game_context.get("home_win_probability", 0.5))
+
+    signal = detect_sharp_money_signal(
+        model_pick=model_pick,
+        model_probability=model_prob,
+        opening_odds=opening_odds,
+        closing_odds=closing_odds,
+    )
+
+    return {
+        "movement_direction": signal.movement_direction,
+        "movement_magnitude": signal.movement_magnitude,
+        "reverse_line_movement": signal.reverse_line_movement,
+        "steam_move_detected": signal.steam_move_detected,
+        "sharp_money_direction": signal.sharp_money_direction,
+        "risk_factor": sharp_money_risk_factor(signal),
+        "confidence_adjustment": sharp_money_confidence_adjustment(signal),
+    }
+
+
 def check_prediction_inputs(game_context: dict[str, Any]) -> dict[str, str]:
     """Classify every required prediction input as available, missing, or stale."""
     return {
@@ -258,6 +306,8 @@ def generate_quality_report(game_context: dict[str, Any]) -> dict[str, Any]:
     if opener_confidence in {"high", "medium"}:
         no_bet_considerations.append("opener_situation")
 
+    sharp_signal = _build_sharp_money_signal(game_context)
+
     return {
         **checks,
         "score": score,
@@ -269,6 +319,7 @@ def generate_quality_report(game_context: dict[str, Any]) -> dict[str, Any]:
         "weather_outdoor": _is_outdoor(game_context),
         "calibration_supports_high": _calibration_supports_high(game_context),
         "confidence_adjustments": [],
+        "sharp_money_signal": sharp_signal,
     }
 
 
@@ -340,6 +391,21 @@ def apply_confidence_downgrade(
     if score < 60:
         no_bet = True
         reasons.append("data quality score below 60")
+
+    sharp_signal = quality_report.get("sharp_money_signal")
+    if isinstance(sharp_signal, dict):
+        sharp_adj = sharp_signal.get("confidence_adjustment", "no_change")
+    elif isinstance(sharp_signal, LineMovementSignal):
+        sharp_adj = sharp_money_confidence_adjustment(sharp_signal)
+    else:
+        sharp_adj = "no_change"
+
+    if sharp_adj == "downgrade_two":
+        confidence = _downgrade(_downgrade(confidence))
+        adjustments.append("sharp money strongly against pick: confidence downgraded x2")
+    elif sharp_adj == "downgrade_one":
+        confidence = _downgrade(confidence)
+        adjustments.append("sharp money against pick: confidence downgraded")
 
     if quality_report.get("odds") == STALE:
         confidence = _downgrade(confidence)

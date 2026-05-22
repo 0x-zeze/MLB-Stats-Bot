@@ -20,6 +20,7 @@ class BullpenUsage:
     high_leverage_available: bool = True
     back_to_back_usage: int = 0
     bullpen_era_last_7: float = 4.10
+    arm_tiers: dict[str, list[str]] | None = None
 
 
 def bullpen_fatigue_adjustment(bullpen: BullpenUsage | None) -> float:

@@ -21,6 +21,7 @@ JSONL_FILES = {
     "tool_usage_reports": "tool_usage_reports.jsonl",
     "symbolic_updates": "symbolic_updates.jsonl",
     "audit_reports": "audit_reports.jsonl",
+    "calibration_history": "calibration_history.jsonl",
 }
 
 JSON_FILES = {

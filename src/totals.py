@@ -8,6 +8,7 @@ from typing import Any
 
 from .bullpen import BullpenUsage, bullpen_fatigue_adjustment
 from .data_loader import PitcherStats, TeamStats
+from .dynamic_variance import VarianceContext, compute_dynamic_variance
 from .lineup import LineupContext, lineup_adjustment
 from .park_factors import ParkFactors, park_factor_adjustment
 from .utils import clamp, confidence_label, format_probability, safe_float
@@ -310,7 +311,18 @@ def predict_total_runs(
     """Build a full total-runs projection with common over/under lines."""
     home_expected, away_expected = project_team_runs(home_team, away_team, context)
     projected_total = project_total_runs(home_expected, away_expected)
-    variance = max(projected_total * 1.25, projected_total + 1.0)
+
+    variance_ctx = VarianceContext(
+        home_bullpen_fatigue=bullpen_fatigue_adjustment(context.home_bullpen),
+        away_bullpen_fatigue=bullpen_fatigue_adjustment(context.away_bullpen),
+        park_volatility=_value(context.park, "run_factor", 100.0) / 100.0 if context.park else 1.0,
+        weather_uncertainty=abs(weather_adjustment(context.weather)) * 0.5 if context.weather else 0.0,
+        home_pitcher_era_stddev=0.0,
+        away_pitcher_era_stddev=0.0,
+        projected_total=projected_total,
+        win_probability_edge=0.0,
+    )
+    variance = compute_dynamic_variance(variance_ctx)
     over = {
         line: negative_binomial_total_probability(projected_total, variance, line, "over")
         for line in COMMON_TOTAL_LINES

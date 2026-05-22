@@ -10,6 +10,7 @@ from dataclasses import asdict
 from datetime import date, datetime, timezone
 from typing import Any
 
+from .batter_vs_pitcher import aggregate_bvp_for_lineup
 from .bullpen import get_bullpen_usage as find_bullpen_usage
 from .bullpen import load_bullpen_usage
 from .data_loader import (
@@ -28,7 +29,10 @@ from .data_sources.retrosheet_loader import load_game_logs
 from .lineup import get_lineup, load_lineups
 from .park_factors import get_park_factor as find_park_factor
 from .park_factors import load_park_factors
+from .rolling_expected_stats import RollingExpectedStats, rolling_team_xstats
 from .totals import GameTotalContext
+from .travel_fatigue import TravelContext, build_travel_context
+from .umpire import UmpireContext, build_umpire_context
 from .utils import clean_name, data_path, safe_float
 from .weather import get_weather_context as find_weather_context
 from .weather import load_weather_contexts
@@ -282,6 +286,15 @@ def collect_game_data(game_id: str | int) -> dict[str, Any]:
         park=park_raw,
     )
 
+    # New signals: umpire, travel fatigue, BvP, rolling xstats
+    umpire_context = _collect_umpire_context(context)
+    home_travel_context = _collect_travel_context(game, "home")
+    away_travel_context = _collect_travel_context(game, "away")
+    home_bvp = _collect_bvp(home_lineup, away_pitcher, state)
+    away_bvp = _collect_bvp(away_lineup, home_pitcher, state)
+    home_rolling_xstats = _collect_rolling_xstats(home_team, game.date, state)
+    away_rolling_xstats = _collect_rolling_xstats(away_team, game.date, state)
+
     return {
         "state": state,
         "game": game,
@@ -298,4 +311,76 @@ def collect_game_data(game_id: str | int) -> dict[str, Any]:
         "market": market,
         "context": context,
         "total_context": total_context,
+        "umpire_context": umpire_context,
+        "home_travel_context": home_travel_context,
+        "away_travel_context": away_travel_context,
+        "home_bvp": home_bvp,
+        "away_bvp": away_bvp,
+        "home_rolling_xstats": home_rolling_xstats,
+        "away_rolling_xstats": away_rolling_xstats,
     }
+
+
+def _collect_umpire_context(context: dict[str, Any]) -> UmpireContext | None:
+    """Build umpire context from game context if available."""
+    umpire_data = context.get("umpire") or context.get("umpire_data")
+    if isinstance(umpire_data, dict):
+        return build_umpire_context(umpire_data)
+    return None
+
+
+def _collect_travel_context(game: GameRow, side: str) -> TravelContext | None:
+    """Build travel context for a team based on game venue."""
+    team_name = game.home_team if side == "home" else game.away_team
+    if side == "home":
+        return None
+    venue_tz = _infer_venue_timezone(game.home_team)
+    return build_travel_context(team_name, venue_tz)
+
+
+def _infer_venue_timezone(home_team: str) -> str:
+    """Infer venue timezone from home team abbreviation."""
+    from .travel_fatigue import TEAM_TIMEZONES
+    return TEAM_TIMEZONES.get(home_team.upper().strip(), "ET")
+
+
+def _collect_bvp(
+    lineup: Any,
+    opposing_pitcher: PitcherStats | None,
+    state: dict[str, Any],
+) -> Any:
+    """Collect BvP data for a lineup against opposing pitcher."""
+    if lineup is None or opposing_pitcher is None:
+        return None
+
+    statcast_rows = state.get("statcast", [])
+    if not statcast_rows:
+        return None
+
+    batter_ids = []
+    if hasattr(lineup, "batter_ids"):
+        batter_ids = lineup.batter_ids
+    elif isinstance(lineup, dict):
+        batter_ids = lineup.get("batter_ids", [])
+
+    if not batter_ids:
+        return None
+
+    return aggregate_bvp_for_lineup(batter_ids, opposing_pitcher.pitcher, statcast_rows)
+
+
+def _collect_rolling_xstats(
+    team_stats: TeamStats,
+    game_date: str,
+    state: dict[str, Any],
+) -> RollingExpectedStats | None:
+    """Collect rolling expected stats for a team."""
+    statcast_rows = state.get("statcast", [])
+    if not statcast_rows:
+        return None
+
+    batter_ids = state.get("team_batter_ids", {}).get(clean_name(team_stats.team), [])
+    if not batter_ids:
+        return None
+
+    return rolling_team_xstats(batter_ids, statcast_rows, as_of_date=game_date)
