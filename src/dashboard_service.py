@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import os
+import sqlite3
 import subprocess
 from datetime import datetime, timezone
 from io import StringIO
@@ -46,6 +48,7 @@ _ROOT_DIR = Path(__file__).resolve().parents[1]
 _SETTINGS_PATH = data_path("dashboard_settings.json")
 _MOCK_PATH = data_path("dashboard_mock.json")
 _TELEGRAM_STATE_PATH = data_path("state.json")
+_SQLITE_PATH = data_path("state.sqlite")
 
 
 def now_iso() -> str:
@@ -65,8 +68,72 @@ def load_mock_dashboard() -> dict[str, Any]:
     return _read_json(_MOCK_PATH, {"today": {"games": []}, "history": [], "performance": {}, "backtest": {}})
 
 
+def _read_telegram_state_from_sqlite() -> dict[str, Any] | None:
+    """Read Telegram bot state from the SQLite database.
+
+    Returns the same dict structure as the legacy state.json so downstream
+    functions (history, performance, calibration) work unchanged.
+    Returns None if the database is missing or unreadable.
+    """
+    if not _SQLITE_PATH.exists():
+        return None
+
+    try:
+        conn = sqlite3.connect(str(_SQLITE_PATH))
+        conn.row_factory = sqlite3.Row
+        try:
+            state: dict[str, Any] = {}
+
+            # Metadata from app_state table
+            for row in conn.execute("SELECT key, value FROM app_state"):
+                if row["key"] == "lastUpdateId":
+                    state["lastUpdateId"] = int(row["value"]) if row["value"].isdigit() else 0
+                elif row["key"] == "lastAutoAlertDate":
+                    state["lastAutoAlertDate"] = row["value"]
+
+            # Memory from memory_summary table
+            mem_row = conn.execute("SELECT * FROM memory_summary WHERE id = 1").fetchone()
+            if mem_row:
+                state["memory"] = {
+                    "version": mem_row["version"],
+                    "totalPicks": mem_row["total_picks"],
+                    "correctPicks": mem_row["correct_picks"],
+                    "wrongPicks": mem_row["wrong_picks"],
+                    "byConfidence": json.loads(mem_row["by_confidence"] or "{}"),
+                    "firstInning": json.loads(mem_row["first_inning"] or "{}"),
+                    "teamBias": json.loads(mem_row["team_bias"] or "{}"),
+                    "matchupMemory": json.loads(mem_row["matchup_memory"] or "{}"),
+                    "learningLog": json.loads(mem_row["learning_log"] or "[]"),
+                }
+
+            # Predictions from picks table
+            predictions: dict[str, Any] = {}
+            for row in conn.execute("SELECT game_pk, payload FROM picks"):
+                try:
+                    payload = json.loads(row["payload"] or "{}")
+                    predictions[str(row["game_pk"])] = payload
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            state["predictions"] = predictions
+
+            return state
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as exc:
+        logging.warning("Failed to read Telegram state from SQLite: %s", exc)
+        return None
+
+
 def load_telegram_state() -> dict[str, Any]:
-    """Load Telegram bot state so dashboard history/performance mirrors the bot."""
+    """Load Telegram bot state so dashboard history/performance mirrors the bot.
+
+    Prefers the live SQLite database (used by the Node bot) over the legacy
+    JSON file, which is only written once during initial migration and becomes
+    stale as new predictions and outcomes are recorded.
+    """
+    sqlite_state = _read_telegram_state_from_sqlite()
+    if sqlite_state is not None:
+        return sqlite_state
     return _read_json(_TELEGRAM_STATE_PATH, {})
 
 

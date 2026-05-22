@@ -111,7 +111,7 @@ async function callLlm(config, { system, user, maxTokens = 900, timeoutMs = 4500
   }
 }
 
-function compactGameForAgent(item) {
+function compactGameForAgent(item, evolutionData) {
   return {
     gamePk: item.gamePk,
     matchup: `${item.away.name} @ ${item.home.name}`,
@@ -220,6 +220,13 @@ function compactGameForAgent(item) {
           reasons: item.agentAnalysis.reasons,
           risk: item.agentAnalysis.risk,
           memoryNote: item.agentAnalysis.memoryNote
+        }
+      : null,
+    evolutionContext: evolutionData && typeof evolutionData.calibrationForProbability === 'function'
+      ? {
+          calibrationWarning: evolutionData.calibrationForProbability(item.winner?.winProbability),
+          factorWarnings: evolutionData.factorWarningsForBreakdown(item.modelBreakdown),
+          segmentCaution: evolutionData.segmentWarningForGame(item)
         }
       : null
   };
@@ -594,7 +601,7 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5) {
   return lines.join('\n');
 }
 
-async function analyzeWithExternalAgent(config, predictions, memorySummary) {
+async function analyzeWithExternalAgent(config, predictions, memorySummary, evolutionData) {
   if (!config.analystAgent.url) return [];
 
   const controller = new AbortController();
@@ -615,7 +622,8 @@ async function analyzeWithExternalAgent(config, predictions, memorySummary) {
         skillVersion: ANALYST_SKILL_VERSION,
         analystPlaybook: ANALYST_SYSTEM_PROMPT,
         memory: memorySummary,
-        games: predictions.map(compactGameForAgent),
+        evolutionContext: evolutionData || null,
+        games: predictions.map((p) => compactGameForAgent(p, evolutionData)),
         outputContract: {
           analyses:
             'Array of { gamePk, reasons, risk, memoryNote, firstInning: { reasons, risk } }. Numeric probabilities, totals, confidence, and final pick are deterministic model fields; do not invent them.'
@@ -631,13 +639,14 @@ async function analyzeWithExternalAgent(config, predictions, memorySummary) {
   }
 }
 
-async function analyzeWithLocalAgent(config, predictions, memorySummary) {
+async function analyzeWithLocalAgent(config, predictions, memorySummary, evolutionData) {
   if (!config.openai.apiKey) return [];
 
   const user = JSON.stringify({
     skillVersion: ANALYST_SKILL_VERSION,
     memory: memorySummary,
-    games: predictions.map(compactGameForAgent),
+    evolutionContext: evolutionData || null,
+    games: predictions.map((p) => compactGameForAgent(p, evolutionData)),
     outputContract: {
       analyses: [
         {
@@ -673,14 +682,14 @@ async function analyzeWithLocalAgent(config, predictions, memorySummary) {
   return sanitizeAnalyses(predictions, findAnalysisArray(parsed));
 }
 
-export async function analyzePredictionsWithAgent(config, predictions, memorySummary) {
+export async function analyzePredictionsWithAgent(config, predictions, memorySummary, evolutionData = null) {
   if (!config.analystAgent.enabled || predictions.length === 0) return [];
 
   if (config.analystAgent.mode === 'external') {
-    return analyzeWithExternalAgent(config, predictions, memorySummary);
+    return analyzeWithExternalAgent(config, predictions, memorySummary, evolutionData);
   }
 
-  return analyzeWithLocalAgent(config, predictions, memorySummary);
+  return analyzeWithLocalAgent(config, predictions, memorySummary, evolutionData);
 }
 
 async function askExternalAgent(config, { question, dateYmd, predictions, memorySummary }) {
@@ -706,7 +715,7 @@ async function askExternalAgent(config, { question, dateYmd, predictions, memory
         dateYmd,
         question,
         memory: memorySummary,
-        games: predictions.map(compactGameForAgent),
+        games: predictions.map((p) => compactGameForAgent(p)),
         outputContract: {
           answer: 'Telegram-ready Indonesian answer, concise, based only on provided data.'
         }
@@ -730,7 +739,7 @@ async function askLocalAgent(config, { question, dateYmd, predictions, memorySum
       dateYmd,
       question,
       memory: memorySummary,
-      games: predictions.map(compactGameForAgent)
+      games: predictions.map((p) => compactGameForAgent(p))
     }),
     maxTokens: 1000,
     timeoutMs: config.analystAgent.timeoutMs

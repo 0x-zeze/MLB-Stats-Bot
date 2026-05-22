@@ -485,7 +485,7 @@ function auditMemoryNotes(item, option, evolutionControls = loadEvolutionControl
     }
   }
 
-  return [...new Set(notes)].slice(0, 3);
+  return [...new Set(notes)].slice(0, 5);
 }
 
 export function applyMoneylineValueMarket(item) {
@@ -505,6 +505,7 @@ export function applyMoneylineValueMarket(item) {
   item.moneylineValueOptions = options;
   item.auditAdjustments = auditAdjustments;
   item.auditMemoryNotes = memoryNotes;
+  item.auditCautions = evolutionControls.memory?.next_game_cautions || [];
   item.activeEvolutionVersions = {
     rule: evolutionControls.activeRuleVersion,
     weights: evolutionControls.activeWeightVersion,
@@ -1208,7 +1209,13 @@ async function fetchSchedule(dateYmd) {
   });
 
   const data = await fetchJson(`${MLB_BASE_URL}/schedule?${params}`);
-  return (data.dates || []).flatMap((date) => date.games || []);
+  const allGames = (data.dates || []).flatMap((date) => date.games || []);
+  const seen = new Set();
+  return allGames.filter((game) => {
+    if (seen.has(game.gamePk)) return false;
+    seen.add(game.gamePk);
+    return true;
+  });
 }
 
 function injuryTransactionStartDate(season) {

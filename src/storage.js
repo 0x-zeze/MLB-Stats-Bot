@@ -1231,6 +1231,10 @@ export class Storage {
               : 'NO',
         matchupMemoryKey: matchupMemory.key,
         matchupMemoryNote: matchupMemory.note,
+        confidence: prediction.pick.confidence || 'unknown',
+        edge: prediction.betDecision?.edge ?? prediction.valuePick?.edge ?? null,
+        dataQuality: prediction.modelBreakdown?.dataQuality ?? null,
+        modelBreakdown: prediction.modelBreakdown || null,
         note: correct
           ? `Pick benar: ${prediction.pick.name}. Matchup memory menyimpan pola pertemuan ini tanpa over-bias.`
           : `Pick salah: ${prediction.pick.name}, pemenang ${result.winner.name}. Matchup memory mencatat miss dan pola seri untuk pertemuan berikutnya.`

@@ -13,9 +13,11 @@ function prediction(gamePk, dateYmd, away, home, pick) {
   return {
     gamePk,
     dateYmd,
+    status: 'Preview',
     matchup: `${away.name} @ ${home.name}`,
-    away,
-    home,
+    away: { ...away, winProbability: pick.id === away.id ? 58 : 42 },
+    home: { ...home, winProbability: pick.id === home.id ? 58 : 42 },
+    winner: { ...pick, winProbability: 58 },
     pick: {
       ...pick,
       winProbability: 58,
@@ -53,12 +55,17 @@ test('recordOutcome stores matchup memory across reversed venues', () => {
   const alpha = team(100, 'Alpha Aces', 'AAA');
   const beta = team(200, 'Beta Bats', 'BBB');
 
+  const pred1 = prediction(1, '2026-04-01', alpha, beta, beta);
+  const pred2 = prediction(2, '2026-04-02', beta, alpha, alpha);
+  storage.savePredictions('2026-04-01', [pred1]);
+  storage.savePredictions('2026-04-02', [pred2]);
+
   storage.recordOutcome(
-    prediction(1, '2026-04-01', alpha, beta, beta),
+    pred1,
     result(1, '2026-04-01', alpha, beta, 2, 5)
   );
   storage.recordOutcome(
-    prediction(2, '2026-04-02', beta, alpha, alpha),
+    pred2,
     result(2, '2026-04-02', beta, alpha, 6, 3)
   );
 
@@ -133,13 +140,17 @@ test('line alert reservations suppress duplicate movement alerts', () => {
     bookmaker: 'FanDuel'
   };
 
+  const now = new Date();
+  const ts1 = now.toISOString();
+  const ts2 = new Date(now.getTime() + 60_000).toISOString();
+  const ts3 = new Date(now.getTime() + 120_000).toISOString();
   try {
     assert.equal(
       storage.reserveLineAlert(
         'line-move:chat:12345:total:FanDuel:6.500:7.000',
         movement,
         'chat',
-        '2026-04-30T10:00:00.000Z'
+        ts1
       ),
       true
     );
@@ -148,7 +159,7 @@ test('line alert reservations suppress duplicate movement alerts', () => {
         'line-move:chat:12345:total:FanDuel:6.500:7.000',
         movement,
         'chat',
-        '2026-04-30T10:01:00.000Z'
+        ts2
       ),
       false
     );
@@ -157,7 +168,7 @@ test('line alert reservations suppress duplicate movement alerts', () => {
         'line-move:chat:12345:total:FanDuel:7.000:7.500',
         { ...movement, previousValue: 7.0, currentValue: 7.5 },
         'chat',
-        '2026-04-30T10:02:00.000Z'
+        ts3
       ),
       true
     );

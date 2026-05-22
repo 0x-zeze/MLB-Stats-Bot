@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { loadConfig } from './config.js';
 import { ANALYST_SKILL_VERSION, buildAnalystSkillSummary } from './analystSkill.js';
+import { buildEvolutionContext } from './evolutionContext.js';
 import {
   analyzePredictionsWithAgent,
   answerInteractiveQuestion,
@@ -167,7 +168,6 @@ async function buildAlertPayload(dateYmd, options = {}) {
   await attachOddsContext(predictions);
   await attachMarketContext(predictions);
   await attachAgentAnalyses(predictions);
-  await attachMarketContext(predictions);
   storage.savePredictions(dateYmd, predictions);
 
   if (options.allowSummary && !options.teamFilter && !includeAdvanced && !config.analystAgent.enabled) {
@@ -213,10 +213,12 @@ async function buildAlert(dateYmd, options = {}) {
 }
 
 async function attachAgentAnalyses(predictions) {
+  const evolutionData = buildEvolutionContext();
   const analyses = await analyzePredictionsWithAgent(
     config,
     predictions,
-    storage.getMemorySummary()
+    storage.getMemorySummary(),
+    evolutionData
   ).catch((error) => {
     console.error('Analyst Agent error:', error.message);
     return [];
@@ -286,7 +288,6 @@ function maybeStartLineMonitor(predictions, chatId, dateYmd) {
 }
 
 async function sendAlert(bot, chatId, dateYmd, options = {}) {
-  await bot.sendMessage(chatId, uiKV('⏳', 'Mengambil data MLB', dateYmd));
   const { text, predictions } = await buildAlertPayload(dateYmd, options);
   await bot.sendMessage(chatId, text);
   maybeStartLineMonitor(predictions, chatId, dateYmd);
@@ -1649,14 +1650,24 @@ async function handleMessage(bot, message) {
   if (command === '/today') {
     const maybeDate = args[0];
     const dateYmd = isValidDateYmd(maybeDate) ? maybeDate : dateInTimezone(config.timezone);
-    await sendAlert(bot, chatId, dateYmd, { includeAdvanced: false });
+    if (!acquireCommandLock(chatId, 'today')) return;
+    try {
+      await sendAlert(bot, chatId, dateYmd, { includeAdvanced: false });
+    } finally {
+      releaseCommandLock(chatId, 'today');
+    }
     return;
   }
 
   if (command === '/deep') {
     const maybeDate = args[0];
     const dateYmd = isValidDateYmd(maybeDate) ? maybeDate : dateInTimezone(config.timezone);
-    await sendAlert(bot, chatId, dateYmd, { includeAdvanced: true, maxGames: Number.MAX_SAFE_INTEGER });
+    if (!acquireCommandLock(chatId, 'deep')) return;
+    try {
+      await sendAlert(bot, chatId, dateYmd, { includeAdvanced: true, maxGames: Number.MAX_SAFE_INTEGER });
+    } finally {
+      releaseCommandLock(chatId, 'deep');
+    }
     return;
   }
 
@@ -1667,7 +1678,12 @@ async function handleMessage(bot, message) {
       return;
     }
 
-    await sendAlert(bot, chatId, dateYmd);
+    if (!acquireCommandLock(chatId, 'date')) return;
+    try {
+      await sendAlert(bot, chatId, dateYmd);
+    } finally {
+      releaseCommandLock(chatId, 'date');
+    }
     return;
   }
 
@@ -1678,7 +1694,12 @@ async function handleMessage(bot, message) {
       return;
     }
 
-    await sendAlert(bot, chatId, dateInTimezone(config.timezone), { teamFilter, includeAdvanced: true });
+    if (!acquireCommandLock(chatId, 'game')) return;
+    try {
+      await sendAlert(bot, chatId, dateInTimezone(config.timezone), { teamFilter, includeAdvanced: true });
+    } finally {
+      releaseCommandLock(chatId, 'game');
+    }
     return;
   }
 
@@ -1705,7 +1726,12 @@ async function handleMessage(bot, message) {
   }
 
   if (command === '/ask') {
-    await askAgent(bot, chatId, args.join(' '));
+    if (!acquireCommandLock(chatId, 'ask')) return;
+    try {
+      await askAgent(bot, chatId, args.join(' '));
+    } finally {
+      releaseCommandLock(chatId, 'ask');
+    }
     return;
   }
 
@@ -1813,8 +1839,28 @@ async function handleCallbackQuery(bot, callbackQuery) {
   });
 }
 
+const processedUpdateIds = new Set();
+const commandLocks = new Map();
+
+function acquireCommandLock(chatId, command) {
+  const key = `${chatId}:${command}`;
+  if (commandLocks.has(key)) return false;
+  commandLocks.set(key, Date.now());
+  return true;
+}
+
+function releaseCommandLock(chatId, command) {
+  commandLocks.delete(`${chatId}:${command}`);
+}
+
 async function processTelegramUpdate(bot, update) {
   if (update.update_id !== undefined) {
+    if (processedUpdateIds.has(update.update_id)) return;
+    processedUpdateIds.add(update.update_id);
+    if (processedUpdateIds.size > 500) {
+      const ids = [...processedUpdateIds];
+      for (const id of ids.slice(0, ids.length - 200)) processedUpdateIds.delete(id);
+    }
     storage.setLastUpdateId(update.update_id);
   }
 
@@ -1914,6 +1960,15 @@ async function processPendingPostGames(bot) {
         const ingestResult = parseJsonOutput(ingestOutput);
         if (ingestResult.evaluated > 0) {
           console.log(`Evolution ingest: ${ingestResult.evaluated} prediction(s) evaluated, ${ingestResult.language_losses || 0} loss(es) generated.`);
+          try {
+            await runPythonModule('src.evolution.evolution_audit', ['--update-memory'], {
+              timeoutMessage: 'Audit memory update timeout (post-game). Skipped.',
+              timeoutMs: 60_000
+            });
+            console.log('Audit memory updated after post-game learning.');
+          } catch (auditError) {
+            console.error('Audit memory update after post-game failed:', auditError.message);
+          }
         }
       } catch (error) {
         console.error('Evolution ingest after post-game failed:', error.message);

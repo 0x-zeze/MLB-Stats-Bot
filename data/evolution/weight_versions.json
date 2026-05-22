@@ -1,12 +1,12 @@
 {
-  "active_version": "weights-v1.0",
+  "active_version": "weights-v1.1",
   "versions": [
     {
       "date_created": "2026-04-30T08:50:46.827678+00:00",
       "previous_version": null,
       "reason": "Initial conservative baseline weights.",
       "rollback_supported": true,
-      "status": "active",
+      "status": "archived",
       "version": "weights-v1.0",
       "weights": {
         "moneyline": {
@@ -17,6 +17,51 @@
           "offense": 0.22,
           "recent_form": 0.1,
           "starting_pitcher": 0.24
+        },
+        "totals": {
+          "bullpen_fatigue": 0.13,
+          "data_quality": 0.03,
+          "lineup": 0.1,
+          "market_total": 0.05,
+          "offense_splits": 0.2,
+          "park_factor": 0.1,
+          "recent_form": 0.07,
+          "starting_pitcher_run_prevention": 0.22,
+          "weather": 0.1
+        }
+      }
+    },
+    {
+      "audit_adjustment_keys": [
+        "audit:weight:starting_pitcher:needs_review"
+      ],
+      "backtest_status": "audit_min_sample_gate",
+      "date_created": "2026-05-13T04:56:17.830621+00:00",
+      "previous_version": "weights-v1.0",
+      "production_update_allowed": true,
+      "promotion_status": "approved_conservative_weight_reduction",
+      "reason": "Audit found repeated starting-pitcher signal misses; reduce SP weight by a conservative 5 percentage points.",
+      "rollback_supported": true,
+      "source_reason_quality": {
+        "accuracy": 57.1,
+        "factor": "starting_pitcher",
+        "loss_mentions": 172,
+        "losses": 9,
+        "sample_size": 21,
+        "verdict": "needs_review",
+        "wins": 12
+      },
+      "status": "active",
+      "version": "weights-v1.1",
+      "weights": {
+        "moneyline": {
+          "bullpen": 0.15,
+          "data_quality": 0.12,
+          "home_advantage": 0.08,
+          "market_odds": 0.12,
+          "offense": 0.24,
+          "recent_form": 0.1,
+          "starting_pitcher": 0.19
         },
         "totals": {
           "bullpen_fatigue": 0.13,

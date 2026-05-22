@@ -80,8 +80,10 @@ class DashboardServiceTests(unittest.TestCase):
 
     def test_history_prefers_telegram_state(self):
         original_path = dashboard_service._TELEGRAM_STATE_PATH
+        original_sqlite = dashboard_service._SQLITE_PATH
         state_path = Path("data/tmp_test_telegram_state.json")
         try:
+            dashboard_service._SQLITE_PATH = Path("data/nonexistent_test.sqlite")
             state_path.write_text(
                 json.dumps(
                     {
@@ -113,6 +115,7 @@ class DashboardServiceTests(unittest.TestCase):
             history = get_prediction_history()
         finally:
             dashboard_service._TELEGRAM_STATE_PATH = original_path
+            dashboard_service._SQLITE_PATH = original_sqlite
             state_path.unlink(missing_ok=True)
 
         self.assertEqual("telegram", history[0]["source"])
@@ -122,8 +125,10 @@ class DashboardServiceTests(unittest.TestCase):
 
     def test_performance_prefers_telegram_memory(self):
         original_path = dashboard_service._TELEGRAM_STATE_PATH
+        original_sqlite = dashboard_service._SQLITE_PATH
         state_path = Path("data/tmp_test_telegram_state.json")
         try:
+            dashboard_service._SQLITE_PATH = Path("data/nonexistent_test.sqlite")
             state_path.write_text(
                 json.dumps(
                     {
@@ -144,6 +149,7 @@ class DashboardServiceTests(unittest.TestCase):
             performance = get_model_performance()
         finally:
             dashboard_service._TELEGRAM_STATE_PATH = original_path
+            dashboard_service._SQLITE_PATH = original_sqlite
             state_path.unlink(missing_ok=True)
 
         self.assertEqual("telegram", performance["overall"]["source"])
