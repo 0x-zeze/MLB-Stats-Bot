@@ -492,6 +492,39 @@ function runAgentBridge(action, args = []) {
   });
 }
 
+function fetchKnowledgeContext(question) {
+  return new Promise((resolve) => {
+    const child = spawn(config.pythonExecutable, [
+      '-c',
+      'import json, sys; from src.knowledge.baseball_knowledge import BaseballKnowledgeBase; kb = BaseballKnowledgeBase(); print(json.dumps(kb.search(sys.argv[1], limit=3), default=str))',
+      question
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+      windowsHide: true
+    });
+
+    let stdout = '';
+    const timer = setTimeout(() => { child.kill(); resolve(''); }, 8000);
+
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.on('error', () => { clearTimeout(timer); resolve(''); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) { resolve(''); return; }
+      try {
+        const chunks = JSON.parse(stdout.trim() || '[]');
+        const text = chunks
+          .map((c) => `[${c.heading || c.source || 'MLB'}] ${c.text || c.content || ''}`.slice(0, 500))
+          .join('\n\n');
+        resolve(text);
+      } catch {
+        resolve('');
+      }
+    });
+  });
+}
+
 function runPythonModule(moduleName, args = [], options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(config.pythonExecutable, ['-m', moduleName, ...args], {
@@ -1819,33 +1852,43 @@ async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.t
         uiCommand('/ask best 5 top pick for today', 'top pick ringkas'),
         uiCommand('/ask game mana yang edge-nya paling kuat hari ini?', 'edge terkuat'),
         uiCommand('/ask kenapa Yankees dipilih?', 'alasan pick'),
+        uiCommand('/ask apa itu wRC+?', 'sabermetrics'),
         uiCommand('/ask upset risk terbesar hari ini?', 'risk upset')
       ].join('\n')
     );
     return;
   }
 
-  await bot.sendMessage(chatId, uiKV('🤖', 'Analyst Agent membaca slate MLB', dateYmd));
-  const predictions = await getMlbPredictions(dateYmd, config.modelMemory ? storage.getMemory() : {});
+  await bot.sendMessage(chatId, uiKV('🤖', 'Analyst Agent thinking...', dateYmd));
+  storage.appendChatMessage(chatId, 'user', question);
+
+  const [predictions, knowledgeContext] = await Promise.all([
+    getMlbPredictions(dateYmd, config.modelMemory ? storage.getMemory() : {}),
+    fetchKnowledgeContext(question)
+  ]);
   await attachAgentAnalyses(predictions);
   await attachMarketContext(predictions);
   storage.savePredictions(dateYmd, predictions);
+
+  const conversationHistory = storage.getChatHistory(chatId, 10);
 
   const answer = await answerInteractiveQuestion(config, {
     question,
     dateYmd,
     predictions,
-    memorySummary: storage.getMemorySummary()
+    memorySummary: storage.getMemorySummary(),
+    knowledgeContext,
+    conversationHistory
   }).catch((error) => {
     console.error('Interactive Agent error:', error.message);
     return null;
   });
 
-  await bot.sendMessage(
-    chatId,
-    answer ||
-      uiBullet('⚠️', 'Agent belum bisa menjawab sekarang. Coba cek /today dulu atau pastikan OPENAI_API_KEY dan ANALYST_AGENT aktif.')
-  );
+  const response = answer ||
+    uiBullet('⚠️', 'Agent belum bisa menjawab sekarang. Coba cek /today dulu atau pastikan OPENAI_API_KEY dan ANALYST_AGENT aktif.');
+
+  storage.appendChatMessage(chatId, 'assistant', response);
+  await bot.sendMessage(chatId, response);
   console.log(`Interactive question handled for ${chatId}.`);
 }
 
@@ -2115,6 +2158,12 @@ async function handleMessage(bot, message) {
 
   if (command === '/skill') {
     await bot.sendMessage(chatId, buildAnalystSkillSummary());
+    return;
+  }
+
+  if (command === '/clear') {
+    storage.clearChatHistory(chatId);
+    await bot.sendMessage(chatId, uiBullet('🧹', 'Conversation history cleared. Mulai fresh.'));
     return;
   }
 

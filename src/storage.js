@@ -463,6 +463,16 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_yrfi_date ON yrfi_results(date_ymd);
       CREATE INDEX IF NOT EXISTS idx_line_snapshots_timestamp ON line_snapshots(timestamp);
       CREATE INDEX IF NOT EXISTS idx_line_alerts_timestamp ON line_alerts(timestamp);
+
+      CREATE TABLE IF NOT EXISTS chat_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        timestamp TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_history_chat ON chat_history(chat_id, timestamp);
     `);
 
     const now = new Date().toISOString();
@@ -1292,5 +1302,37 @@ export class Storage {
         processedAt,
         processedAt
       );
+  }
+
+  appendChatMessage(chatId, role, content) {
+    const maxMessages = 20;
+    this.db
+      .prepare('INSERT INTO chat_history (chat_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
+      .run(String(chatId), role, content, new Date().toISOString());
+
+    const count = this.db
+      .prepare('SELECT COUNT(*) AS count FROM chat_history WHERE chat_id = ?')
+      .get(String(chatId)).count;
+
+    if (count > maxMessages) {
+      this.db
+        .prepare(
+          `DELETE FROM chat_history WHERE id IN (
+            SELECT id FROM chat_history WHERE chat_id = ? ORDER BY timestamp ASC LIMIT ?
+          )`
+        )
+        .run(String(chatId), count - maxMessages);
+    }
+  }
+
+  getChatHistory(chatId, limit = 10) {
+    return this.db
+      .prepare('SELECT role, content FROM chat_history WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ?')
+      .all(String(chatId), limit)
+      .reverse();
+  }
+
+  clearChatHistory(chatId) {
+    this.db.prepare('DELETE FROM chat_history WHERE chat_id = ?').run(String(chatId));
   }
 }

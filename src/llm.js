@@ -861,18 +861,28 @@ async function askExternalAgent(config, { question, dateYmd, predictions, memory
   }
 }
 
-async function askLocalAgent(config, { question, dateYmd, predictions, memorySummary }) {
+async function askLocalAgent(config, { question, dateYmd, predictions, memorySummary, knowledgeContext, conversationHistory }) {
   if (!config.openai.apiKey) return null;
 
+  const systemParts = [ANALYST_INTERACTIVE_PROMPT];
+  if (knowledgeContext) {
+    systemParts.push('', '--- Knowledge Context ---', knowledgeContext);
+  }
+
+  const userPayload = {
+    dateYmd,
+    question,
+    memory: memorySummary,
+    games: predictions.map((p) => compactGameForAgent(p))
+  };
+  if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+    userPayload.conversationHistory = conversationHistory.slice(-8);
+  }
+
   const text = await callLlm(config, {
-    system: ANALYST_INTERACTIVE_PROMPT,
-    user: JSON.stringify({
-      dateYmd,
-      question,
-      memory: memorySummary,
-      games: predictions.map((p) => compactGameForAgent(p))
-    }),
-    maxTokens: 1000,
+    system: systemParts.join('\n'),
+    user: JSON.stringify(userPayload),
+    maxTokens: 1500,
     timeoutMs: config.analystAgent.timeoutMs
   });
 
