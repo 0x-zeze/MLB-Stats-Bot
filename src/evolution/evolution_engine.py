@@ -463,18 +463,43 @@ def evaluate_yesterday() -> dict[str, Any]:
 
 
 def generate_lessons_from_existing_losses() -> dict[str, Any]:
-    # The full chain creates lessons during evaluation. This command is kept
-    # for compatibility and reports current state without mutating rules.
+    all_lessons = read_jsonl("lessons")
+    recent = all_lessons[-5:] if all_lessons else []
     return {
-        "lessons": len(read_jsonl("lessons")),
+        "lessons_count": len(all_lessons),
         "language_losses": len(read_jsonl("language_losses")),
         "language_gradients": len(read_jsonl("language_gradients")),
+        "recent_lessons": [
+            {
+                "game_id": l.get("game_id"),
+                "lesson_type": l.get("lesson_type"),
+                "summary": l.get("summary", ""),
+                "suggested_adjustment": l.get("suggested_adjustment", ""),
+                "date": l.get("date", ""),
+            }
+            for l in recent
+        ],
     }
 
 
 def propose_rules() -> dict[str, Any]:
     candidates = generate_rule_candidates(read_jsonl("lessons"), read_jsonl("language_gradients"))
-    return {"candidates": len(candidates)}
+    all_candidates = read_jsonl("rule_candidates")
+    return {
+        "new_candidates": len(candidates),
+        "total_candidates": len(all_candidates),
+        "candidates": [
+            {
+                "candidate_id": c.get("candidate_id"),
+                "type": c.get("type"),
+                "rule": c.get("rule") or c.get("update", ""),
+                "priority_score": c.get("priority_score", 0),
+                "backtest_status": c.get("backtest_status", "pending"),
+                "promotion_status": c.get("promotion_status", "pending"),
+            }
+            for c in all_candidates[-5:]
+        ],
+    }
 
 
 def backtest_candidates() -> dict[str, Any]:
