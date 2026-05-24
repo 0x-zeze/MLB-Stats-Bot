@@ -1229,6 +1229,15 @@ export class Storage {
             : actualFirstInningRun
               ? 'YES'
               : 'NO',
+        totalRuns: prediction.totalRuns
+          ? {
+              projectedTotal: prediction.totalRuns.projectedTotal,
+              marketLine: prediction.totalRuns.marketLine,
+              bestLean: prediction.totalRuns.bestLean,
+              confidence: prediction.totalRuns.confidence
+            }
+          : null,
+        actualTotal: Number(result.away.score) + Number(result.home.score),
         matchupMemoryKey: matchupMemory.key,
         matchupMemoryNote: matchupMemory.note,
         confidence: prediction.pick.confidence || 'unknown',

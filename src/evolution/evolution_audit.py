@@ -11,6 +11,7 @@ from typing import Any
 
 from ..utils import safe_float
 from .memory_store import append_jsonl, read_json, read_jsonl, read_prediction_outcomes, record_evolution_event, utc_now, write_json
+from .time_decay import AUDIT_HALF_LIFE_DAYS, decay_row_weight
 
 
 RECOMMENDATION_MAP = {
@@ -258,6 +259,17 @@ def _segment_record(label: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     briers = [safe_float(row.get("brier_score"), 0.0) for row in rows if row.get("brier_score") not in (None, "")]
     clvs = [safe_float(row.get("clv"), 0.0) for row in rows if row.get("clv") not in (None, "")]
     no_bet_good = sum(1 for row in rows if row.get("result") == "no_bet" and str(row.get("no_bet_appropriate")).lower() == "true")
+
+    weighted_wins = 0.0
+    weighted_losses = 0.0
+    for row in rows:
+        weight = decay_row_weight(row)
+        if row.get("result") == "win":
+            weighted_wins += weight
+        elif row.get("result") == "loss":
+            weighted_losses += weight
+    weighted_decided = weighted_wins + weighted_losses
+
     return {
         "segment": label,
         "sample_size": len(rows),
@@ -268,6 +280,8 @@ def _segment_record(label: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         "no_bets": no_bets,
         "accuracy": _pct(wins, decided),
         "loss_rate": _pct(losses, decided),
+        "weighted_accuracy": round((weighted_wins / weighted_decided) * 100.0, 1) if weighted_decided > 0.5 else _pct(wins, decided),
+        "weighted_loss_rate": round((weighted_losses / weighted_decided) * 100.0, 1) if weighted_decided > 0.5 else _pct(losses, decided),
         "no_bet_quality": _pct(no_bet_good, no_bets),
         "average_brier": _avg(briers),
         "average_clv": _avg(clvs),
@@ -297,9 +311,20 @@ def calibration_buckets(rows: list[dict[str, Any]], min_sample: int = 1) -> list
         wins = sum(1 for row in items if row.get("result") == "win")
         losses = sum(1 for row in items if row.get("result") == "loss")
         probabilities = [value for value in (_predicted_probability(row) for row in items) if value is not None]
+
+        weighted_wins = 0.0
+        weighted_losses = 0.0
+        for row in items:
+            weight = decay_row_weight(row)
+            if row.get("result") == "win":
+                weighted_wins += weight
+            elif row.get("result") == "loss":
+                weighted_losses += weight
+        weighted_decided = weighted_wins + weighted_losses
         avg_probability = _avg(probabilities) or 0.0
         observed = _pct(wins, wins + losses)
-        error = round(observed - avg_probability, 1)
+        weighted_observed = round((weighted_wins / weighted_decided) * 100.0, 1) if weighted_decided > 0.5 else observed
+        error = round(weighted_observed - avg_probability, 1)
         if error <= -7.5:
             verdict = "overconfident"
         elif error >= 7.5:
@@ -314,6 +339,7 @@ def calibration_buckets(rows: list[dict[str, Any]], min_sample: int = 1) -> list
                 "losses": losses,
                 "avg_predicted_probability": round(avg_probability, 1),
                 "observed_win_rate": observed,
+                "weighted_observed_win_rate": weighted_observed,
                 "calibration_error": error,
                 "verdict": verdict,
             }
@@ -341,16 +367,19 @@ def clv_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def reason_quality(rows: list[dict[str, Any]], losses: list[dict[str, Any]], min_sample: int = 1) -> list[dict[str, Any]]:
-    grouped: dict[str, dict[str, int]] = defaultdict(lambda: {"wins": 0, "losses": 0, "loss_mentions": 0})
+    grouped: dict[str, dict[str, Any]] = defaultdict(lambda: {"wins": 0, "losses": 0, "loss_mentions": 0, "weighted_wins": 0.0, "weighted_losses": 0.0})
     for row in rows:
         if not _is_decided(row):
             continue
         tags = _reason_tags(row) or ["unknown"]
+        weight = decay_row_weight(row)
         for tag in tags:
             if row.get("result") == "win":
                 grouped[tag]["wins"] += 1
+                grouped[tag]["weighted_wins"] += weight
             elif row.get("result") == "loss":
                 grouped[tag]["losses"] += 1
+                grouped[tag]["weighted_losses"] += weight
 
     for loss in losses:
         tag = _classify_reason(loss.get("affected_factor") or loss.get("loss_type"))
@@ -363,9 +392,12 @@ def reason_quality(rows: list[dict[str, Any]], losses: list[dict[str, Any]], min
         if sample < min_sample and counts["loss_mentions"] == 0:
             continue
         accuracy = _pct(counts["wins"], sample)
-        if sample and accuracy < 45:
+        weighted_decided = counts["weighted_wins"] + counts["weighted_losses"]
+        weighted_accuracy = round((counts["weighted_wins"] / weighted_decided) * 100.0, 1) if weighted_decided > 0.5 else accuracy
+        effective_accuracy = weighted_accuracy if weighted_decided > 0.5 else accuracy
+        if sample and effective_accuracy < 45:
             verdict = "weak_signal"
-        elif sample and accuracy >= 58:
+        elif sample and effective_accuracy >= 58:
             verdict = "useful_signal"
         elif counts["loss_mentions"] >= 3:
             verdict = "needs_review"
@@ -378,6 +410,7 @@ def reason_quality(rows: list[dict[str, Any]], losses: list[dict[str, Any]], min
                 "wins": counts["wins"],
                 "losses": counts["losses"],
                 "accuracy": accuracy,
+                "weighted_accuracy": weighted_accuracy,
                 "loss_mentions": counts["loss_mentions"],
                 "verdict": verdict,
             }
@@ -710,37 +743,68 @@ def _active_weight_version(store: dict[str, Any]) -> dict[str, Any]:
     return next((item for item in versions if item.get("version") == active_version), versions[0] if versions else {})
 
 
-def _apply_safe_weight_update(audit: dict[str, Any]) -> list[dict[str, Any]]:
-    pitcher_reason = next((item for item in audit.get("reason_quality", []) if item.get("factor") == "starting_pitcher"), None)
-    if not pitcher_reason:
-        return []
+ADJUSTABLE_FACTORS = {"starting_pitcher", "offense", "bullpen", "recent_form", "home_advantage", "market_odds", "data_quality"}
 
-    enough_evidence = pitcher_reason.get("loss_mentions", 0) >= 10 or (
-        pitcher_reason.get("sample_size", 0) >= SAFE_APPLY_MIN_SAMPLE and safe_float(pitcher_reason.get("accuracy"), 100.0) < 45.0
-    )
-    if pitcher_reason.get("verdict") not in {"weak_signal", "needs_review"} or not enough_evidence:
+
+def _apply_safe_weight_update(audit: dict[str, Any]) -> list[dict[str, Any]]:
+    reason_items = audit.get("reason_quality", [])
+    weak_factors = [
+        item for item in reason_items
+        if item.get("factor") in ADJUSTABLE_FACTORS
+        and item.get("verdict") in {"weak_signal", "needs_review"}
+        and (
+            item.get("loss_mentions", 0) >= 10
+            or (item.get("sample_size", 0) >= SAFE_APPLY_MIN_SAMPLE and safe_float(item.get("weighted_accuracy", item.get("accuracy")), 100.0) < 45.0)
+        )
+    ]
+    if not weak_factors:
         return []
 
     store = read_json("weight_versions")
     active = _active_weight_version(store)
     previous_keys = set(active.get("audit_adjustment_keys") or [])
-    adjustment_key = "audit:weight:starting_pitcher:needs_review"
-    if adjustment_key in previous_keys:
-        return []
-
     active_weights = active.get("weights", {})
     moneyline = dict(active_weights.get("moneyline", {}))
-    current_sp = safe_float(moneyline.get("starting_pitcher"), 0.0)
-    if current_sp <= SAFE_APPLY_MAX_WEIGHT_DELTA:
+    applied_keys = []
+    any_change = False
+
+    for factor_info in weak_factors:
+        factor = factor_info["factor"]
+        adjustment_key = f"audit:weight:{factor}:needs_review"
+        if adjustment_key in previous_keys:
+            continue
+
+        current = safe_float(moneyline.get(factor), 0.0)
+        if current <= SAFE_APPLY_MAX_WEIGHT_DELTA:
+            continue
+
+        delta = min(SAFE_APPLY_MAX_WEIGHT_DELTA, current * 0.2)
+        moneyline[factor] = round(current - delta, 4)
+
+        strong_factors = [
+            item for item in reason_items
+            if item.get("verdict") == "useful_signal"
+            and item.get("factor") in ADJUSTABLE_FACTORS
+            and item.get("factor") != factor
+            and item.get("factor") in moneyline
+        ]
+        redistribute_to = [f["factor"] for f in strong_factors]
+        if not redistribute_to:
+            redistribute_to = [k for k in moneyline if k != factor and k in ADJUSTABLE_FACTORS]
+        if not redistribute_to:
+            redistribute_to = [k for k in moneyline if k != factor]
+
+        share = delta / len(redistribute_to) if redistribute_to else 0
+        for target in redistribute_to:
+            moneyline[target] = round(safe_float(moneyline.get(target), 0.0) + share, 4)
+
+        applied_keys.append(adjustment_key)
+        any_change = True
+
+    if not any_change:
         return []
 
-    delta = min(SAFE_APPLY_MAX_WEIGHT_DELTA, current_sp)
-    moneyline["starting_pitcher"] = round(current_sp - delta, 4)
-    moneyline["offense"] = round(safe_float(moneyline.get("offense"), 0.0) + delta * 0.4, 4)
-    moneyline["bullpen"] = round(safe_float(moneyline.get("bullpen"), 0.0) + delta * 0.2, 4)
-    moneyline["data_quality"] = round(safe_float(moneyline.get("data_quality"), 0.0) + delta * 0.4, 4)
     moneyline = _normalize_weights(moneyline)
-
     if max(moneyline.values(), default=0.0) > 0.35:
         return []
 
@@ -750,15 +814,16 @@ def _apply_safe_weight_update(audit: dict[str, Any]) -> list[dict[str, Any]]:
         if version.get("status") == "active":
             version["status"] = "archived"
 
+    weak_names = ", ".join(f["factor"] for f in weak_factors if f"audit:weight:{f['factor']}:needs_review" in applied_keys)
     new_version = {
         "version": next_version,
         "date_created": audit.get("summary", {}).get("generated_at") or utc_now(),
-        "reason": "Audit found repeated starting-pitcher signal misses; reduce SP weight by a conservative 5 percentage points.",
+        "reason": f"Audit found repeated signal misses for [{weak_names}]; reduce weight by conservative delta and redistribute to stronger factors.",
         "previous_version": previous_version,
         "status": "active",
         "weights": {**active_weights, "moneyline": moneyline},
-        "audit_adjustment_keys": sorted([*previous_keys, adjustment_key]),
-        "source_reason_quality": pitcher_reason,
+        "audit_adjustment_keys": sorted([*previous_keys, *applied_keys]),
+        "source_reason_quality": weak_factors,
         "rollback_supported": True,
         "production_update_allowed": True,
         "promotion_status": "approved_conservative_weight_reduction",

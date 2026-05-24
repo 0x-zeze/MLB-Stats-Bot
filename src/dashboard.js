@@ -9,13 +9,26 @@ import { getMlbPredictions } from './mlb.js';
 import { Storage } from './storage.js';
 import { dateInTimezone, toNumber } from './utils.js';
 
-const config = loadConfig();
-const storage = new Storage();
-const port = config.dashboard?.port || 3008;
-const host = config.dashboard?.host || '0.0.0.0';
+let config = null;
+let storage = null;
+let port = 3008;
+let host = '0.0.0.0';
 const rootDir = resolve(process.cwd(), 'dashboard');
-const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8'));
+let packageJson = null;
 let activeServer = null;
+
+function ensureInitialized() {
+  if (config) return;
+  config = loadConfig();
+  storage = new Storage();
+  port = config.dashboard?.port || 3008;
+  host = config.dashboard?.host || '0.0.0.0';
+  try {
+    packageJson = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8'));
+  } catch {
+    packageJson = { name: 'mlb-alert-telegram-agent', version: '0.0.0' };
+  }
+}
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -67,6 +80,7 @@ function parseBody(request) {
 }
 
 function runPython(args, { timeoutMs = 45000 } = {}) {
+  ensureInitialized();
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(config.pythonExecutable, args, {
       cwd: process.cwd(),
@@ -419,6 +433,7 @@ function summarizeLivePrediction(prediction, meta = {}) {
 }
 
 export async function livePredictions(dateYmd) {
+  ensureInitialized();
   const predictions = await getMlbPredictions(dateYmd, storage.getMemory());
   const fetchedAt = new Date().toISOString();
   return {
@@ -430,6 +445,7 @@ export async function livePredictions(dateYmd) {
 }
 
 function statusPayload() {
+  ensureInitialized();
   const memory = storage.getMemorySummary();
   const state = storage.state;
   return {
@@ -467,6 +483,7 @@ function statusPayload() {
 }
 
 async function routeApi(request, response, url) {
+  ensureInitialized();
   try {
     if (url.pathname === '/api/status') {
       sendJson(response, 200, statusPayload());
@@ -544,8 +561,10 @@ function createDashboardServer() {
   });
 }
 
-export function startDashboard({ enabled = config.dashboard?.enabled !== false } = {}) {
-  if (!enabled) {
+export function startDashboard({ enabled } = {}) {
+  ensureInitialized();
+  const isEnabled = enabled !== undefined ? enabled : config.dashboard?.enabled !== false;
+  if (!isEnabled) {
     console.log('MLB dashboard disabled. Set DASHBOARD_ENABLED=true to enable it.');
     return Promise.resolve(null);
   }

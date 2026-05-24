@@ -99,3 +99,38 @@ export function moneylineWeightMultiplier(controls, factor) {
   if (!Number.isFinite(current) || !Number.isFinite(baseline) || baseline <= 0) return 1;
   return current / baseline;
 }
+
+export function getCalibrationPenalty(probability, controls) {
+  if (!controls) controls = loadEvolutionControls();
+  const patterns = Array.isArray(controls?.memory?.mistake_patterns)
+    ? controls.memory.mistake_patterns
+    : [];
+
+  let penalty = 0;
+  for (const pattern of patterns) {
+    const segment = pattern.segment || {};
+    const segmentName = String(segment.segment || pattern.type || '');
+    if (!segmentName.startsWith('segment-probability') && !segmentName.includes('probability')) continue;
+
+    const match = segmentName.match(/(\d+)-(\d+)/);
+    if (!match) continue;
+    const low = Number(match[1]);
+    const high = Number(match[2]);
+    if (probability >= low && probability < high) {
+      const accuracy = Number(segment.accuracy || pattern.reason_quality?.accuracy || 100);
+      if (accuracy < 45) penalty -= 2;
+      else if (accuracy < 50) penalty -= 1;
+    }
+  }
+
+  const memory = controls?.memory || {};
+  const cautions = Array.isArray(memory.next_game_cautions) ? memory.next_game_cautions : [];
+  for (const caution of cautions) {
+    const text = String(caution || '').toLowerCase();
+    if (text.includes('probability') && text.includes('60') && probability >= 60 && probability < 65) {
+      penalty = Math.min(penalty, -1);
+    }
+  }
+
+  return Math.max(-2, penalty);
+}

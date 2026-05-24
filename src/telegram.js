@@ -106,13 +106,16 @@ export class TelegramBot {
 
   async sendMessage(chatId, text, options = {}) {
     const chunks = splitIntoTelegramMessages(text);
+    const { reply_markup, ...baseOptions } = options;
 
-    for (const chunk of chunks) {
+    for (let i = 0; i < chunks.length; i++) {
+      const isLast = i === chunks.length - 1;
       await this.request('sendMessage', {
         chat_id: chatId,
-        text: chunk,
+        text: chunks[i],
         disable_web_page_preview: true,
-        ...options
+        ...baseOptions,
+        ...(isLast && reply_markup ? { reply_markup } : {})
       });
     }
   }

@@ -199,6 +199,118 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
     return build_prediction_trajectory(context, output)
 
 
+def _build_totals_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | None:
+    total_runs = prediction.get("totalRuns") or {}
+    best_lean = str(total_runs.get("bestLean") or "")
+    if not best_lean or best_lean == "No clear lean":
+        return None
+
+    away = prediction.get("away") or {}
+    home = prediction.get("home") or {}
+    projected = safe_float(total_runs.get("projectedTotal"), 0.0)
+    market_line = safe_float(total_runs.get("marketLine"), 8.5)
+    confidence = str(total_runs.get("confidence") or "low")
+    model_edge = safe_float(total_runs.get("modelEdge"), 0.0)
+
+    context = {
+        "game_id": prediction.get("gamePk"),
+        "date": prediction.get("dateYmd"),
+        "market": "totals",
+        "matchup": prediction.get("matchup") or f"{away.get('name')} @ {home.get('name')}",
+        "away_team": away.get("name"),
+        "home_team": home.get("name"),
+        "game_time": prediction.get("start"),
+        "venue": prediction.get("venue"),
+        "data_quality_score": 65,
+        "probable_pitcher_status": "stored",
+        "lineup_status": "stored",
+        "weather_status": "unknown",
+        "odds_status": "unknown",
+        "bullpen_status": "stored",
+        "tool_usage": ["get_mlb_predictions", "total_run_projection"],
+        "totals": {
+            "projected_total": projected,
+            "market_total": market_line,
+            "best_lean": best_lean,
+            "confidence": confidence,
+            "model_edge": model_edge,
+            "over_probability": safe_float(total_runs.get("overMarketProbability"), 50.0),
+            "under_probability": safe_float(total_runs.get("underMarketProbability"), 50.0),
+        },
+        "main_factors": total_runs.get("factors") or [],
+        "risk_factors": [],
+    }
+    output = {
+        "final_lean": best_lean,
+        "confidence": confidence,
+        "totals": context["totals"],
+        "main_factors": context["main_factors"],
+        "risk_factors": [],
+    }
+    return build_prediction_trajectory(context, output)
+
+
+def _build_yrfi_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | None:
+    first_inning = prediction.get("firstInning") or {}
+    pick = first_inning.get("pick") or first_inning.get("baselinePick")
+    if not pick:
+        return None
+
+    away = prediction.get("away") or {}
+    home = prediction.get("home") or {}
+    probability = safe_float(first_inning.get("probability") or first_inning.get("baselineProbability"), 50.0)
+    confidence_label = first_inning.get("confidence") or ("medium" if abs(probability - 50) >= 5 else "low")
+
+    context = {
+        "game_id": prediction.get("gamePk"),
+        "date": prediction.get("dateYmd"),
+        "market": "yrfi",
+        "matchup": prediction.get("matchup") or f"{away.get('name')} @ {home.get('name')}",
+        "away_team": away.get("name"),
+        "home_team": home.get("name"),
+        "game_time": prediction.get("start"),
+        "venue": prediction.get("venue"),
+        "data_quality_score": 60,
+        "probable_pitcher_status": "stored",
+        "lineup_status": "stored",
+        "weather_status": "unknown",
+        "odds_status": "unknown",
+        "bullpen_status": "n/a",
+        "tool_usage": ["get_mlb_predictions", "first_inning_projection"],
+        "yrfi": {
+            "pick": pick,
+            "probability": probability,
+            "confidence": confidence_label,
+            "edge": round(abs(probability - 50.0), 3),
+        },
+        "main_factors": first_inning.get("reasons") or [],
+        "risk_factors": [],
+    }
+    output = {
+        "final_lean": pick,
+        "confidence": confidence_label,
+        "yrfi": context["yrfi"],
+        "main_factors": context["main_factors"],
+        "risk_factors": [],
+    }
+    return build_prediction_trajectory(context, output)
+
+
+def _prediction_to_trajectories(prediction: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build all market trajectories (moneyline, totals, yrfi) from a stored prediction."""
+    trajectories = [_prediction_to_trajectory(prediction)]
+
+    totals = _build_totals_trajectory(prediction)
+    if totals:
+        trajectories.append(totals)
+
+    yrfi = _build_yrfi_trajectory(prediction)
+    if yrfi:
+        trajectories.append(yrfi)
+
+    return trajectories
+
+
 def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
     """Import settled Telegram bot history into the Evolution Engine.
 
@@ -222,31 +334,40 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
         if not prediction:
             skipped_missing_prediction += 1
             continue
-        if _outcome_key(game_pk, "moneyline") in existing:
-            skipped_duplicates += 1
-            continue
         score = _score_from_learning_log(entry)
         if not score:
             skipped_missing_score += 1
             continue
 
         away_score, home_score = score
-        trajectory = _prediction_to_trajectory(prediction)
-        result = evaluate_completed_prediction(
-            trajectory,
-            {
-                "away_score": away_score,
-                "home_score": home_score,
-            },
-        )
-        if result.get("skipped_duplicate"):
-            skipped_duplicates += 1
-            continue
-        existing.add(_outcome_key(game_pk, "moneyline"))
-        evaluated += 1
-        generated_losses += 1
-        generated_gradients += 1
-        generated_lessons += 1
+        total_score = away_score + home_score
+        first_inning_actual = entry.get("firstInningActual")
+        first_inning_run = first_inning_actual == "YES" if first_inning_actual in ("YES", "NO") else None
+
+        trajectories = _prediction_to_trajectories(prediction)
+        for trajectory in trajectories:
+            market = str(trajectory.get("market") or "moneyline")
+            if _outcome_key(game_pk, market) in existing:
+                skipped_duplicates += 1
+                continue
+
+            final_result = {"away_score": away_score, "home_score": home_score}
+            if market == "totals":
+                final_result["actual_total"] = total_score
+            elif market == "yrfi":
+                if first_inning_run is None:
+                    continue
+                final_result["first_inning_run"] = first_inning_run
+
+            result = evaluate_completed_prediction(trajectory, final_result)
+            if result.get("skipped_duplicate"):
+                skipped_duplicates += 1
+                continue
+            existing.add(_outcome_key(game_pk, market))
+            evaluated += 1
+            generated_losses += 1
+            generated_gradients += 1
+            generated_lessons += 1
 
     record_evolution_event(
         "bot_history_ingested",

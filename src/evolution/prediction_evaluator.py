@@ -289,6 +289,17 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         elif lean.lower().startswith("under"):
             correct = line is not None and actual_total < line
             status = "win" if correct else "loss"
+    elif not no_bet and market == "yrfi":
+        first_inning_run = final_result.get("first_inning_run")
+        if first_inning_run is not None:
+            if lean.upper() == "YES":
+                correct = bool(first_inning_run)
+            else:
+                correct = not bool(first_inning_run)
+            status = "win" if correct else "loss"
+        else:
+            status = "no_bet"
+            no_bet = True
     elif not no_bet:
         predicted_winner = lean
         correct = bool(actual_winner and actual_winner.lower() in predicted_winner.lower())
@@ -335,7 +346,7 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         "actual_total": actual_total,
         "moneyline_correct": correct if market == "moneyline" else None,
         "total_lean_correct": correct if market == "totals" else None,
-        "yrfi_nrfi_correct": None,
+        "yrfi_nrfi_correct": correct if market == "yrfi" else None,
         "no_bet_appropriate": no_bet_appropriate,
         "profit_loss": profit_loss,
         "clv": _clv(trajectory, final_result, lean),

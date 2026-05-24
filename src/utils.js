@@ -29,6 +29,20 @@ export function splitIntoTelegramMessages(text, limit = 3900) {
   let current = '';
 
   for (const block of text.split('\n\n')) {
+    if (block.length > limit) {
+      if (current) chunks.push(current);
+      current = '';
+      let remaining = block;
+      while (remaining.length > limit) {
+        const cutAt = remaining.lastIndexOf('\n', limit);
+        const splitAt = cutAt > 0 ? cutAt : limit;
+        chunks.push(remaining.slice(0, splitAt));
+        remaining = remaining.slice(splitAt).replace(/^\n/, '');
+      }
+      if (remaining) current = remaining;
+      continue;
+    }
+
     const next = current ? `${current}\n\n${block}` : block;
     if (next.length > limit) {
       if (current) chunks.push(current);

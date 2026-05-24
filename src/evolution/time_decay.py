@@ -10,6 +10,7 @@ from ..utils import safe_float
 
 
 DEFAULT_HALF_LIFE_DAYS = 90
+AUDIT_HALF_LIFE_DAYS = 60
 
 
 def decay_lesson_weight(
@@ -96,6 +97,22 @@ def weighted_lesson_relevance(
             total_weight += 0.5
 
     return min(1.0, total_weight / max(len(matching), 1))
+
+
+def decay_row_weight(
+    row: dict[str, Any],
+    current_date: str | datetime | None = None,
+    half_life_days: int = AUDIT_HALF_LIFE_DAYS,
+) -> float:
+    """Return 0-1 decay weight for an evaluation/outcome row.
+
+    Looks for date in common row fields: date, game_date, timestamp.
+    Uses shorter half-life (60 days) suited for audit recency weighting.
+    """
+    date_field = row.get("date") or row.get("game_date") or row.get("timestamp") or row.get("created_at")
+    if not date_field:
+        return 0.5
+    return decay_lesson_weight(date_field, current_date, half_life_days)
 
 
 def _parse_date(value: Any) -> datetime | None:

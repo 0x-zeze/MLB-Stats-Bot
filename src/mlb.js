@@ -15,8 +15,8 @@ const GAME_SEPARATOR = UI_LINE;
 const SECTION_SEPARATOR = UI_THIN_LINE;
 const TOTAL_RUN_LINES = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
 const DEFAULT_MARKET_TOTAL = 8.5;
-const MONEYLINE_VALUE_EDGE_THRESHOLD = 2.0;
-const STRONG_VALUE_EDGE_THRESHOLD = 4.0;
+const MONEYLINE_VALUE_EDGE_THRESHOLD = 3.0;
+const STRONG_VALUE_EDGE_THRESHOLD = 5.5;
 const OPENER_KEYWORD_RE = /\b(opener|bulk|piggyback)\b|opener\s*\/\s*bulk/i;
 const OPENER_NOTE_KEYS = new Set([
   'note',
@@ -476,6 +476,20 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
 
   if (matchupEdge < 0.08 && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
     reasons.push('matchup edge game ini masih tipis');
+  }
+
+  const breakdown = item.modelBreakdown || {};
+  const pickDir = option.side === 'home' ? 1 : -1;
+  const factorComponents = [
+    toNumber(breakdown.matchupEdge, 0),
+    toNumber(breakdown.starterEdge, 0),
+    toNumber(breakdown.offenseEdge, 0),
+    toNumber(breakdown.bullpenEdge, 0),
+    toNumber(breakdown.lineupEdge, 0)
+  ];
+  const factorsAgreeing = factorComponents.filter(c => c * pickDir > 0.02).length;
+  if (factorsAgreeing < 3 && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
+    reasons.push('kurang dari 3 faktor model setuju dengan pick ini');
   }
 
   const weakEdgeRule = getEvolutionRule(evolutionControls, 'audit:no_bet:weak_edge');
@@ -2527,8 +2541,8 @@ function predictGame(
     predictionTier: determinePredictionTier(game.gameDate),
     sharpMoney: detectSharpMoneySignal(
       homeProbability >= awayProbability ? homeTeam.name : awayTeam.name,
-      item?.openingOdds || null,
-      item?.closingOdds || null
+      null,
+      null
     )
   };
 

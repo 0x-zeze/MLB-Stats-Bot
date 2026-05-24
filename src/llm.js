@@ -5,6 +5,7 @@ import {
   ANALYST_SYSTEM_PROMPT
 } from './analystSkill.js';
 import { uiKV, uiTitle } from './telegramFormat.js';
+import { getCalibrationPenalty, loadEvolutionControls } from './evolutionControls.js';
 
 function trimSlash(value) {
   return String(value || '').replace(/\/+$/, '');
@@ -222,6 +223,15 @@ function compactGameForAgent(item, evolutionData) {
           memoryNote: item.agentAnalysis.memoryNote
         }
       : null,
+    weatherDetail: item.weather || null,
+    travelFatigue: item.scheduleFatigue || null,
+    sharpMoneyDetail: item.modelBreakdown?.sharpMoney || null,
+    dataQualityIndicators: {
+      pitchersConfirmed: Boolean(item.away?.starter && item.home?.starter),
+      lineupsConfirmed: Boolean(item.lineups?.away?.confirmed && item.lineups?.home?.confirmed),
+      weatherAvailable: item.totalRuns?.detail?.weather !== undefined,
+      oddsAvailable: Boolean(item.currentOdds?.awayMoneyline || item.currentOdds?.homeMoneyline)
+    },
     evolutionContext: evolutionData && typeof evolutionData.calibrationForProbability === 'function'
       ? {
           calibrationWarning: evolutionData.calibrationForProbability(item.winner?.winProbability),
@@ -253,18 +263,47 @@ function capConfidence(label, cap) {
 }
 
 function deterministicConfidenceFromPrediction(prediction, value) {
-  let confidence = deterministicConfidenceFromProbability(value);
+  return multiFactorConfidence(prediction, value);
+}
+
+function multiFactorConfidence(prediction, probability, evolutionControls) {
+  if (!evolutionControls) evolutionControls = loadEvolutionControls();
+  let score = 0;
+  const edge = Math.abs(normalizeProbability(probability, 50) - 50);
   const breakdown = prediction.modelBreakdown || {};
-  const matchupEdge = Math.abs(toNumber(breakdown.matchupEdge, 0));
-  const recordContextEdge = Math.abs(toNumber(breakdown.recordContextEdge, 0));
 
-  if (breakdown.recordDominated) {
-    confidence = capConfidence(confidence, 'low');
-  } else if (recordContextEdge > matchupEdge && matchupEdge < 0.18) {
-    confidence = capConfidence(confidence, 'medium');
-  }
+  score += edge >= 12 ? 4 : edge >= 8 ? 3 : edge >= 5 ? 2 : edge >= 3 ? 1 : 0;
 
-  return confidence;
+  const pickDirection = normalizeProbability(probability, 50) >= 50 ? 1 : -1;
+  const components = [
+    toNumber(breakdown.matchupEdge, 0),
+    toNumber(breakdown.starterEdge, 0),
+    toNumber(breakdown.offenseEdge, 0),
+    toNumber(breakdown.bullpenEdge, 0),
+    toNumber(breakdown.lineupEdge, 0)
+  ];
+  const agreeing = components.filter(c => c * pickDirection > 0.02).length;
+  score += agreeing >= 4 ? 3 : agreeing >= 3 ? 2 : agreeing >= 2 ? 1 : 0;
+
+  const lineups = [prediction.lineups?.away, prediction.lineups?.home].filter(Boolean);
+  const bothConfirmed = lineups.length === 2 && lineups.every(l => l.confirmed && toNumber(l.count, 0) >= 9);
+  const hasPitchers = Boolean(prediction.away?.starter && prediction.home?.starter);
+  score += (bothConfirmed ? 1 : 0) + (hasPitchers ? 1 : 0);
+
+  const sharp = breakdown.sharpMoney;
+  if (sharp?.direction === 'toward_model') score += 1;
+  if (sharp?.direction === 'against_model' && toNumber(sharp?.magnitude, 0) >= 15) score -= 1;
+
+  const calibrationPenalty = getCalibrationPenalty(normalizeProbability(probability, 50), evolutionControls);
+  score += calibrationPenalty;
+
+  if (breakdown.recordDominated) score -= 2;
+
+  if (edge >= 5 && edge < 8 && agreeing <= 1) return 'low';
+
+  if (score >= 7) return 'high';
+  if (score >= 4) return 'medium';
+  return 'low';
 }
 
 function resolveTeamId(value, prediction) {
@@ -361,6 +400,85 @@ function sanitizeFirstInningAnalysis(prediction, raw) {
   };
 }
 
+function applyAgentProbabilityShift(deterministicAway, deterministicHome, raw, prediction) {
+  const adjustment = raw?.probabilityAdjustment;
+  if (!adjustment || typeof adjustment !== 'object') {
+    return { awayProbability: deterministicAway, homeProbability: deterministicHome, shift: 0, reason: null, applied: false };
+  }
+
+  const rawShift = clamp(toNumber(adjustment.shift, 0), -5, 5);
+  const reason = String(adjustment.reason || '').trim();
+
+  if (Math.abs(rawShift) < 0.5 || reason.length < 15) {
+    return { awayProbability: deterministicAway, homeProbability: deterministicHome, shift: 0, reason: reason || null, applied: false };
+  }
+
+  const pickTeamId = prediction.winner.id;
+  const pickIsHome = pickTeamId === prediction.home.id;
+  const pickProbability = pickIsHome ? deterministicHome : deterministicAway;
+  const adjustedPick = clamp(pickProbability + rawShift, 20, 80);
+
+  if ((pickProbability >= 50 && adjustedPick < 50) || (pickProbability < 50 && adjustedPick >= 50)) {
+    return { awayProbability: deterministicAway, homeProbability: deterministicHome, shift: 0, reason: 'rejected: would flip winner', applied: false };
+  }
+
+  const adjustedAway = pickIsHome ? 100 - adjustedPick : adjustedPick;
+  const adjustedHome = pickIsHome ? adjustedPick : 100 - adjustedPick;
+
+  return {
+    awayProbability: clamp(Math.round(adjustedAway), 20, 80),
+    homeProbability: clamp(Math.round(adjustedHome), 20, 80),
+    shift: rawShift,
+    reason,
+    applied: true
+  };
+}
+
+function applyAgentBetOverride(prediction, raw, analysis) {
+  const override = raw?.betOverride;
+  if (!override || typeof override !== 'object') return null;
+
+  const action = String(override.action || '').toLowerCase();
+  const reason = String(override.reason || '').trim();
+  if (!reason || reason.length < 10) return null;
+
+  const currentDecision = prediction.betDecision || {};
+  const currentStatus = String(currentDecision.status || 'LEAN ONLY').toUpperCase();
+
+  if (action === 'downgrade_to_no_bet') {
+    return {
+      type: 'downgrade',
+      accepted: true,
+      previousStatus: currentStatus,
+      newStatus: 'NO BET',
+      reason
+    };
+  }
+
+  if (action === 'upgrade_to_value') {
+    const edge = toNumber(currentDecision.edge ?? prediction.valuePick?.edge, 0);
+    const confidence = analysis?.confidence || 'low';
+    const existingReasons = currentDecision.reasons || [];
+    const shiftApplied = analysis?.probabilityShift?.applied || false;
+    const shiftPositive = toNumber(analysis?.probabilityShift?.shift, 0) >= 0;
+
+    if (edge < 1.5) return { type: 'upgrade', accepted: false, reason: 'rejected: model edge < 1.5%' };
+    if (confidenceRank(confidence) < 2) return { type: 'upgrade', accepted: false, reason: 'rejected: confidence too low' };
+    if (existingReasons.length > 1) return { type: 'upgrade', accepted: false, reason: 'rejected: too many safety reasons active' };
+    if (shiftApplied && !shiftPositive) return { type: 'upgrade', accepted: false, reason: 'rejected: agent shift is negative' };
+
+    return {
+      type: 'upgrade',
+      accepted: true,
+      previousStatus: currentStatus,
+      newStatus: 'VALUE',
+      reason
+    };
+  }
+
+  return null;
+}
+
 function sanitizeAnalysis(prediction, raw) {
   const awayId = prediction.away.id;
   const homeId = prediction.home.id;
@@ -372,8 +490,11 @@ function sanitizeAnalysis(prediction, raw) {
     total > 0 && total !== 100 ? Math.round((awayProbability / total) * 100) : awayProbability;
   const normalizedHomeProbability =
     total > 0 && total !== 100 ? 100 - normalizedAwayProbability : homeProbability;
-  const pickProbability =
-    pickTeamId === awayId ? normalizedAwayProbability : normalizedHomeProbability;
+
+  const probabilityShift = applyAgentProbabilityShift(normalizedAwayProbability, normalizedHomeProbability, raw, prediction);
+  const finalAwayProbability = probabilityShift.awayProbability;
+  const finalHomeProbability = probabilityShift.homeProbability;
+  const pickProbability = pickTeamId === awayId ? finalAwayProbability : finalHomeProbability;
 
   const reasons = Array.isArray(raw?.reasons)
     ? raw.reasons.map((item) => String(item).trim()).filter(Boolean).slice(0, 3)
@@ -383,12 +504,21 @@ function sanitizeAnalysis(prediction, raw) {
     gamePk: prediction.gamePk,
     pickTeamId,
     pickTeamName: pickTeamId === awayId ? prediction.away.name : prediction.home.name,
-    awayProbability: normalizedAwayProbability,
-    homeProbability: normalizedHomeProbability,
+    awayProbability: finalAwayProbability,
+    homeProbability: finalHomeProbability,
     confidence: deterministicConfidenceFromPrediction(prediction, pickProbability),
     reasons: reasons.length > 0 ? reasons : prediction.reasons.slice(0, 3),
     risk: String(raw?.risk || 'Tidak ada risk khusus yang dominan.').slice(0, 220),
     memoryNote: String(raw?.memoryNote || 'Memory dipakai sebagai sinyal kecil.').slice(0, 220),
+    probabilityShift: {
+      applied: probabilityShift.applied,
+      shift: probabilityShift.shift,
+      reason: probabilityShift.reason
+    },
+    betOverride: applyAgentBetOverride(prediction, raw, {
+      confidence: deterministicConfidenceFromPrediction(prediction, pickProbability),
+      probabilityShift
+    }),
     firstInning: sanitizeFirstInningAnalysis(prediction, raw),
     source: 'analyst-agent'
   };
@@ -504,7 +634,8 @@ function topPickCandidate(prediction) {
   const status = String(prediction.betDecision?.status || 'LEAN ONLY').toUpperCase();
   const statusBoost = status === 'VALUE' ? 5 : status === 'NO BET' ? -4 : 0;
   const warnings = topPickWarnings(prediction);
-  const score = probability - 50 + Math.max(edge, 0) * 0.8 + confidenceScore(confidence) + matchupEdge + statusBoost - warnings.length * 1.5;
+  const lineupPenalty = (prediction.lineups?.away?.confirmed && prediction.lineups?.home?.confirmed) ? 0 : -3;
+  const score = probability - 50 + Math.max(edge, 0) * 0.8 + confidenceScore(confidence) + matchupEdge + statusBoost - warnings.length * 2.5 + lineupPenalty;
 
   return {
     prediction,
@@ -545,10 +676,10 @@ function topPickWarnings(prediction) {
 
 function pickTier(candidate) {
   if (candidate.status === 'NO BET' || candidate.warnings.length >= 2) return '⛔ No Bet Risk';
-  if (candidate.probability >= 61 && confidenceRank(candidate.confidence) >= 2 && candidate.warnings.length === 0) {
+  if (candidate.probability >= 63 && confidenceRank(candidate.confidence) >= 3 && candidate.warnings.length === 0) {
     return '✅ Strong Pick';
   }
-  if (candidate.probability >= 56 || confidenceRank(candidate.confidence) >= 2) return '🟡 Lean Only';
+  if (candidate.probability >= 58 || confidenceRank(candidate.confidence) >= 2) return '🟡 Lean Only';
   return '⚪ Thin Lean';
 }
 
@@ -674,7 +805,7 @@ async function analyzeWithLocalAgent(config, predictions, memorySummary, evoluti
   const text = await callLlm(config, {
     system: ANALYST_SYSTEM_PROMPT,
     user,
-    maxTokens: Math.min(4500, 700 + predictions.length * 360),
+    maxTokens: Math.min(6000, 900 + predictions.length * 450),
     timeoutMs: config.analystAgent.timeoutMs
   });
 
