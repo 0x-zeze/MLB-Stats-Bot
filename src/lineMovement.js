@@ -476,6 +476,20 @@ async function pollMonitor(key) {
 
     const snapshot = buildSnapshot(game, event);
     if (!snapshot.gamePk) continue;
+
+    if (state.storage) {
+      const gamePk = snapshot.gamePk;
+      if (snapshot.homeMoneyline !== null) {
+        state.storage.setLineSnapshot(gamePk, 'closing_home', snapshot.homeMoneyline);
+      }
+      if (snapshot.awayMoneyline !== null) {
+        state.storage.setLineSnapshot(gamePk, 'closing_away', snapshot.awayMoneyline);
+      }
+      if (snapshot.totalLine !== null) {
+        state.storage.setLineSnapshot(gamePk, 'closing_total', snapshot.totalLine);
+      }
+    }
+
     await compareSnapshot(snapshot, monitor.chatId, { sendAlerts: true });
   }
 }

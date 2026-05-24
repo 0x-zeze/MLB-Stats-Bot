@@ -4,8 +4,7 @@ import { ANALYST_SKILL_VERSION, buildAnalystSkillSummary } from './analystSkill.
 import { buildEvolutionContext } from './evolutionContext.js';
 import {
   analyzePredictionsWithAgent,
-  answerInteractiveQuestion,
-  summarizeDailyAlertWithOpenAI
+  answerInteractiveQuestion
 } from './llm.js';
 import {
   applyMoneylineValueMarket,
@@ -29,14 +28,20 @@ import {
   startLineMonitor,
   stopLineMonitorForChat
 } from './lineMovement.js';
+import {
+  configureLineupMonitor,
+  lineupMonitorSettings,
+  startLineupMonitor,
+  stopLineupMonitorForChat
+} from './lineupMonitor.js';
 
 const config = loadConfig();
 const storage = new Storage();
 let postGameCheckRunning = false;
 let autoUpdateCheckRunning = false;
+const predictionCache = new Map();
 const PREDICT_CALLBACK_PREFIX = 'predict_live:';
 const LEGACY_PREDICT_CALLBACK_PREFIX = 'predict:';
-const AGENT_TOOL_CALLBACK_PREFIX = 'agent_tool:';
 const EVOLVE_CALLBACK_PREFIX = 'evolve:';
 const TOTAL_MARKET_BUTTONS = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
 const EVOLUTION_COMMANDS = {
@@ -171,11 +176,6 @@ async function buildAlertPayload(dateYmd, options = {}) {
   await attachAgentAnalyses(predictions);
   storage.savePredictions(dateYmd, predictions);
 
-  if (options.allowSummary && !options.teamFilter && !includeAdvanced && !config.analystAgent.enabled) {
-    const llmText = await summarizeDailyAlertWithOpenAI(config, predictions).catch(() => null);
-    if (llmText) return { text: llmText, predictions };
-  }
-
   return {
     text: formatPredictions(dateYmd, predictions, {
       maxGames: options.maxGames ?? (includeAdvanced ? config.maxGamesPerMessage : predictions.length),
@@ -286,6 +286,7 @@ async function sendTextToAll(bot, text) {
 function maybeStartLineMonitor(predictions, chatId, dateYmd) {
   if (dateYmd !== dateInTimezone(config.timezone)) return;
   startLineMonitor(predictions, chatId);
+  startLineupMonitor(predictions, chatId);
 }
 
 async function sendAlert(bot, chatId, dateYmd, options = {}) {
@@ -382,70 +383,7 @@ function parsePredictCommand(text) {
   const payload = text.replace(/^\/predict(?:@\S+)?\s*/i, '').trim();
   if (!payload) return { menu: true };
   if (isValidDateYmd(payload)) return { menu: true, dateYmd: payload };
-
-  const parts = payload
-    .split('|')
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  if (parts.length < 2) return null;
-
-  const [home, away, rawOdds] = parts;
-  let odds = '';
-  let oddsFormat = 'american';
-
-  if (rawOdds) {
-    const decimalMatch = rawOdds.match(/^(decimal|dec)\s+(.+)$/i);
-    if (decimalMatch) {
-      oddsFormat = 'decimal';
-      odds = decimalMatch[2].trim();
-    } else {
-      odds = rawOdds;
-    }
-  }
-
-  return { home, away, odds, oddsFormat };
-}
-
-function runPythonPrediction({ home, away, odds, oddsFormat }) {
-  return new Promise((resolve, reject) => {
-    const args = ['-m', 'src.predict', '--home', home, '--away', away];
-    if (odds) {
-      args.push('--home-odds', odds, '--odds-format', oddsFormat);
-    }
-
-    const child = spawn(config.pythonExecutable, args, {
-      cwd: process.cwd(),
-      env: process.env,
-      windowsHide: true
-    });
-
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error('Python prediction timeout. Coba lagi atau cek PYTHON_BIN.'));
-    }, 20_000);
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve(stdout.trim());
-        return;
-      }
-      reject(new Error((stderr || stdout || `Python exited with code ${code}`).trim()));
-    });
-  });
+  return { menu: true };
 }
 
 function runAgentBridge(action, args = []) {
@@ -563,16 +501,6 @@ function runPythonModule(moduleName, args = [], options = {}) {
       resolve(stdout.trim());
     });
   });
-}
-
-function formatPythonPredictionOutput(output) {
-  return [
-    uiTitle('📊', 'MLB Python Prediction'),
-    '',
-    output,
-    '',
-    uiBullet('⚠️', 'Estimasi model, bukan jaminan hasil atau betting advice.')
-  ].join('\n');
 }
 
 function evolutionHelpText() {
@@ -1191,91 +1119,9 @@ async function handleAuditCommand(bot, chatId) {
   await bot.sendMessage(chatId, formatEvolutionAudit(payload));
 }
 
-function agentToolHomeKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        { text: 'Game Tools', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}games` },
-        { text: 'Knowledge', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}knowledge` }
-      ]
-    ]
-  };
-}
-
-function agentToolGamesKeyboard(games) {
-  return {
-    inline_keyboard: [
-      ...games.map((game) => [
-        {
-          text: game.label,
-          callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}game:${game.id}`
-        }
-      ]),
-      [{ text: 'Knowledge', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}knowledge` }]
-    ]
-  };
-}
-
-function agentToolActionKeyboard(gameId) {
-  return {
-    inline_keyboard: [
-      [
-        { text: 'Moneyline', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}moneyline:${gameId}` },
-        { text: 'Total', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}total:${gameId}` }
-      ],
-      [
-        { text: 'Context', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}context:${gameId}` },
-        { text: 'Full', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}full:${gameId}` }
-      ],
-      [{ text: 'Back to Games', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}games` }]
-    ]
-  };
-}
-
-function agentKnowledgeKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        { text: 'wRC+ vs OPS', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}kb:wrc` },
-        { text: 'FIP vs ERA', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}kb:fip` }
-      ],
-      [
-        { text: 'Wind & Over', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}kb:wind` },
-        { text: 'Bullpen Fatigue', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}kb:bullpen` }
-      ],
-      [
-        { text: 'Market Total', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}kb:market` },
-        { text: 'Value Bet', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}kb:value` }
-      ],
-      [
-        { text: 'Markets', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}kb:markets` },
-        { text: 'First 5', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}kb:f5` }
-      ],
-      [{ text: 'Game Tools', callback_data: `${AGENT_TOOL_CALLBACK_PREFIX}games` }]
-    ]
-  };
-}
-
-async function sendAgentToolsMenu(bot, chatId) {
-  await bot.sendMessage(
-    chatId,
-    [uiTitle('🧰', 'MLB Agent Tools'), '', uiBullet('👇', 'Pilih action.')].join('\n'),
-    { reply_markup: agentToolHomeKeyboard() }
-  );
-}
-
-async function sendAgentToolGames(bot, chatId) {
-  const payload = await runAgentBridge('games');
-  await bot.sendMessage(chatId, payload.text || uiTitle('📋', 'Pilih Game'), {
-    reply_markup: agentToolGamesKeyboard(payload.games || [])
-  });
-}
-
 async function sendKnowledgeAnswer(bot, chatId, query) {
   const payload = await runAgentBridge('knowledge', [query]);
-  await bot.sendMessage(chatId, payload.text || uiBullet('⚠️', 'Knowledge tidak tersedia.'), {
-    reply_markup: agentKnowledgeKeyboard()
-  });
+  await bot.sendMessage(chatId, payload.text || uiBullet('⚠️', 'Knowledge tidak tersedia.'));
 }
 
 function displayedPredictionProbabilities(prediction) {
@@ -1432,24 +1278,11 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
 
 async function sendPythonPrediction(bot, chatId, text) {
   const request = parsePredictCommand(text);
-  if (!request) {
-    await bot.sendMessage(chatId, predictionHelpText());
-    return;
-  }
-
-  if (request.menu) {
-    await bot.sendMessage(
-      chatId,
-      uiKV('⏳', 'Mengambil semua game MLB', request.dateYmd || dateInTimezone(config.timezone))
-    );
-    await sendPredictionGameMenu(bot, chatId, request.dateYmd);
-    return;
-  }
-
-  await bot.sendMessage(chatId, uiKV('⏳', 'Menjalankan Python prediction', `${request.away} @ ${request.home}`));
-  const output = await runPythonPrediction(request);
-  await bot.sendMessage(chatId, formatPythonPredictionOutput(output));
-  console.log(`Python prediction handled for ${chatId}: ${request.away} @ ${request.home}.`);
+  await bot.sendMessage(
+    chatId,
+    uiKV('⏳', 'Mengambil semua game MLB', request.dateYmd || dateInTimezone(config.timezone))
+  );
+  await sendPredictionGameMenu(bot, chatId, request.dateYmd);
 }
 
 async function handlePredictCallback(bot, callbackQuery) {
@@ -1487,50 +1320,6 @@ async function handlePredictCallback(bot, callbackQuery) {
   console.log(
     `Live prediction callback handled for ${chatId}: ${prediction.away.name} @ ${prediction.home.name}.`
   );
-}
-
-async function handleAgentToolCallback(bot, callbackQuery) {
-  const chatId = callbackQuery.message?.chat?.id;
-  const data = callbackQuery.data || '';
-  const [action, value = ''] = data.slice(AGENT_TOOL_CALLBACK_PREFIX.length).split(':');
-
-  await bot.answerCallbackQuery(callbackQuery.id, { text: 'Loading...' }).catch(() => {});
-  if (!chatId) return;
-
-  if (action === 'games') {
-    await sendAgentToolGames(bot, chatId);
-    return;
-  }
-
-  if (action === 'knowledge') {
-    await bot.sendMessage(chatId, uiTitle('📚', 'Pilih Topik | knowledge'), {
-      reply_markup: agentKnowledgeKeyboard()
-    });
-    return;
-  }
-
-  if (action === 'kb') {
-    await sendKnowledgeAnswer(bot, chatId, value || 'wrc');
-    return;
-  }
-
-  if (action === 'game') {
-    const payload = await runAgentBridge('game', [value]);
-    await bot.sendMessage(chatId, payload.text || uiBullet('⚠️', 'Game tidak tersedia.'), {
-      reply_markup: agentToolActionKeyboard(value)
-    });
-    return;
-  }
-
-  if (['moneyline', 'total', 'context', 'full'].includes(action)) {
-    const payload = await runAgentBridge(action, [value]);
-    await bot.sendMessage(chatId, payload.text || uiBullet('⚠️', 'Output tidak tersedia.'), {
-      reply_markup: agentToolActionKeyboard(value)
-    });
-    return;
-  }
-
-  await bot.sendMessage(chatId, uiBullet('⚠️', 'Action tidak dikenal. Coba /agenttools lagi.'));
 }
 
 async function sendAlertToAll(bot, dateYmd) {
@@ -1683,7 +1472,7 @@ function formatAgentStatus() {
     uiKV('💾', 'Memory', config.modelMemory ? 'aktif' : 'mati'),
     uiKV('💬', 'Interactive chat', config.interactiveAgent ? 'aktif' : 'mati'),
     uiKV('🏁', 'Post-game learning', config.postGameAlerts ? 'aktif' : 'mati'),
-    uiKV('🧰', 'Tools', '/agenttools | /kb'),
+    uiKV('🧰', 'Tools', '/kb'),
     '',
     uiKV('📊', 'Memory sample', `${summary.totalPicks} pick | akurasi ${summary.accuracy}%`),
     '',
@@ -1839,6 +1628,72 @@ async function handleLineAlertsCommand(bot, chat, args) {
   await bot.sendMessage(chatId, lineAlertsHelpText());
 }
 
+const PREDICTION_CACHE_TTL_MS = 30 * 60 * 1000;
+
+function isKnowledgeOnlyQuestion(question) {
+  const text = String(question || '').toLowerCase();
+  const knowledgePatterns = [
+    /\b(apa itu|what is|define|definisi|artinya|meaning of)\b/,
+    /\b(wrc\+|woba|xwoba|fip|xfip|siera|babip|ops|iso|whip|era|war)\b/,
+    /\b(moneyline|run line|over.?under|implied probability|clv|closing line)\b/,
+    /\b(sabermetric|sabermetrik|statistik|metric|formula|rumus)\b/,
+    /\b(park factor|pythagorean|log5|expected|xba|xslg|barrel)\b/,
+    /\b(bagaimana cara|how does|how to calculate|cara hitung)\b/,
+    /\b(apa bedanya|difference between|beda|vs)\b.*\b(era|fip|ops|woba|whip)\b/
+  ];
+  return knowledgePatterns.some((pattern) => pattern.test(text));
+}
+
+function getCachedPredictions(chatId) {
+  const cached = predictionCache.get(String(chatId));
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp > PREDICTION_CACHE_TTL_MS) {
+    predictionCache.delete(String(chatId));
+    return null;
+  }
+  return cached.predictions;
+}
+
+function setCachedPredictions(chatId, predictions) {
+  predictionCache.set(String(chatId), { predictions, timestamp: Date.now() });
+}
+
+async function handleLineupAlertsCommand(bot, chat, args) {
+  const chatId = chat.id;
+  const action = String(args[0] || 'status').toLowerCase();
+
+  if (action === 'on') {
+    storage.setMeta(`lineupAlerts:${chatId}`, '1');
+    await bot.sendMessage(chatId, uiKV('🟢', 'Lineup alerts', 'aktif — notifikasi saat lineup confirmed'));
+    return;
+  }
+
+  if (action === 'off') {
+    storage.setMeta(`lineupAlerts:${chatId}`, '0');
+    const stopped = stopLineupMonitorForChat(chatId);
+    await bot.sendMessage(chatId, [
+      uiKV('🔴', 'Lineup alerts', 'mati'),
+      stopped > 0 ? uiKV('🛑', 'Monitor dihentikan', stopped) : null
+    ].filter(Boolean).join('\n'));
+    return;
+  }
+
+  const enabled = storage.getMeta(`lineupAlerts:${chatId}`, '1') !== '0';
+  const settings = lineupMonitorSettings();
+  await bot.sendMessage(chatId, [
+    uiTitle('📋', 'Lineup Monitor'),
+    '',
+    uiKV('🟢', 'Status', enabled ? 'aktif' : 'mati'),
+    uiKV('⏱️', 'Interval cek', `${settings.intervalMinutes} menit`),
+    '',
+    uiSection('📋', 'Command'),
+    uiCommand('/lineups on', 'aktifkan notifikasi lineup'),
+    uiCommand('/lineups off', 'matikan notifikasi lineup'),
+    '',
+    uiBullet('💡', 'Bot akan kirim alert saat lineup resmi terdeteksi dari MLB StatsAPI (biasanya 1-3 jam sebelum game).')
+  ].join('\n'));
+}
+
 async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.timezone)) {
   if (!question.trim()) {
     await bot.sendMessage(
@@ -1862,13 +1717,25 @@ async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.t
   await bot.sendMessage(chatId, uiKV('🤖', 'Analyst Agent thinking...', dateYmd));
   storage.appendChatMessage(chatId, 'user', question);
 
-  const [predictions, knowledgeContext] = await Promise.all([
-    getMlbPredictions(dateYmd, config.modelMemory ? storage.getMemory() : {}),
+  const knowledgeOnly = isKnowledgeOnlyQuestion(question);
+  let predictions;
+
+  if (knowledgeOnly) {
+    predictions = getCachedPredictions(chatId) || [];
+  } else {
+    predictions = getCachedPredictions(chatId);
+    if (!predictions) {
+      predictions = await getMlbPredictions(dateYmd, config.modelMemory ? storage.getMemory() : {});
+      await attachAgentAnalyses(predictions);
+      await attachMarketContext(predictions);
+      storage.savePredictions(dateYmd, predictions);
+      setCachedPredictions(chatId, predictions);
+    }
+  }
+
+  const [knowledgeContext] = await Promise.all([
     fetchKnowledgeContext(question)
   ]);
-  await attachAgentAnalyses(predictions);
-  await attachMarketContext(predictions);
-  storage.savePredictions(dateYmd, predictions);
 
   const conversationHistory = storage.getChatHistory(chatId, 10);
 
@@ -1904,11 +1771,25 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
     const correct = prediction.pick.id === result.winner.id;
     const learned = markProcessed && !prediction.postGameProcessed;
 
+    let clv = null;
+    const openingOdds = prediction.openingOdds;
+    const closingHome = storage.getLineSnapshot(result.gamePk, 'closing_home');
+    const closingAway = storage.getLineSnapshot(result.gamePk, 'closing_away');
+    if (openingOdds && (closingHome || closingAway)) {
+      const pickIsHome = String(prediction.pick.id) === String(prediction.home?.id);
+      const openingLine = pickIsHome ? openingOdds.homeMoneyline : openingOdds.awayMoneyline;
+      const closingLine = pickIsHome ? closingHome?.value : closingAway?.value;
+      if (Number.isFinite(openingLine) && Number.isFinite(closingLine)) {
+        clv = Math.round(openingLine - closingLine);
+      }
+    }
+
     evaluations.push({
       prediction,
       result,
       correct,
-      learned
+      learned,
+      clv
     });
 
     if (learned) {
@@ -2014,26 +1895,23 @@ async function handleMessage(bot, message) {
     return;
   }
 
-  if (command === '/today') {
+  if (command === '/today' || command === '/deep') {
     const maybeDate = args[0];
     const dateYmd = isValidDateYmd(maybeDate) ? maybeDate : dateInTimezone(config.timezone);
     if (!acquireCommandLock(chatId, 'today')) return;
     try {
-      await sendAlert(bot, chatId, dateYmd, { includeAdvanced: false });
+      const { text, predictions } = await buildAlertPayload(dateYmd, { includeAdvanced: false });
+      const gameButtons = predictions.slice(0, 12).map((p) => [{
+        text: `${p.away.abbreviation || p.away.name} @ ${p.home.abbreviation || p.home.name}`,
+        callback_data: `${PREDICT_CALLBACK_PREFIX}${dateYmd}:${p.gamePk}`
+      }]);
+      await bot.sendMessage(chatId, text, {
+        reply_markup: gameButtons.length ? { inline_keyboard: gameButtons } : undefined
+      });
+      maybeStartLineMonitor(predictions, chatId, dateYmd);
+      console.log(`Alert ${dateYmd} sent to ${chatId}.`);
     } finally {
       releaseCommandLock(chatId, 'today');
-    }
-    return;
-  }
-
-  if (command === '/deep') {
-    const maybeDate = args[0];
-    const dateYmd = isValidDateYmd(maybeDate) ? maybeDate : dateInTimezone(config.timezone);
-    if (!acquireCommandLock(chatId, 'deep')) return;
-    try {
-      await sendAlert(bot, chatId, dateYmd, { includeAdvanced: true, maxGames: Number.MAX_SAFE_INTEGER });
-    } finally {
-      releaseCommandLock(chatId, 'deep');
     }
     return;
   }
@@ -2072,11 +1950,6 @@ async function handleMessage(bot, message) {
 
   if (command === '/predict') {
     await sendPythonPrediction(bot, chatId, text);
-    return;
-  }
-
-  if (command === '/agenttools' || command === '/tools') {
-    await sendAgentToolsMenu(bot, chatId);
     return;
   }
 
@@ -2121,6 +1994,11 @@ async function handleMessage(bot, message) {
 
   if (command === '/linealerts' || command === '/linemove') {
     await handleLineAlertsCommand(bot, chat, args);
+    return;
+  }
+
+  if (command === '/lineups') {
+    await handleLineupAlertsCommand(bot, chat, args);
     return;
   }
 
@@ -2211,11 +2089,6 @@ async function handleCallbackQuery(bot, callbackQuery) {
   const data = callbackQuery.data || '';
   if (data.startsWith(PREDICT_CALLBACK_PREFIX)) {
     await handlePredictCallback(bot, callbackQuery);
-    return;
-  }
-
-  if (data.startsWith(AGENT_TOOL_CALLBACK_PREFIX)) {
-    await handleAgentToolCallback(bot, callbackQuery);
     return;
   }
 
@@ -2430,6 +2303,117 @@ async function processAutoUpdates(bot) {
   }
 }
 
+function formatWeeklyRecap(stats) {
+  const lines = [
+    uiTitle('📊', 'Weekly Performance Recap'),
+    uiKV('📅', 'Periode', `${stats.startDate} — ${stats.endDate}`),
+    '',
+    uiKV('🎯', 'Total picks', stats.totalPicks),
+    uiKV('✅', 'Benar', stats.correct),
+    uiKV('❌', 'Salah', stats.wrong),
+    uiKV('📈', 'Akurasi', `${stats.accuracy}%`),
+    ''
+  ];
+
+  if (stats.bestPick) {
+    lines.push(uiKV('🏆', 'Best pick', stats.bestPick));
+  }
+  if (stats.worstPick) {
+    lines.push(uiKV('💔', 'Worst miss', stats.worstPick));
+  }
+
+  lines.push('');
+  lines.push(uiSection('🎚️', 'By confidence'));
+  for (const [level, data] of Object.entries(stats.byConfidence)) {
+    if (data.total > 0) {
+      lines.push(uiKV('•', level, `${data.correct}/${data.total} | ${Math.round((data.correct / data.total) * 100)}%`));
+    }
+  }
+
+  lines.push('');
+  lines.push(uiBullet('📌', 'Recap otomatis setiap minggu. Gunakan /memory untuk detail lengkap.'));
+  return lines.join('\n');
+}
+
+function computeWeeklyStats() {
+  const today = new Date();
+  const dates = [];
+  for (let i = 7; i >= 1; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    dates.push(d.toISOString().slice(0, 10));
+  }
+
+  let totalPicks = 0;
+  let correct = 0;
+  let wrong = 0;
+  const byConfidence = { high: { total: 0, correct: 0 }, medium: { total: 0, correct: 0 }, low: { total: 0, correct: 0 } };
+  let bestPick = null;
+  let worstPick = null;
+
+  for (const dateYmd of dates) {
+    const predictions = storage.listPredictionsByDate(dateYmd);
+    for (const prediction of predictions) {
+      if (!prediction.postGameProcessed) continue;
+      totalPicks += 1;
+      const log = (storage.state?.memory?.learningLog || []).find(
+        (entry) => String(entry.gamePk) === String(prediction.gamePk)
+      );
+      if (!log) continue;
+
+      if (log.correct) {
+        correct += 1;
+        if (!bestPick || (prediction.pick?.winProbability || 0) < (bestPick.prob || 100)) {
+          bestPick = { label: `${prediction.matchup} — ${prediction.pick?.name}`, prob: prediction.pick?.winProbability };
+        }
+      } else {
+        wrong += 1;
+        if (!worstPick) {
+          worstPick = `${prediction.matchup} — picked ${prediction.pick?.name}`;
+        }
+      }
+
+      const conf = String(prediction.pick?.confidence || 'low').toLowerCase();
+      if (byConfidence[conf]) {
+        byConfidence[conf].total += 1;
+        if (log.correct) byConfidence[conf].correct += 1;
+      }
+    }
+  }
+
+  return {
+    startDate: dates[0],
+    endDate: dates[dates.length - 1],
+    totalPicks,
+    correct,
+    wrong,
+    accuracy: totalPicks > 0 ? Math.round((correct / totalPicks) * 100) : 0,
+    bestPick: bestPick?.label || null,
+    worstPick,
+    byConfidence
+  };
+}
+
+async function processWeeklyRecap(bot) {
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const hour = Number(timeInTimezone(config.timezone).split(':')[0]);
+
+  if (dayOfWeek !== 0 || hour < 9 || hour > 10) return;
+
+  const lastRecapDate = storage.getMeta('lastWeeklyRecapDate', '');
+  const today = dateInTimezone(config.timezone);
+  if (lastRecapDate === today) return;
+
+  const stats = computeWeeklyStats();
+  if (stats.totalPicks === 0) return;
+
+  const text = formatWeeklyRecap(stats);
+  await sendTextToAll(bot, text);
+  storage.setMeta('lastWeeklyRecapDate', today);
+  console.log(`Weekly recap sent: ${stats.correct}/${stats.totalPicks} accuracy.`);
+}
+
 function startScheduler(bot) {
   processAutoUpdates(bot).catch((error) => {
     console.error('Auto-update check error:', error.message);
@@ -2438,6 +2422,9 @@ function startScheduler(bot) {
   setInterval(() => {
     processAutoUpdates(bot).catch((error) => {
       console.error('Auto-update check error:', error.message);
+    });
+    processWeeklyRecap(bot).catch((error) => {
+      console.error('Weekly recap error:', error.message);
     });
   }, 60_000);
 
@@ -2486,6 +2473,7 @@ async function main() {
     console.warn(`setMyCommands gagal/diabaikan: ${error.message}`);
   });
   configureLineMonitor({ bot, storage, config });
+  configureLineupMonitor({ bot, storage, config });
   startScheduler(bot);
 
   if (config.telegramWebhook.enabled) {

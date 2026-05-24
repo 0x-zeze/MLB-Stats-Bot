@@ -994,8 +994,14 @@ export class Storage {
 
         const key = String(prediction.gamePk);
         const existing = this.getPrediction(key) || {};
+        const compact = compactPrediction(prediction, dateYmd);
+        if (!compact.openingOdds && existing.openingOdds) {
+          compact.openingOdds = existing.openingOdds;
+        } else if (!compact.openingOdds && compact.currentOdds) {
+          compact.openingOdds = { ...compact.currentOdds, savedAt: new Date().toISOString() };
+        }
         this.writePredictionRow({
-          ...compactPrediction(prediction, dateYmd),
+          ...compact,
           postGameProcessed: existing.postGameProcessed || false,
           postGameProcessedAt: existing.postGameProcessedAt || null
         });
