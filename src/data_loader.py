@@ -54,39 +54,46 @@ class TeamStats:
 
     @classmethod
     def from_row(cls, row: dict[str, str]) -> "TeamStats":
+        def _opt_float(key: str) -> float | None:
+            """Return float if the key has a non-blank value, else None. Preserves 0.0."""
+            raw = row.get(key)
+            if raw is None or (isinstance(raw, str) and not raw.strip()):
+                return None
+            return safe_float(raw)
+
         return cls(
             team=row["team"],
             wins=safe_int(row.get("wins")),
             losses=safe_int(row.get("losses")),
             runs_scored=safe_float(row.get("runs_scored")),
             runs_allowed=safe_float(row.get("runs_allowed")),
-            ops=safe_float(row.get("ops"), 0.0) or None,
-            wrc_plus=safe_float(row.get("wrc_plus"), 0.0) or None,
-            runs_per_game=safe_float(row.get("runs_per_game"), 0.0) or None,
-            woba=safe_float(row.get("woba"), 0.0) or None,
-            xwoba=safe_float(row.get("xwoba"), 0.0) or None,
-            xslg=safe_float(row.get("xslg"), 0.0) or None,
-            barrel_rate=safe_float(row.get("barrel_rate"), 0.0) or None,
-            hard_hit_rate=safe_float(row.get("hard_hit_rate"), 0.0) or None,
-            strikeout_rate=safe_float(row.get("strikeout_rate"), 0.0) or None,
-            walk_rate=safe_float(row.get("walk_rate"), 0.0) or None,
-            ops_vs_lhp=safe_float(row.get("ops_vs_lhp"), 0.0) or None,
-            ops_vs_rhp=safe_float(row.get("ops_vs_rhp"), 0.0) or None,
-            wrc_plus_vs_lhp=safe_float(row.get("wrc_plus_vs_lhp"), 0.0) or None,
-            wrc_plus_vs_rhp=safe_float(row.get("wrc_plus_vs_rhp"), 0.0) or None,
-            bullpen_era=safe_float(row.get("bullpen_era"), 0.0) or None,
-            bullpen_fip=safe_float(row.get("bullpen_fip"), 0.0) or None,
-            bullpen_whip=safe_float(row.get("bullpen_whip"), 0.0) or None,
-            bullpen_recent_usage=safe_float(row.get("bullpen_recent_usage"), 0.0) or None,
-            bullpen_era_last_7=safe_float(row.get("bullpen_era_last_7"), 0.0) or None,
+            ops=_opt_float("ops"),
+            wrc_plus=_opt_float("wrc_plus"),
+            runs_per_game=_opt_float("runs_per_game"),
+            woba=_opt_float("woba"),
+            xwoba=_opt_float("xwoba"),
+            xslg=_opt_float("xslg"),
+            barrel_rate=_opt_float("barrel_rate"),
+            hard_hit_rate=_opt_float("hard_hit_rate"),
+            strikeout_rate=_opt_float("strikeout_rate"),
+            walk_rate=_opt_float("walk_rate"),
+            ops_vs_lhp=_opt_float("ops_vs_lhp"),
+            ops_vs_rhp=_opt_float("ops_vs_rhp"),
+            wrc_plus_vs_lhp=_opt_float("wrc_plus_vs_lhp"),
+            wrc_plus_vs_rhp=_opt_float("wrc_plus_vs_rhp"),
+            bullpen_era=_opt_float("bullpen_era"),
+            bullpen_fip=_opt_float("bullpen_fip"),
+            bullpen_whip=_opt_float("bullpen_whip"),
+            bullpen_recent_usage=_opt_float("bullpen_recent_usage"),
+            bullpen_era_last_7=_opt_float("bullpen_era_last_7"),
             wins_last_10=safe_int(row.get("wins_last_10")),
             games_last_10=safe_int(row.get("games_last_10")),
             run_diff_last_10=safe_float(row.get("run_diff_last_10")),
             runs_last_5=safe_float(row.get("runs_last_5")),
             runs_allowed_last_5=safe_float(row.get("runs_allowed_last_5")),
-            ops_last_7_days=safe_float(row.get("ops_last_7_days"), 0.0) or None,
-            xwoba_last_14=safe_float(row.get("xwoba_last_14"), 0.0) or None,
-            xslg_last_14=safe_float(row.get("xslg_last_14"), 0.0) or None,
+            ops_last_7_days=_opt_float("ops_last_7_days"),
+            xwoba_last_14=_opt_float("xwoba_last_14"),
+            xslg_last_14=_opt_float("xslg_last_14"),
         )
 
 
@@ -127,37 +134,44 @@ class PitcherStats:
 
     @classmethod
     def from_row(cls, row: dict[str, str]) -> "PitcherStats":
+        def _opt_float(key: str) -> float | None:
+            """Return float if the key has a non-blank value, else None. Preserves 0.0."""
+            raw = row.get(key)
+            if raw is None or (isinstance(raw, str) and not raw.strip()):
+                return None
+            return safe_float(raw)
+
         return cls(
             pitcher=row["pitcher"],
             team=row["team"],
             era=safe_float(row.get("era"), 4.20),
             whip=safe_float(row.get("whip"), 1.30),
-            fip=safe_float(row.get("fip"), 0.0) or None,
-            xfip=safe_float(row.get("xfip"), 0.0) or None,
-            k_bb_ratio=safe_float(row.get("k_bb_ratio"), 0.0) or None,
-            k_rate=safe_float(row.get("k_rate"), 0.0) or None,
-            bb_rate=safe_float(row.get("bb_rate"), 0.0) or None,
-            hr_per_9=safe_float(row.get("hr_per_9"), 0.0) or None,
-            xwoba_allowed=safe_float(row.get("xwoba_allowed"), 0.0) or None,
-            hard_hit_rate_allowed=safe_float(row.get("hard_hit_rate_allowed"), 0.0) or None,
-            barrel_rate_allowed=safe_float(row.get("barrel_rate_allowed"), 0.0) or None,
-            pitch_count_last_start=safe_float(row.get("pitch_count_last_start"), 0.0) or None,
-            days_rest=safe_float(row.get("days_rest"), 0.0) or None,
-            recent_3_start_era=safe_float(row.get("recent_3_start_era"), 0.0) or None,
-            recent_3_start_whip=safe_float(row.get("recent_3_start_whip"), 0.0) or None,
-            era_vs_lhh=safe_float(row.get("era_vs_lhh"), 0.0) or None,
-            era_vs_rhh=safe_float(row.get("era_vs_rhh"), 0.0) or None,
-            whip_vs_lhh=safe_float(row.get("whip_vs_lhh"), 0.0) or None,
-            whip_vs_rhh=safe_float(row.get("whip_vs_rhh"), 0.0) or None,
-            woba_vs_lhh=safe_float(row.get("woba_vs_lhh"), 0.0) or None,
-            woba_vs_rhh=safe_float(row.get("woba_vs_rhh"), 0.0) or None,
-            tto_woba=safe_float(row.get("tto_woba"), 0.0) or None,
+            fip=_opt_float("fip"),
+            xfip=_opt_float("xfip"),
+            k_bb_ratio=_opt_float("k_bb_ratio"),
+            k_rate=_opt_float("k_rate"),
+            bb_rate=_opt_float("bb_rate"),
+            hr_per_9=_opt_float("hr_per_9"),
+            xwoba_allowed=_opt_float("xwoba_allowed"),
+            hard_hit_rate_allowed=_opt_float("hard_hit_rate_allowed"),
+            barrel_rate_allowed=_opt_float("barrel_rate_allowed"),
+            pitch_count_last_start=_opt_float("pitch_count_last_start"),
+            days_rest=_opt_float("days_rest"),
+            recent_3_start_era=_opt_float("recent_3_start_era"),
+            recent_3_start_whip=_opt_float("recent_3_start_whip"),
+            era_vs_lhh=_opt_float("era_vs_lhh"),
+            era_vs_rhh=_opt_float("era_vs_rhh"),
+            whip_vs_lhh=_opt_float("whip_vs_lhh"),
+            whip_vs_rhh=_opt_float("whip_vs_rhh"),
+            woba_vs_lhh=_opt_float("woba_vs_lhh"),
+            woba_vs_rhh=_opt_float("woba_vs_rhh"),
+            tto_woba=_opt_float("tto_woba"),
             pitch_count_trend_last_5=row.get("pitch_count_trend_last_5") or None,
-            whiff_rate=safe_float(row.get("whiff_rate"), 0.0) or None,
-            chase_rate=safe_float(row.get("chase_rate"), 0.0) or None,
-            first_inning_era=safe_float(row.get("first_inning_era"), 0.0) or None,
-            first_inning_whip=safe_float(row.get("first_inning_whip"), 0.0) or None,
-            first_pitch_strike_rate=safe_float(row.get("first_pitch_strike_rate"), 0.0) or None,
+            whiff_rate=_opt_float("whiff_rate"),
+            chase_rate=_opt_float("chase_rate"),
+            first_inning_era=_opt_float("first_inning_era"),
+            first_inning_whip=_opt_float("first_inning_whip"),
+            first_pitch_strike_rate=_opt_float("first_pitch_strike_rate"),
         )
 
 
@@ -189,8 +203,8 @@ class GameRow:
             away_team=row["away_team"],
             home_pitcher=row["home_pitcher"],
             away_pitcher=row["away_pitcher"],
-            home_score=safe_int(home_score) if home_score else None,
-            away_score=safe_int(away_score) if away_score else None,
+            home_score=safe_int(home_score) if home_score is not None and str(home_score).strip() != '' else None,
+            away_score=safe_int(away_score) if away_score is not None and str(away_score).strip() != '' else None,
         )
 
 

@@ -1,0 +1,15 @@
+.env
+.git
+.github
+node_modules
+dashboard-react/node_modules
+dashboard-react/dist
+__pycache__
+.pytest_cache
+*.pyc
+npm-debug.log
+data/state.json
+data/state.sqlite
+data/*.sqlite
+data/cache
+logs

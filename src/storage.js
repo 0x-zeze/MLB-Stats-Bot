@@ -66,15 +66,18 @@ function teamSnapshot(team) {
 function currentWinnerStreak(games) {
   if (!games.length) return null;
 
-  const winnerId = String(games[0].winner.id);
+  const firstWinner = games[0]?.winner;
+  if (!firstWinner || firstWinner.id == null) return null;
+
+  const winnerId = String(firstWinner.id);
   let length = 0;
   for (const game of games) {
-    if (String(game.winner.id) !== winnerId) break;
+    if (!game.winner || String(game.winner.id) !== winnerId) break;
     length += 1;
   }
 
   return {
-    winner: games[0].winner,
+    winner: firstWinner,
     length
   };
 }
@@ -1036,6 +1039,10 @@ export class Storage {
     return row || null;
   }
 
+  hasClosingLine(gamePk) {
+    return this.getLineSnapshot(gamePk, 'closing_home') !== null;
+  }
+
   setLineSnapshot(gamePk, market, value, timestamp = new Date().toISOString()) {
     const parsedValue = Number(value);
     if (!Number.isFinite(parsedValue)) return;
@@ -1200,6 +1207,10 @@ export class Storage {
       }
 
       if (enabled) {
+        if (!result.winner || !result.winner.id || !result.loser || !result.loser.id) {
+          // Skip bias update for games without clear winner/loser (ties, suspended)
+          return;
+        }
         const winnerKey = String(result.winner.id);
         const loserKey = String(result.loser.id);
         const pickKey = String(prediction.pick.id);

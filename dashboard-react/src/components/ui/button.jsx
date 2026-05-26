@@ -4,18 +4,21 @@ import { forwardRef } from 'react';
 import { cn } from '../../lib/utils.js';
 
 const buttonVariants = cva(
-  'inline-flex min-h-10 items-center justify-center gap-2 rounded-md text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg text-sm font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50 disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {
-        default: 'bg-blue-600 text-white hover:bg-blue-700',
-        secondary: 'border border-line bg-white text-ink hover:bg-slate-50',
-        ghost: 'text-slate-600 hover:bg-slate-100 hover:text-ink',
-        danger: 'bg-rose-600 text-white hover:bg-rose-700',
+        default: 'bg-accent-blue/20 text-accent-blue border border-accent-blue/30 hover:bg-accent-blue/30 hover:shadow-glow',
+        primary: 'bg-accent-blue text-navy-900 font-bold hover:bg-accent-blue/90 shadow-glow',
+        secondary: 'border border-white/10 bg-navy-700/50 text-slate-300 hover:bg-navy-600/50 hover:text-white',
+        ghost: 'text-slate-400 hover:bg-white/5 hover:text-white',
+        danger: 'bg-accent-red/20 text-accent-red border border-accent-red/30 hover:bg-accent-red/30 hover:shadow-glow-red',
+        success: 'bg-accent-green/20 text-accent-green border border-accent-green/30 hover:bg-accent-green/30 hover:shadow-glow-green',
       },
       size: {
-        sm: 'h-9 px-3',
+        sm: 'h-8 px-3 text-xs',
         md: 'h-10 px-4',
+        lg: 'h-11 px-6',
         icon: 'h-10 w-10',
       },
     },

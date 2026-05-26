@@ -228,6 +228,13 @@ async function fetchOdds() {
       data
     };
     return data;
+  } catch (err) {
+    // Update cache timestamp on failure to prevent retry storm (backoff 60s)
+    oddsCache = {
+      fetchedAt: Date.now(),
+      data: oddsCache.data
+    };
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -498,6 +505,40 @@ export function configureLineMonitor({ bot, storage, config } = {}) {
   state.bot = bot || state.bot;
   state.storage = storage || state.storage;
   state.config = config || state.config || {};
+}
+
+export async function captureClosingLines(games) {
+  if (!Array.isArray(games) || games.length === 0) return { captured: 0 };
+  if (!state.storage) return { captured: 0 };
+
+  const events = await fetchOdds();
+  if (!events.length) return { captured: 0 };
+
+  let captured = 0;
+  for (const game of games) {
+    const gamePk = String(game.gamePk || game.game_id || '');
+    if (!gamePk) continue;
+
+    const existing = state.storage.getLineSnapshot(gamePk, 'closing_home');
+    if (existing) continue;
+
+    const event = findEventForGame(game, events);
+    if (!event) continue;
+
+    const snapshot = buildSnapshot(game, event);
+    if (snapshot.homeMoneyline != null) {
+      state.storage.setLineSnapshot(gamePk, 'closing_home', snapshot.homeMoneyline);
+    }
+    if (snapshot.awayMoneyline != null) {
+      state.storage.setLineSnapshot(gamePk, 'closing_away', snapshot.awayMoneyline);
+    }
+    if (snapshot.totalLine != null) {
+      state.storage.setLineSnapshot(gamePk, 'closing_total', snapshot.totalLine);
+    }
+    captured++;
+  }
+
+  return { captured };
 }
 
 export function startLineMonitor(games, chatId) {

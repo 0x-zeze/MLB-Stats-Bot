@@ -4,7 +4,7 @@ import { Button } from './components/ui/button.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from './components/ui/card.jsx';
 import { Field, Input } from './components/ui/form.jsx';
 
-const DEV_PREFILL_TOKEN = import.meta.env.VITE_DASHBOARD_API_TOKEN || '';
+const DEV_PREFILL_TOKEN = import.meta.env.DEV ? import.meta.env.VITE_DASHBOARD_API_TOKEN || '' : '';
 
 export default function LoginPage({ onLogin }) {
   const [token, setToken] = useState(DEV_PREFILL_TOKEN);

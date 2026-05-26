@@ -5,16 +5,19 @@ from __future__ import annotations
 import os
 import secrets
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .dashboard_service import (
     get_mock_backtest,
     get_evolution_dashboard,
+    get_health_status,
     get_model_performance,
     get_prediction_history,
     get_today_dashboard,
@@ -26,6 +29,7 @@ from .dashboard_service import (
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+_RATE_LIMIT_STATE: dict[str, list[float]] = {}
 
 
 class BacktestRequest(BaseModel):
@@ -65,6 +69,42 @@ def csv_env(name: str, fallback: list[str]) -> list[str]:
     if not value:
         return fallback
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def clear_rate_limit_state() -> None:
+    """Clear in-memory API rate limit counters for tests and restarts."""
+    _RATE_LIMIT_STATE.clear()
+
+
+def dashboard_rate_limit_per_minute() -> int:
+    """Return the per-client dashboard API rate limit."""
+    try:
+        return int(os.environ.get("DASHBOARD_RATE_LIMIT_PER_MINUTE", "120"))
+    except ValueError:
+        return 120
+
+
+def _client_rate_key(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    host = forwarded or (request.client.host if request.client else "unknown")
+    return f"{host}:{request.url.path}"
+
+
+def rate_limit_exceeded(key: str, now: float | None = None) -> bool:
+    """Return True when a rate limit key has exhausted its request window."""
+    limit = dashboard_rate_limit_per_minute()
+    if limit <= 0:
+        return False
+
+    current = time.monotonic() if now is None else now
+    window_start = current - 60.0
+    hits = [timestamp for timestamp in _RATE_LIMIT_STATE.get(key, []) if timestamp >= window_start]
+    if len(hits) >= limit:
+        _RATE_LIMIT_STATE[key] = hits
+        return True
+    hits.append(current)
+    _RATE_LIMIT_STATE[key] = hits
+    return False
 
 
 def dashboard_api_token() -> str:
@@ -114,14 +154,35 @@ app.add_middleware(
     allow_origins=csv_env("DASHBOARD_CORS_ORIGINS", ["http://localhost:5173", "http://127.0.0.1:5173"]),
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, Any]:
     """Health check used by local dev and VPS monitoring."""
-    return {"status": "ok"}
+    return get_health_status()
+
+
+@app.middleware("http")
+async def dashboard_rate_limit(request: Request, call_next):
+    """Apply a small in-memory rate limit to authenticated API routes."""
+    if not request.url.path.startswith("/api/"):
+        return await call_next(request)
+
+    limit = dashboard_rate_limit_per_minute()
+    if limit <= 0:
+        return await call_next(request)
+
+    key = _client_rate_key(request)
+    if rate_limit_exceeded(key):
+        return JSONResponse(
+            status_code=429,
+            content={"detail": f"Dashboard API rate limit exceeded ({limit}/minute)"},
+            headers={"Retry-After": "60"},
+        )
+
+    return await call_next(request)
 
 
 @app.get("/api/settings", dependencies=API_DEPENDENCIES)

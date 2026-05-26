@@ -6,6 +6,7 @@ from typing import Any
 
 from .first_inning import FirstInningContext, predict_first_inning
 from .model import BaselinePredictionModel
+from .probability_calibrator import calibrate
 from .situational_weights import SituationalWeightEngine, classify_park_type, determine_seasonal_phase
 from .totals import predict_total_runs as predict_total_runs_model
 from .utils import clamp, confidence_label, logistic, safe_float
@@ -47,7 +48,8 @@ def predict_moneyline_from_features(
     rating_difference = sum(
         weights.get(name, 0.0) * value for name, value in components.items()
     )
-    home_probability = clamp(logistic(rating_difference), 0.05, 0.95)
+    raw_home_probability = clamp(logistic(rating_difference), 0.05, 0.95)
+    home_probability = calibrate(raw_home_probability)
     away_probability = 1.0 - home_probability
     predicted_winner = (
         collected["home_team"].team
@@ -159,6 +161,18 @@ def predict_first_inning_from_features(
         park_run_factor=safe_float(
             getattr(park, "run_factor", None), 100.0
         ) if park else 100.0,
+        away_pitcher_k_rate=safe_float(
+            getattr(away_pitcher, "k_rate", None), 0.22
+        ) if away_pitcher else 0.22,
+        home_pitcher_k_rate=safe_float(
+            getattr(home_pitcher, "k_rate", None), 0.22
+        ) if home_pitcher else 0.22,
+        away_pitcher_ground_ball_rate=safe_float(
+            getattr(away_pitcher, "ground_ball_rate", None), 0.44
+        ) if away_pitcher else 0.44,
+        home_pitcher_ground_ball_rate=safe_float(
+            getattr(home_pitcher, "ground_ball_rate", None), 0.44
+        ) if home_pitcher else 0.44,
     )
 
     prediction = predict_first_inning(context)

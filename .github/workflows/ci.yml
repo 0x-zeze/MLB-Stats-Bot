@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      TELEGRAM_BOT_TOKEN: ci_test_telegram_token
+      TELEGRAM_CHAT_ID: "123456789"
+      DASHBOARD_API_TOKEN: ci_test_dashboard_token
+      DASHBOARD_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      DASHBOARD_RATE_LIMIT_PER_MINUTE: "0"
+      ANALYST_AGENT: "false"
+      USE_OPENAI_SUMMARY: "false"
+      OPENAI_API_KEY: ""
+      ODDS_API_KEY: ""
+      THE_ODDS_API_KEY: ""
+      OPENWEATHER_API_KEY: ""
+      PYTHON_BIN: python3
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install root npm dependencies
+        run: npm ci
+
+      - name: Install dashboard npm dependencies
+        run: npm --prefix dashboard-react ci
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate project configuration
+        run: npm run doctor
+
+      - name: Check Node.js syntax
+        run: npm run check
+
+      - name: Run JavaScript tests
+        run: npm run test:js
+
+      - name: Run Python tests
+        run: python -m pytest
+
+      - name: Build React dashboard
+        run: npm run dashboard:build

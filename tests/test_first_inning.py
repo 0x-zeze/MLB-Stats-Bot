@@ -104,7 +104,7 @@ class TestPredictFirstInning(unittest.TestCase):
             venue_yrfi_rate=0.46,
         )
         result = predict_first_inning(ctx)
-        self.assertEqual(result.lean, "No lean")
+        self.assertEqual(result.lean, "NO BET")
 
     def test_main_factors_populated(self) -> None:
         ctx = FirstInningContext(

@@ -57,12 +57,14 @@ class BaselinePredictionModel:
     """Rule-based MLB model using sabermetric weighted components."""
 
     DEFAULT_WEIGHTS = {
-        "team_strength": 0.30,
-        "starting_pitcher": 0.25,
-        "offense": 0.20,
+        "team_strength": 0.28,
+        "starting_pitcher": 0.23,
+        "offense": 0.18,
         "bullpen": 0.10,
-        "recent_form": 0.10,
+        "recent_form": 0.08,
         "home_field": 0.05,
+        "platoon_advantage": 0.04,
+        "rest_day_factor": 0.04,
     }
 
     def __init__(self, weights: dict[str, float] | None = None) -> None:
@@ -98,6 +100,8 @@ class BaselinePredictionModel:
         home_pitcher: PitcherStats | None = None,
         away_pitcher: PitcherStats | None = None,
         weight_overrides: dict[str, float] | None = None,
+        platoon_data: dict[str, float] | None = None,
+        schedule_data: dict[str, float] | None = None,
     ) -> PredictionResult:
         """Predict home/away win probability for a matchup."""
         weights = weight_overrides if weight_overrides else self.weights
@@ -106,6 +110,14 @@ class BaselinePredictionModel:
         away_strength = self._team_strength(away_team)
         log5_home = log5_probability(home_strength, away_strength)
 
+        platoon_adv = 0.0
+        if platoon_data:
+            platoon_adv = safe_float(platoon_data.get("home", 0.0)) - safe_float(platoon_data.get("away", 0.0))
+
+        rest_factor = 0.0
+        if schedule_data:
+            rest_factor = safe_float(schedule_data.get("home", 0.0)) - safe_float(schedule_data.get("away", 0.0))
+
         components = {
             "team_strength": (log5_home - 0.5) * 5.0,
             "starting_pitcher": self._pitcher(home_pitcher) - self._pitcher(away_pitcher),
@@ -113,6 +125,8 @@ class BaselinePredictionModel:
             "bullpen": self._team_bullpen(home_team) - self._team_bullpen(away_team),
             "recent_form": self._team_recent(home_team) - self._team_recent(away_team),
             "home_field": home_field_adjustment(True),
+            "platoon_advantage": platoon_adv,
+            "rest_day_factor": rest_factor,
         }
         rating_difference = sum(
             weights.get(name, 0.0) * value for name, value in components.items()
@@ -141,6 +155,8 @@ class BaselinePredictionModel:
             "bullpen": "Stronger bullpen profile",
             "recent_form": "Recent form advantage",
             "home_field": "Slight home field edge",
+            "platoon_advantage": "Platoon matchup advantage against opposing lineup",
+            "rest_day_factor": "Rest/fatigue advantage",
         }
         directional = []
         for name, value in components.items():

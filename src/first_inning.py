@@ -14,6 +14,10 @@ LEAGUE_AVG_FIRST_INNING_WHIP = 1.40
 LEAGUE_AVG_LEADOFF_OBP = 0.330
 LEAGUE_AVG_FIRST_PITCH_STRIKE_RATE = 0.60
 LEAGUE_AVG_VENUE_YRFI_RATE = 0.46
+LEAGUE_AVG_K_RATE = 0.22
+LEAGUE_AVG_GROUND_BALL_RATE = 0.44
+
+YRFI_MIN_EDGE = 0.06
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,10 @@ class FirstInningContext:
     home_pitcher_first_pitch_strike_rate: float = LEAGUE_AVG_FIRST_PITCH_STRIKE_RATE
     venue_yrfi_rate: float = LEAGUE_AVG_VENUE_YRFI_RATE
     park_run_factor: float = 100.0
+    away_pitcher_k_rate: float = LEAGUE_AVG_K_RATE
+    home_pitcher_k_rate: float = LEAGUE_AVG_K_RATE
+    away_pitcher_ground_ball_rate: float = LEAGUE_AVG_GROUND_BALL_RATE
+    home_pitcher_ground_ball_rate: float = LEAGUE_AVG_GROUND_BALL_RATE
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,8 @@ def _half_inning_run_probability(
     leadoff_obp: float,
     pitcher_first_pitch_strike_rate: float,
     park_factor: float,
+    pitcher_k_rate: float = LEAGUE_AVG_K_RATE,
+    pitcher_ground_ball_rate: float = LEAGUE_AVG_GROUND_BALL_RATE,
 ) -> float:
     """Estimate probability of at least one run in a half-inning."""
     scoring_signal = (team_scoring_rate - LEAGUE_AVG_FIRST_INNING_SCORING_RATE) * 1.2
@@ -70,6 +80,9 @@ def _half_inning_run_probability(
 
     park_signal = (park_factor - 100.0) * 0.002
 
+    k_rate_signal = (LEAGUE_AVG_K_RATE - pitcher_k_rate) * 0.5
+    gb_rate_signal = (LEAGUE_AVG_GROUND_BALL_RATE - pitcher_ground_ball_rate) * 0.3
+
     raw = (
         LEAGUE_AVG_FIRST_INNING_SCORING_RATE
         + scoring_signal
@@ -79,6 +92,8 @@ def _half_inning_run_probability(
         + leadoff_signal
         + strike_signal
         + park_signal
+        + k_rate_signal
+        + gb_rate_signal
     )
 
     return clamp(raw, 0.08, 0.55)
@@ -94,6 +109,8 @@ def predict_first_inning(context: FirstInningContext) -> FirstInningPrediction:
         leadoff_obp=context.away_leadoff_obp,
         pitcher_first_pitch_strike_rate=context.home_pitcher_first_pitch_strike_rate,
         park_factor=context.park_run_factor,
+        pitcher_k_rate=context.home_pitcher_k_rate,
+        pitcher_ground_ball_rate=context.home_pitcher_ground_ball_rate,
     )
 
     bottom_prob = _half_inning_run_probability(
@@ -104,6 +121,8 @@ def predict_first_inning(context: FirstInningContext) -> FirstInningPrediction:
         leadoff_obp=context.home_leadoff_obp,
         pitcher_first_pitch_strike_rate=context.away_pitcher_first_pitch_strike_rate,
         park_factor=context.park_run_factor,
+        pitcher_k_rate=context.away_pitcher_k_rate,
+        pitcher_ground_ball_rate=context.away_pitcher_ground_ball_rate,
     )
 
     nrfi_prob = (1.0 - top_prob) * (1.0 - bottom_prob)
@@ -115,6 +134,18 @@ def predict_first_inning(context: FirstInningContext) -> FirstInningPrediction:
     blended_nrfi = 1.0 - blended_yrfi
 
     edge = abs(blended_yrfi - 0.50)
+
+    if edge < YRFI_MIN_EDGE:
+        return FirstInningPrediction(
+            yrfi_probability=round(blended_yrfi, 4),
+            nrfi_probability=round(blended_nrfi, 4),
+            top_first_run_probability=round(top_prob, 4),
+            bottom_first_run_probability=round(bottom_prob, 4),
+            confidence="Low",
+            main_factors=["Insufficient edge for first-inning lean"],
+            lean="NO BET",
+        )
+
     if edge >= 0.10:
         confidence = "High"
     elif edge >= 0.05:

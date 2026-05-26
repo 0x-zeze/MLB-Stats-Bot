@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .utils import format_probability
+from .utils import format_probability, safe_float
 
 
 def _join(values: list[str]) -> str:
@@ -47,6 +47,10 @@ def _risk_factors(
         risks.append(f"Stale data: {_join(quality_report['stale_fields'])}")
     if not market.get("available"):
         risks.append("Market odds unavailable")
+    for label, prediction in (("Moneyline", moneyline), ("Total", totals)):
+        framework = prediction.get("risk_framework") or {}
+        for warning in framework.get("warnings") or []:
+            risks.append(f"{label} risk control: {warning}")
     return risks or ["Normal MLB variance; no model output is guaranteed"]
 
 
@@ -102,6 +106,11 @@ def build_prediction_explanation(
     if decision == "NO BET":
         final_lean = "NO BET"
     risk_factors = _risk_factors(market, quality, moneyline, totals) + _fatigue_context(pipeline_result)
+    risk_warning = (
+        (moneyline.get("risk_framework") or {}).get("risk_warning")
+        or (totals.get("risk_framework") or {}).get("risk_warning")
+        or "Model probabilities are estimates, not guarantees."
+    )
 
     lines = [
         "MLB Game Analysis:",
@@ -144,9 +153,11 @@ def build_prediction_explanation(
         "",
         "7. Risk Factors",
         *[f"- {factor}" for factor in risk_factors],
+        f"- Risk warning: {risk_warning}",
         "",
         f"8. Final Decision: {decision}",
         f"9. Confidence: {confidence}",
+        f"Suggested stake: {max(safe_float((moneyline.get('risk_framework') or {}).get('stake_units')), safe_float((totals.get('risk_framework') or {}).get('stake_units'))):.2f} units",
         f"No-bet flag: {'YES' if decision == 'NO BET' else 'NO'}",
     ]
     return "\n".join(lines)

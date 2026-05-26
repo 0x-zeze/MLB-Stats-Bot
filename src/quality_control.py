@@ -374,6 +374,9 @@ def apply_confidence_downgrade(
     if edge_value is None:
         no_bet = True
         reasons.append("model edge unavailable")
+    elif market_type == "yrfi" and abs(edge_value) < 0.06:
+        no_bet = True
+        reasons.append("YRFI model edge below 6%")
     elif abs(edge_value) < 0.02:
         no_bet = True
         reasons.append("model edge below 2%")
@@ -719,11 +722,10 @@ def compute_risk_uncertainty(
         warnings.append(f"Low data quality ({score}/100) increases prediction uncertainty")
 
     # 3. Market alignment risk: model and market disagree
-    moneyline_edge = safe_float(
-        (game_context.get("market_comparison") or {}).get("moneyline", {}).get("pick_edge")
-    )
+    raw_edge = (game_context.get("market_comparison") or {}).get("moneyline", {}).get("pick_edge")
     market_risk = 0.0
-    if moneyline_edge is not None:
+    if raw_edge is not None:
+        moneyline_edge = safe_float(raw_edge)
         # If model agrees with market direction → lower risk
         market_risk = clamp((1.0 - min(abs(moneyline_edge) * 5, 1.0)) * 15, 0, 15)
     else:

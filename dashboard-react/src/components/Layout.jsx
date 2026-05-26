@@ -1,17 +1,20 @@
 import Navbar from './Navbar.jsx';
+import { Footer } from './Footer.jsx';
 
-export default function Layout({ tabs, activeTab, onTabChange, lastUpdated, loading, onRefresh, children }) {
+export default function Layout({ children, activeTab, onTabChange, onRefresh, date, onDateChange }) {
   return (
-    <main className="min-h-screen bg-canvas">
+    <div className="min-h-screen bg-navy-950">
       <Navbar
-        tabs={tabs}
         activeTab={activeTab}
         onTabChange={onTabChange}
-        lastUpdated={lastUpdated}
-        loading={loading}
         onRefresh={onRefresh}
+        date={date}
+        onDateChange={onDateChange}
       />
-      <div className="mx-auto max-w-6xl px-4 py-5">{children}</div>
-    </main>
+      <main className="mx-auto max-w-[1600px] px-4 py-6">
+        {children}
+      </main>
+      <Footer />
+    </div>
   );
 }

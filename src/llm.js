@@ -44,7 +44,11 @@ function extractJson(text) {
     const start = cleaned.indexOf('{');
     const end = cleaned.lastIndexOf('}');
     if (start === -1 || end === -1 || end <= start) return null;
-    return JSON.parse(cleaned.slice(start, end + 1));
+    try {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    } catch {
+      return null;
+    }
   }
 }
 

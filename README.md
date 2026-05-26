@@ -13,6 +13,48 @@ Output utama bot:
 
 > Catatan: bot ini adalah alat analisa dan edukasi. Probabilitas yang ditampilkan adalah estimasi model, bukan kepastian hasil.
 
+## Quick Start
+
+```bash
+git clone https://github.com/grahito12/MLB-Stats-Bot.git
+cd MLB-Stats-Bot
+cp .env.example .env
+npm ci
+npm --prefix dashboard-react ci
+python3 -m pip install -r requirements.txt
+npm run doctor
+npm start
+```
+
+Untuk VPS production, gunakan [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Untuk memahami alur sistem, lihat [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Untuk metrik, keterbatasan, dan template backtest, lihat [docs/MODEL_CARD.md](docs/MODEL_CARD.md).
+
+## Safety And Risk Disclaimer
+
+Project ini tidak menjanjikan profit, akurasi tertentu, atau hasil betting yang pasti. Output harus dibaca sebagai analisis probabilistik. Guardrail penting:
+
+- `NO BET` saat data quality rendah.
+- `NO BET` saat lineup, pitcher, atau odds wajib sudah stale.
+- Confidence cap untuk konteks staking.
+- Flat stake default dan fractional Kelly opsional.
+- Max daily exposure agar satu slate tidak mengambil risiko berlebihan.
+
+Jangan pakai output sebagai guaranteed betting advice. Abaikan pick jika data lineup/pitcher/odds tidak bisa diverifikasi.
+
+## Feature Status
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Telegram commands and daily alerts | Stable | Core bot path. |
+| MLB StatsAPI live schedule/context | Stable | External API availability can vary. |
+| Moneyline and totals baseline models | Stable | Conservative deterministic logic. |
+| Data quality and no-bet guardrails | Stable | Includes stale/missing data checks. |
+| Dashboard API auth, CORS, rate limiting | Stable | Set `DASHBOARD_API_TOKEN` in production. |
+| React dashboard | Experimental | Useful control center; verify API config before public exposure. |
+| Analyst/LLM layer | Experimental | Optional; should not override safety rules. |
+| Odds/weather enrichment | Experimental | Depends on optional provider keys. |
+| Evolution/audit learning engine | Experimental | Audit-first; promotion requires validation. |
+| Published model performance metrics | TODO | Use `docs/MODEL_CARD.md`; do not invent numbers. |
+
 ## Cara Kerja
 
 Alur sederhana:

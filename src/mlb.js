@@ -646,6 +646,44 @@ export function moneylineDecisionLines(item) {
   return [uiKV('ℹ️', 'Bet Decision', `LEAN ONLY | ${decision.reason}`)];
 }
 
+function dataQualityText(item) {
+  const score = item?.quality?.score;
+  const parts = [];
+  if (score !== undefined && score !== null) {
+    parts.push(`${Math.round(toNumber(score, 0))}/100`);
+  } else {
+    parts.push('unknown');
+  }
+
+  const lineup = item?.quality?.fields?.lineup?.status || item?.lineupStatus;
+  const odds = item?.quality?.fields?.odds?.status || (item?.currentOdds ? 'Fresh' : 'Unavailable');
+  if (lineup) parts.push(`lineup ${lineup}`);
+  if (odds) parts.push(`odds ${odds}`);
+  return parts.join(' | ');
+}
+
+function bettingSafetyLines(item, pick) {
+  const decision = item?.betDecision || {};
+  const modelProbability = Math.max(toNumber(item?.away?.winProbability, 0), toNumber(item?.home?.winProbability, 0));
+  const confidence = item?.agentAnalysis?.confidence
+    ? `agent ${item.agentAnalysis.confidence}`
+    : `model ${modelProbability.toFixed(1)}%`;
+  const valueText =
+    decision.status === 'VALUE'
+      ? `${decision.teamName} ${formatMoneylineOdds(decision.odds)} | edge +${toNumber(decision.edge, 0).toFixed(1)}%`
+      : 'none';
+  const noBetText = decision.status === 'NO BET' ? decision.reason : 'none';
+  return [
+    uiKV('🧭', 'Prediction', pick?.name || 'unavailable'),
+    uiKV('📌', 'Lean', item?.totalRuns?.bestLean || pick?.name || 'none'),
+    uiKV('💰', 'Value', valueText),
+    uiKV('🛑', 'No Bet', noBetText),
+    uiKV('🧪', 'Data Quality', dataQualityText(item)),
+    uiKV('🎚️', 'Confidence', confidence),
+    uiKV('⚠️', 'Risk Warning', 'Analysis only; probabilities are estimates, not guarantees')
+  ];
+}
+
 function compactPredictionBlock(item) {
   return [
     uiKV('🏟️', 'Matchup', `${item.away.name} @ ${item.home.name}`),
@@ -1215,13 +1253,17 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
   );
   const games = await fetchRecentTeamGames(teamIds, dateYmd, 3);
 
-  await Promise.all(
-    games.map(async (game) => {
+  const MAX_CONCURRENT = 5;
+  const queue = [...games];
+  const results = [];
+  async function runNext() {
+    while (queue.length) {
+      const game = queue.shift();
       let boxscore;
       try {
         boxscore = await fetchBoxscore(game.gamePk);
       } catch {
-        return;
+        continue;
       }
 
       for (const side of ['away', 'home']) {
@@ -1247,8 +1289,10 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
           profile.relieverDates.get(key).add(game.officialDate || game.gameDate);
         }
       }
-    })
-  );
+    }
+  }
+  const workers = Array.from({ length: Math.min(MAX_CONCURRENT, games.length) }, () => runNext());
+  await Promise.all(workers);
 
   for (const [teamId, profile] of profiles.entries()) {
     profiles.set(teamId, finalizeBullpenProfile(profile));
@@ -2934,6 +2978,7 @@ export function formatPredictions(
         '',
         SECTION_SEPARATOR,
         uiKV('✅', `Pick ${agentActive ? 'Agent' : 'Model'}`, `${pick.name}${agentActive ? ` | ${item.agentAnalysis.confidence}` : ''}`),
+        ...bettingSafetyLines(item, pick),
         ...moneylineDecisionLines(item),
         ...openerLines,
         ...lateUpdateLines(item),

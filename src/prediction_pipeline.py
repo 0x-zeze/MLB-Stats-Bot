@@ -24,6 +24,7 @@ from .prediction_tier import (
     determine_prediction_tier,
 )
 from .quality_control import apply_confidence_downgrade, generate_quality_report
+from .risk_management import apply_risk_framework
 
 
 def _apply_market_to_moneyline(
@@ -81,9 +82,42 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
     moneyline = apply_confidence_downgrade(moneyline_prediction, quality_report)
     totals = apply_confidence_downgrade(raw_predictions["totals"], quality_report)
 
+    first_inning_raw = deepcopy(raw_predictions["first_inning"])
+    first_inning_raw["model_edge"] = abs(first_inning_raw.get("yrfi_probability", 0.5) - 0.5)
+    first_inning_raw["market_type"] = "yrfi"
+    first_inning = apply_confidence_downgrade(first_inning_raw, quality_report)
+
     # Apply tier confidence cap
     moneyline["confidence"] = apply_tier_confidence_cap(moneyline["confidence"], tier)
     totals["confidence"] = apply_tier_confidence_cap(totals["confidence"], tier)
+    first_inning["confidence"] = apply_tier_confidence_cap(first_inning["confidence"], tier)
+
+    market = collected.get("market") or {}
+    moneyline["model_probability"] = max(
+        moneyline.get("home_win_probability", 0.0),
+        moneyline.get("away_win_probability", 0.0),
+    )
+    moneyline["american_odds"] = (
+        market.get("home_moneyline")
+        if moneyline.get("predicted_winner") == getattr(collected["game"], "home_team", None)
+        else market.get("away_moneyline")
+    )
+    over_values = list((totals.get("over_probabilities") or {}).values())
+    under_values = list((totals.get("under_probabilities") or {}).values())
+    totals["model_probability"] = max(over_values + under_values + [0.0])
+    totals["american_odds"] = (
+        market.get("over_odds")
+        if str(totals.get("raw_lean", "")).lower().startswith("over")
+        else market.get("under_odds")
+    )
+    first_inning["model_probability"] = max(
+        first_inning.get("yrfi_probability", 0.0),
+        first_inning.get("nrfi_probability", 0.0),
+    )
+
+    moneyline = apply_risk_framework(moneyline, quality_report)
+    totals = apply_risk_framework(totals, quality_report)
+    first_inning = apply_risk_framework(first_inning, quality_report)
 
     supporting_factors = _supporting_factors(moneyline, totals)
 
@@ -113,6 +147,7 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
         },
         "moneyline": moneyline,
         "totals": totals,
+        "first_inning": first_inning,
         "supporting_factors": supporting_factors,
     }
     result["explanation"] = build_prediction_explanation(result)

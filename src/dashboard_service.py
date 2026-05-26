@@ -49,11 +49,76 @@ _SETTINGS_PATH = data_path("dashboard_settings.json")
 _MOCK_PATH = data_path("dashboard_mock.json")
 _TELEGRAM_STATE_PATH = data_path("state.json")
 _SQLITE_PATH = data_path("state.sqlite")
+_CACHE_DIR = data_path("cache")
 
 
 def now_iso() -> str:
     """Return a UTC timestamp for dashboard payloads."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _mtime_iso(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+
+
+def _latest_mtime(patterns: list[str]) -> str | None:
+    candidates: list[Path] = []
+    for pattern in patterns:
+        candidates.extend(_CACHE_DIR.glob(pattern))
+    existing = [path for path in candidates if path.exists()]
+    if not existing:
+        return None
+    latest = max(existing, key=lambda path: path.stat().st_mtime)
+    return _mtime_iso(latest)
+
+
+def _storage_status() -> dict[str, Any]:
+    sqlite_exists = _SQLITE_PATH.exists()
+    json_exists = _TELEGRAM_STATE_PATH.exists()
+    status = "ok" if sqlite_exists or json_exists else "missing"
+    detail = "SQLite state available" if sqlite_exists else "state.json available" if json_exists else "No persisted state file found"
+
+    if sqlite_exists:
+        try:
+            conn = sqlite3.connect(str(_SQLITE_PATH))
+            try:
+                conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            status = "error"
+            detail = f"SQLite read failed: {exc}"
+
+    return {
+        "status": status,
+        "detail": detail,
+        "sqlite_path": str(_SQLITE_PATH),
+        "json_path": str(_TELEGRAM_STATE_PATH),
+        "last_state_write": _mtime_iso(_SQLITE_PATH) or _mtime_iso(_TELEGRAM_STATE_PATH),
+    }
+
+
+def get_health_status() -> dict[str, Any]:
+    """Return operational status without exposing secrets."""
+    prediction_log = data_path("predictions_log.csv")
+    evolution_log = data_path("evolution/evolution_log.jsonl")
+    last_prediction = _mtime_iso(prediction_log) or _mtime_iso(evolution_log)
+    return {
+        "status": "ok",
+        "app": "mlb-stats-bot-dashboard-api",
+        "timestamp": now_iso(),
+        "last_successful_mlb_data_fetch": _latest_mtime(["*mlb*", "*statsapi*", "*schedule*"]),
+        "last_odds_fetch": _latest_mtime(["*odds*", "*market*"]),
+        "last_prediction_run": last_prediction,
+        "storage": _storage_status(),
+        "bot": {
+            "status": "configured" if os.environ.get("TELEGRAM_BOT_TOKEN") else "not_configured",
+            "auto_alerts": os.environ.get("AUTO_ALERTS", "").lower() in {"1", "true", "yes", "on"},
+            "webhook_mode": os.environ.get("TELEGRAM_WEBHOOK_MODE", "").lower() in {"1", "true", "yes", "on"},
+        },
+    }
 
 
 def _read_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:

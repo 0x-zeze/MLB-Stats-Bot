@@ -45,10 +45,17 @@ def detect_sharp_money_signal(
 
     if magnitude < 3:
         direction = "neutral"
-    elif movement < 0:
-        direction = "toward_model"
     else:
-        direction = "against_model"
+        # For American odds, determine if the model pick got stronger or weaker.
+        # Negative odds (favorite): more negative = stronger = probability went UP
+        # Positive odds (underdog): more positive = stronger = probability went UP
+        # opening_line is the model pick's odds (negative = favorite, positive = underdog)
+        if opening_line < 0:
+            # Model pick is favorite: odds going more negative = toward model
+            direction = "toward_model" if movement < 0 else "against_model"
+        else:
+            # Model pick is underdog: odds going more positive = toward model
+            direction = "toward_model" if movement > 0 else "against_model"
 
     rlm = _detect_reverse_line_movement(
         model_pick, direction, public_betting_pct

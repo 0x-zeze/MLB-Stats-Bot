@@ -302,7 +302,15 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
             no_bet = True
     elif not no_bet:
         predicted_winner = lean
-        correct = bool(actual_winner and actual_winner.lower() in predicted_winner.lower())
+        # Use word-boundary matching to avoid "Sox" matching both "Red Sox" and "White Sox"
+        actual_lower = actual_winner.lower()
+        predicted_lower = predicted_winner.lower()
+        correct = bool(
+            actual_winner
+            and (actual_lower == predicted_lower
+                 or actual_lower in predicted_lower.split()
+                 or predicted_lower in actual_lower.split())
+        )
         status = "win" if correct else "loss"
 
     probability_value = _predicted_probability(trajectory, market, lean)

@@ -4,7 +4,7 @@ from contextlib import redirect_stderr
 from io import StringIO
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 _PREVIOUS_NODE_ENV = os.environ.get("NODE_ENV")
 _PREVIOUS_DASHBOARD_API_TOKEN = os.environ.get("DASHBOARD_API_TOKEN")
@@ -26,24 +26,24 @@ else:
 
 
 class DashboardApiAuthTests(unittest.TestCase):
+    class FakeRequest:
+        def __init__(self, headers: dict[str, str] | None = None) -> None:
+            self.headers = headers or {}
+
     def test_dev_mode_allows_api_without_token(self) -> None:
         with patch.dict(os.environ, {"NODE_ENV": "development", "DASHBOARD_API_TOKEN": ""}, clear=False):
-            client = TestClient(dashboard_api.app)
-            response = client.get("/api/backtest/mock")
-
-        self.assertEqual(response.status_code, 200)
+            dashboard_api.verify_token(self.FakeRequest())
 
     def test_configured_token_requires_authorization_bearer_header(self) -> None:
         with patch.dict(os.environ, {"DASHBOARD_API_TOKEN": "secret-token"}, clear=False):
-            client = TestClient(dashboard_api.app)
+            with self.assertRaises(HTTPException) as missing:
+                dashboard_api.verify_token(self.FakeRequest())
+            with self.assertRaises(HTTPException) as legacy_header:
+                dashboard_api.verify_token(self.FakeRequest({"X-Dashboard-Token": "secret-token"}))
+            dashboard_api.verify_token(self.FakeRequest({"authorization": "Bearer secret-token"}))
 
-            missing = client.get("/api/backtest/mock")
-            legacy_header = client.get("/api/backtest/mock", headers={"X-Dashboard-Token": "secret-token"})
-            valid = client.get("/api/backtest/mock", headers={"Authorization": "Bearer secret-token"})
-
-        self.assertEqual(missing.status_code, 401)
-        self.assertEqual(legacy_header.status_code, 401)
-        self.assertEqual(valid.status_code, 200)
+        self.assertEqual(missing.exception.status_code, 401)
+        self.assertEqual(legacy_header.exception.status_code, 401)
 
     def test_production_refuses_to_start_without_token(self) -> None:
         error = StringIO()

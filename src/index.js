@@ -22,6 +22,7 @@ import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils
 import { startDashboard } from './dashboard.js';
 import {
   attachCurrentOdds,
+  captureClosingLines,
   checkLineMovement,
   configureLineMonitor,
   lineMonitorSettings,
@@ -1644,18 +1645,20 @@ function isKnowledgeOnlyQuestion(question) {
   return knowledgePatterns.some((pattern) => pattern.test(text));
 }
 
-function getCachedPredictions(chatId) {
-  const cached = predictionCache.get(String(chatId));
+function getCachedPredictions(chatId, dateYmd) {
+  const key = `${chatId}:${dateYmd || 'today'}`;
+  const cached = predictionCache.get(key);
   if (!cached) return null;
   if (Date.now() - cached.timestamp > PREDICTION_CACHE_TTL_MS) {
-    predictionCache.delete(String(chatId));
+    predictionCache.delete(key);
     return null;
   }
   return cached.predictions;
 }
 
-function setCachedPredictions(chatId, predictions) {
-  predictionCache.set(String(chatId), { predictions, timestamp: Date.now() });
+function setCachedPredictions(chatId, dateYmd, predictions) {
+  const key = `${chatId}:${dateYmd || 'today'}`;
+  predictionCache.set(key, { predictions, timestamp: Date.now() });
 }
 
 async function handleLineupAlertsCommand(bot, chat, args) {
@@ -1721,15 +1724,15 @@ async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.t
   let predictions;
 
   if (knowledgeOnly) {
-    predictions = getCachedPredictions(chatId) || [];
+    predictions = getCachedPredictions(chatId, dateYmd) || [];
   } else {
-    predictions = getCachedPredictions(chatId);
+    predictions = getCachedPredictions(chatId, dateYmd);
     if (!predictions) {
       predictions = await getMlbPredictions(dateYmd, config.modelMemory ? storage.getMemory() : {});
-      await attachAgentAnalyses(predictions);
+      predictions = predictions || [];
       await attachMarketContext(predictions);
       storage.savePredictions(dateYmd, predictions);
-      setCachedPredictions(chatId, predictions);
+      setCachedPredictions(chatId, dateYmd, predictions);
     }
   }
 
@@ -2114,9 +2117,19 @@ async function handleCallbackQuery(bot, callbackQuery) {
 const processedUpdateIds = new Set();
 const commandLocks = new Map();
 
+const COMMAND_LOCK_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 function acquireCommandLock(chatId, command) {
   const key = `${chatId}:${command}`;
-  if (commandLocks.has(key)) return false;
+  const existing = commandLocks.get(key);
+  if (existing) {
+    // Release stale locks (TTL expired)
+    if (Date.now() - existing > COMMAND_LOCK_TTL_MS) {
+      commandLocks.delete(key);
+    } else {
+      return false;
+    }
+  }
   commandLocks.set(key, Date.now());
   return true;
 }
@@ -2414,6 +2427,28 @@ async function processWeeklyRecap(bot) {
   console.log(`Weekly recap sent: ${stats.correct}/${stats.totalPicks} accuracy.`);
 }
 
+async function captureClosingLinesForUpcoming() {
+  const dateYmd = dateInTimezone(config.timezone);
+  const predictions = storage.listPredictionsByDate(dateYmd);
+  if (!predictions.length) return;
+
+  const now = Date.now();
+  const soonGames = predictions.filter((p) => {
+    if (storage.hasClosingLine(p.gamePk)) return false;
+    const start = p.start || p.gameTime;
+    if (!start) return false;
+    const startMs = new Date(start).getTime();
+    return Number.isFinite(startMs) && startMs - now <= 5 * 60_000 && startMs > now;
+  });
+
+  if (soonGames.length > 0) {
+    const result = await captureClosingLines(soonGames);
+    if (result.captured > 0) {
+      console.log(`Closing lines captured for ${result.captured} game(s).`);
+    }
+  }
+}
+
 function startScheduler(bot) {
   processAutoUpdates(bot).catch((error) => {
     console.error('Auto-update check error:', error.message);
@@ -2425,6 +2460,9 @@ function startScheduler(bot) {
     });
     processWeeklyRecap(bot).catch((error) => {
       console.error('Weekly recap error:', error.message);
+    });
+    captureClosingLinesForUpcoming().catch((error) => {
+      console.error('Closing line capture error:', error.message);
     });
   }, 60_000);
 

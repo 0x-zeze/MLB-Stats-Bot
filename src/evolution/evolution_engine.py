@@ -19,14 +19,18 @@ from .lesson_generator import attribute_prediction_result, generate_lesson
 from .memory_store import (
     append_jsonl,
     append_prediction_outcome,
+    path_for,
+    read_json,
     read_jsonl,
     read_prediction_outcomes,
     record_evolution_event,
+    write_json,
 )
 from .evolution_report import build_evolution_summary
 from .time_decay import apply_time_decay_to_lessons
 from .trajectory_logger import build_prediction_trajectory
 from .prediction_evaluator import evaluate_prediction
+from .promotion_gate import run_promotion_gate
 from .rule_candidate_generator import generate_rule_candidates
 from .symbolic_optimizer import propose_symbolic_updates
 from .tool_usage_analyzer import analyze_tool_usage
@@ -153,7 +157,9 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
     home = prediction.get("home") or {}
     pick = prediction.get("pick") or {}
     total_runs = prediction.get("totalRuns") or {}
-    confidence = pick.get("confidence") or total_runs.get("confidence") or "Low"
+    confidence = str(pick.get("confidence") or total_runs.get("confidence") or "Low")
+    if confidence.lower() not in ("low", "medium", "high"):
+        confidence = "Low"
     pick_probability = safe_float(pick.get("winProbability"), 50.0)
     context = {
         "game_id": prediction.get("gamePk"),
@@ -210,6 +216,8 @@ def _build_totals_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | Non
     projected = safe_float(total_runs.get("projectedTotal"), 0.0)
     market_line = safe_float(total_runs.get("marketLine"), 8.5)
     confidence = str(total_runs.get("confidence") or "low")
+    if confidence.lower() not in ("low", "medium", "high"):
+        confidence = "Low"
     model_edge = safe_float(total_runs.get("modelEdge"), 0.0)
 
     context = {
@@ -259,7 +267,9 @@ def _build_yrfi_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | None:
     away = prediction.get("away") or {}
     home = prediction.get("home") or {}
     probability = safe_float(first_inning.get("probability") or first_inning.get("baselineProbability"), 50.0)
-    confidence_label = first_inning.get("confidence") or ("medium" if abs(probability - 50) >= 5 else "low")
+    confidence_label = str(first_inning.get("confidence") or ("medium" if abs(probability - 50) >= 5 else "low"))
+    if confidence_label.lower() not in ("low", "medium", "high"):
+        confidence_label = "Low"
 
     context = {
         "game_id": prediction.get("gamePk"),
@@ -502,27 +512,174 @@ def propose_rules() -> dict[str, Any]:
     }
 
 
+def _compute_metrics_from_outcomes(outcomes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute aggregate metrics from a list of prediction outcome rows."""
+    if not outcomes:
+        return {"sample_size": 0, "roi": 0.0, "brier_score": 1.0, "log_loss": 1.0, "accuracy": 0.0, "average_clv": 0.0, "max_drawdown": 0.0}
+
+    wins = sum(1 for o in outcomes if o.get("result") == "win")
+    total = len(outcomes)
+    accuracy = wins / total if total else 0.0
+
+    profit_losses = [safe_float(o.get("profit_loss"), 0.0) for o in outcomes]
+    roi = sum(profit_losses) / total if total else 0.0
+
+    brier_values = [safe_float(o.get("brier_score"), None) for o in outcomes]
+    brier_valid = [b for b in brier_values if b is not None]
+    brier_score = sum(brier_valid) / len(brier_valid) if brier_valid else 1.0
+
+    import math
+    log_loss_values = []
+    for o in outcomes:
+        bs = safe_float(o.get("brier_score"), None)
+        if bs is not None:
+            prob = 1.0 - math.sqrt(bs) if o.get("result") == "win" else math.sqrt(bs)
+            prob = max(1e-15, min(1 - 1e-15, prob))
+            outcome_val = 1.0 if o.get("result") == "win" else 0.0
+            ll = -(outcome_val * math.log(prob) + (1 - outcome_val) * math.log(1 - prob))
+            log_loss_values.append(ll)
+    log_loss = sum(log_loss_values) / len(log_loss_values) if log_loss_values else 1.0
+
+    clv_values = [safe_float(o.get("clv"), None) for o in outcomes]
+    clv_valid = [c for c in clv_values if c is not None]
+    average_clv = sum(clv_valid) / len(clv_valid) if clv_valid else 0.0
+
+    cumulative = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+    for pl in profit_losses:
+        cumulative += pl
+        peak = max(peak, cumulative)
+        drawdown = peak - cumulative
+        max_drawdown = max(max_drawdown, drawdown)
+
+    return {
+        "sample_size": total,
+        "roi": roi,
+        "brier_score": brier_score,
+        "log_loss": log_loss,
+        "accuracy": accuracy,
+        "average_clv": average_clv,
+        "max_drawdown": max_drawdown,
+    }
+
+
+def _matches_segment(outcome: dict[str, Any], segment: str) -> bool:
+    """Check if an outcome matches a candidate's target segment."""
+    segment_lower = segment.lower()
+    market = str(outcome.get("market", "")).lower()
+    confidence = str(outcome.get("confidence", "")).lower()
+    if segment_lower in (market, confidence):
+        return True
+    if segment_lower in ("moneyline", "totals", "yrfi") and market == segment_lower:
+        return True
+    return False
+
+
+def _write_candidates(candidates: list[dict[str, Any]]) -> None:
+    """Overwrite rule_candidates.jsonl with updated candidates."""
+    path = path_for("rule_candidates")
+    with path.open("w", encoding="utf-8") as handle:
+        for candidate in candidates:
+            handle.write(json.dumps(candidate, sort_keys=True, default=str) + "\n")
+
+
 def backtest_candidates() -> dict[str, Any]:
-    # Lightweight placeholder: candidates are marked as requiring explicit
-    # backtest evidence before promotion. No production rule is modified here.
+    """Run backtest on pending candidates and pass through promotion gate."""
     candidates = read_jsonl("rule_candidates")
-    pending = [candidate for candidate in candidates if candidate.get("backtest_status") == "pending"]
-    for candidate in pending:
-        record_evolution_event(
-            "candidate_backtest_required",
-            {
-                "candidate_id": candidate.get("candidate_id"),
-                "status": "requires_manual_backtest",
-                "reason": "Rule candidates require before/after metrics before promotion.",
-            },
+    pending = [c for c in candidates if c.get("backtest_status") == "pending"]
+    outcomes = read_prediction_outcomes()
+
+    if not outcomes or not pending:
+        return {"pending_candidates": len(pending), "processed": 0, "reason": "no data or no pending candidates"}
+
+    results = []
+    batch = pending[:10]
+
+    for candidate in batch:
+        created_at = str(candidate.get("created_at") or candidate.get("date") or "")
+        if not created_at:
+            candidate["backtest_status"] = "skipped"
+            candidate["promotion_status"] = "skipped"
+            continue
+
+        before = [o for o in outcomes if str(o.get("date", "")) < created_at]
+        after = [o for o in outcomes if str(o.get("date", "")) >= created_at]
+
+        segment = candidate.get("segment") or candidate.get("market")
+        if segment:
+            before = [o for o in before if _matches_segment(o, segment)]
+            after = [o for o in after if _matches_segment(o, segment)]
+
+        if len(before) < 20 or len(after) < 20:
+            candidate["backtest_status"] = "insufficient_data"
+            candidate["promotion_status"] = "deferred"
+            continue
+
+        before_metrics = _compute_metrics_from_outcomes(before)
+        after_metrics = _compute_metrics_from_outcomes(after)
+
+        gate_result = run_promotion_gate(
+            candidate, before_metrics, after_metrics,
+            min_sample_size=20, persist=True,
         )
-    return {"pending_candidates": len(pending), "backtest_status": "requires_metrics"}
+        candidate["backtest_status"] = "completed"
+        candidate["promotion_status"] = gate_result["status"]
+        results.append(gate_result)
+
+    _write_candidates(candidates)
+    return {
+        "pending_candidates": len(pending),
+        "processed": len(results),
+        "approved": sum(1 for r in results if r["status"] == "approved"),
+        "rejected": sum(1 for r in results if r["status"] == "rejected"),
+        "results": results,
+    }
 
 
 def promote_approved() -> dict[str, Any]:
-    # Promotion decisions are recorded by promotion_gate.run_promotion_gate.
-    # This command intentionally does not infer approval from candidate text.
-    return {"message": "Use promotion_gate with validated before/after metrics to approve candidates."}
+    """Apply approved candidates to production configuration."""
+    candidates = read_jsonl("rule_candidates")
+    approved = [c for c in candidates if c.get("promotion_status") == "approved"]
+
+    if not approved:
+        return {"promoted": 0, "message": "No approved candidates to promote."}
+
+    weight_versions = read_json("weight_versions")
+    promoted = []
+
+    for candidate in approved:
+        candidate_type = str(candidate.get("type", "")).lower()
+
+        if candidate_type in ("weight_update", "weight_change"):
+            current_weights = weight_versions.get("current_weights", {})
+            target = candidate.get("target_weight") or candidate.get("weight_name")
+            new_value = safe_float(candidate.get("new_value") or candidate.get("proposed_value"), None)
+            if target and new_value is not None:
+                current_weights[target] = new_value
+                weight_versions["current_weights"] = current_weights
+
+        candidate["promotion_status"] = "promoted"
+        promoted.append(candidate.get("candidate_id"))
+
+    if promoted:
+        current_version = str(weight_versions.get("active_version", "weights-v1.0"))
+        try:
+            prefix, version = current_version.rsplit("v", 1)
+            major, minor = version.split(".", 1)
+            weight_versions["active_version"] = f"{prefix}v{major}.{int(minor) + 1}"
+        except ValueError:
+            weight_versions["active_version"] = f"{current_version}-promoted"
+        write_json("weight_versions", weight_versions)
+
+    _write_candidates(candidates)
+
+    record_evolution_event("batch_promotion", {
+        "promoted_count": len(promoted),
+        "candidate_ids": promoted,
+    })
+
+    return {"promoted": len(promoted), "candidate_ids": promoted}
 
 
 def parse_args() -> argparse.Namespace:

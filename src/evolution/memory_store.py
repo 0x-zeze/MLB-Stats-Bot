@@ -297,6 +297,8 @@ def _recency_weight(created_at: str | None, half_life_days: float = 14.0) -> flo
         return 0.3  # unknown date gets low base weight
     try:
         created = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
         age_days = max(0.0, (datetime.now(timezone.utc) - created).total_seconds() / 86400.0)
         return max(0.05, 2.0 ** (-age_days / half_life_days))
     except (ValueError, TypeError):

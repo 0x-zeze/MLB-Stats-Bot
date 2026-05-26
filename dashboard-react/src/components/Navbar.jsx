@@ -1,43 +1,95 @@
-import { RefreshCw } from 'lucide-react';
-import { Button } from './ui/button.jsx';
-import PredictionBadge from './PredictionBadge.jsx';
-import { relativeTime } from '../utils.js';
+import { Activity, Calendar, RefreshCw, Send, Zap } from 'lucide-react';
 
-export default function Navbar({ tabs, activeTab, onTabChange, lastUpdated, loading, onRefresh }) {
+const NAV_ITEMS = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'games', label: 'Games' },
+  { id: 'predictions', label: 'Predictions' },
+  { id: 'moneyline', label: 'Moneyline' },
+  { id: 'totals', label: 'Totals' },
+  { id: 'yrfi', label: 'YRFI / NRFI' },
+  { id: 'backtest', label: 'Backtest' },
+  { id: 'memory', label: 'Memory' },
+  { id: 'telegram', label: 'Telegram' },
+  { id: 'settings', label: 'Settings' },
+];
+
+export default function Navbar({ activeTab, onTabChange, onRefresh, date, onDateChange }) {
   return (
-    <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-bold text-ink">MLB Dashboard</h1>
-            <PredictionBadge tone="blue">{loading ? 'Loading' : 'Ready'}</PredictionBadge>
+    <nav className="glass-navbar sticky top-0 z-50">
+      <div className="mx-auto max-w-[1600px] px-4">
+        <div className="flex h-14 items-center justify-between">
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-accent-red/20 border border-accent-red/30 flex items-center justify-center">
+                <Activity className="h-4 w-4 text-accent-red" />
+              </div>
+              <span className="text-sm font-bold text-white hidden sm:block">MLB Stats Bot</span>
+            </div>
+
+            <div className="hidden lg:flex items-center gap-0.5 overflow-x-auto">
+              {NAV_ITEMS.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => onTabChange(item.id)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200 whitespace-nowrap ${
+                    activeTab === item.id
+                      ? 'bg-accent-blue/10 text-accent-blue'
+                      : 'text-slate-400 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <p className="mt-1 text-sm text-slate-500">Today's prediction slate</p>
+
+          <div className="flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-2">
+              <Calendar className="h-3.5 w-3.5 text-slate-400" />
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => onDateChange(e.target.value)}
+                className="glass-input px-2 py-1 text-xs w-32"
+              />
+            </div>
+
+            <button
+              onClick={onRefresh}
+              className="h-8 w-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-all"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-green/10 border border-accent-green/20 px-2 py-0.5 text-[10px] font-medium text-accent-green">
+                <Send className="h-2.5 w-2.5" />
+                TG
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-blue/10 border border-accent-blue/20 px-2 py-0.5 text-[10px] font-medium text-accent-blue">
+                <Zap className="h-2.5 w-2.5" />
+                Agent
+              </span>
+            </div>
+          </div>
         </div>
-        <div className="flex flex-col gap-3 lg:items-end">
-          <nav className="flex gap-1 overflow-x-auto rounded-md bg-slate-100 p-1">
-            {tabs.map((tab) => (
-              <button
-                key={tab}
-                className={`h-9 whitespace-nowrap rounded px-3 text-sm font-semibold transition ${
-                  activeTab === tab ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-ink'
-                }`}
-                onClick={() => onTabChange(tab)}
-                type="button"
-              >
-                {tab}
-              </button>
-            ))}
-          </nav>
-          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-            <span>Updated {relativeTime(lastUpdated)}</span>
-            <Button variant="ghost" size="sm" type="button" onClick={onRefresh}>
-              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
-              Refresh
-            </Button>
-          </div>
+
+        <div className="flex lg:hidden items-center gap-1 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-none">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => onTabChange(item.id)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap ${
+                activeTab === item.id
+                  ? 'bg-accent-blue/10 text-accent-blue'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       </div>
-    </header>
+    </nav>
   );
 }

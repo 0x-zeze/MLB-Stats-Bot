@@ -1,19 +1,6 @@
-import { clearSessionToken, getSessionToken } from './useAuth.js';
+import { getSessionToken } from './useAuth.js';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
-let unauthorizedHandler = null;
-
-export function setUnauthorizedHandler(handler) {
-  unauthorizedHandler = typeof handler === 'function' ? handler : null;
-  return () => {
-    if (unauthorizedHandler === handler) unauthorizedHandler = null;
-  };
-}
-
-function authHeaders() {
-  const token = getSessionToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || '';
 
 function queryString(params = {}) {
   const query = new URLSearchParams();
@@ -24,12 +11,6 @@ function queryString(params = {}) {
   });
   const text = query.toString();
   return text ? `?${text}` : '';
-}
-
-function handleUnauthorized(response) {
-  if (response.status !== 401) return;
-  clearSessionToken();
-  if (unauthorizedHandler) unauthorizedHandler();
 }
 
 async function errorMessage(response, fallback) {
@@ -43,17 +24,24 @@ async function errorMessage(response, fallback) {
   }
 }
 
-async function request(path, options = {}) {
+export function buildRequestHeaders(extraHeaders = {}) {
+  const token = getSessionToken();
   const headers = {
     'Content-Type': 'application/json',
-    ...authHeaders(),
-    ...(options.headers || {}),
+    ...extraHeaders,
   };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+async function request(path, options = {}) {
+  const headers = buildRequestHeaders(options.headers || {});
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers,
   });
-  handleUnauthorized(response);
   if (!response.ok) {
     throw new Error(await errorMessage(response, `Request failed: ${response.status}`));
   }
@@ -78,17 +66,10 @@ export const api = {
     }),
 };
 
-function exportFilename(kind, response) {
-  const disposition = response.headers.get('content-disposition') || '';
-  const match = disposition.match(/filename="?([^"]+)"?/i);
-  return match?.[1] || `${kind}.csv`;
-}
-
 export async function downloadExport(kind, params = {}) {
   const response = await fetch(`${API_BASE}/api/export/${kind}${queryString(params)}`, {
-    headers: authHeaders(),
+    headers: buildRequestHeaders({ 'Content-Type': 'text/csv' }),
   });
-  handleUnauthorized(response);
   if (!response.ok) {
     throw new Error(await errorMessage(response, `Export failed: ${response.status}`));
   }
@@ -97,7 +78,9 @@ export async function downloadExport(kind, params = {}) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = exportFilename(kind, response);
+  const disposition = response.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  link.download = match?.[1] || `${kind}.csv`;
   document.body.appendChild(link);
   link.click();
   link.remove();

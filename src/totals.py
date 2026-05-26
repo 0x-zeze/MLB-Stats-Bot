@@ -235,8 +235,11 @@ def _poisson_cdf(expected_total_runs: float, max_runs: int) -> float:
 
 
 def poisson_total_probability(expected_total_runs: float, line: float, side: str = "over") -> float:
-    """Return probability of total going over or under a half-run line."""
-    cutoff = math.floor(safe_float(line))
+    """Return probability of total going over or under a line."""
+    line_val = safe_float(line)
+    # For integer lines (e.g. 9.0), Under means P(X < 9) = P(X <= 8)
+    # For half-run lines (e.g. 8.5), Under means P(X <= 8)
+    cutoff = math.floor(line_val) - (1 if line_val == math.floor(line_val) else 0)
     under = _poisson_cdf(expected_total_runs, cutoff)
     return 1.0 - under if side.lower() == "over" else under
 
@@ -255,7 +258,8 @@ def negative_binomial_total_probability(
 
     r = mean**2 / (variance_value - mean)
     p = r / (r + mean)
-    cutoff = math.floor(safe_float(line))
+    line_val = safe_float(line)
+    cutoff = math.floor(line_val) - (1 if line_val == math.floor(line_val) else 0)
     cumulative = 0.0
     for runs in range(cutoff + 1):
         log_prob = (
