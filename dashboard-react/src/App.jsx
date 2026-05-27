@@ -11,6 +11,8 @@ import TeamAnalytics from './components/TeamAnalytics.jsx';
 import DataQualitySection from './components/DataQualitySection.jsx';
 import AnalystAgent from './components/AnalystAgent.jsx';
 import MemorySection from './components/MemorySection.jsx';
+import EvolutionView from './components/EvolutionView.jsx';
+import HistorySection from './components/HistorySection.jsx';
 import BacktestSection from './components/BacktestSection.jsx';
 import TelegramSection from './components/TelegramSection.jsx';
 import SettingsSection from './components/SettingsSection.jsx';
@@ -28,6 +30,7 @@ export default function App() {
   const [date, setDate] = useState(todayDate());
   const [selectedGame, setSelectedGame] = useState(null);
   const [todayData, setTodayData] = useState(null);
+  const [evolutionData, setEvolutionData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [initialLoad, setInitialLoad] = useState(true);
   const [error, setError] = useState(null);
@@ -37,8 +40,33 @@ export default function App() {
     fetchToday();
   }, [date, auth.token]);
 
+  useEffect(() => {
+    api.evolution().then(setEvolutionData).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setSelectedGame(null);
+  }, [activeTab]);
+
   function isAuthError(err) {
-    return String(err?.message || '').toLowerCase().includes('dashboard api token');
+    return err?.status === 401 || String(err?.message || '').toLowerCase().includes('dashboard api token');
+  }
+
+  function formatLoadError(liveError, sampleError, healthError) {
+    if (healthError) {
+      return [
+        'Dashboard API unreachable. Showing empty state.',
+        'Run `npm run dashboard`, then check http://127.0.0.1:8010/health.',
+        'If only the web UI is running, stop it and start the combined dashboard command.',
+        `Detail: ${healthError.message}`,
+      ].join('\n');
+    }
+
+    return [
+      'Dashboard API is reachable, but /api/today failed. Showing empty state.',
+      `Live source: ${liveError?.message || 'unknown error'}`,
+      `Sample source: ${sampleError?.message || 'unknown error'}`,
+    ].join('\n');
   }
 
   async function fetchToday() {
@@ -59,9 +87,15 @@ export default function App() {
       try {
         const data = await api.today({ date, source: 'sample' });
         setTodayData(data);
-      } catch {
+      } catch (sampleError) {
+        let healthError = null;
+        try {
+          await api.health();
+        } catch (healthCheckError) {
+          healthError = healthCheckError;
+        }
         setTodayData({ games: [], summary: {} });
-        setError('Could not connect to API. Showing empty state.');
+        setError(formatLoadError(err, sampleError, healthError));
       }
     } finally {
       setLoading(false);
@@ -120,7 +154,7 @@ export default function App() {
 
       {activeTab === 'games' && (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-bold text-white">Today's Games</h2>
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Today's Games</h2>
           <TodaySlate games={games} loading={loading} error={error} onSelectGame={setSelectedGame} />
           {selectedGame && <PredictionDetail game={selectedGame} onClose={() => setSelectedGame(null)} />}
           <TeamAnalytics game={selectedGame} />
@@ -129,7 +163,7 @@ export default function App() {
 
       {activeTab === 'predictions' && (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-bold text-white">Predictions</h2>
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Predictions</h2>
           <TodaySlate games={games} loading={loading} error={error} onSelectGame={setSelectedGame} />
           {selectedGame && <PredictionDetail game={selectedGame} onClose={() => setSelectedGame(null)} />}
           <AnalystAgent game={selectedGame} />
@@ -138,50 +172,56 @@ export default function App() {
 
       {activeTab === 'moneyline' && (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-bold text-white">Moneyline Value Engine</h2>
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Moneyline Value Engine</h2>
           <MoneylineSection games={games} />
         </div>
       )}
 
       {activeTab === 'totals' && (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-bold text-white">Totals Analysis</h2>
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Totals Analysis</h2>
           <TotalsSection games={games} />
         </div>
       )}
 
       {activeTab === 'yrfi' && (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-bold text-white">YRFI / NRFI Analysis</h2>
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">YRFI / NRFI Analysis</h2>
           <YrfiSection games={games} />
         </div>
       )}
 
       {activeTab === 'backtest' && (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-bold text-white">Backtest</h2>
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Backtest</h2>
           <BacktestSection />
+        </div>
+      )}
+
+      {activeTab === 'history' && (
+        <div className="space-y-6 animate-fade-in">
+          <HistorySection />
         </div>
       )}
 
       {activeTab === 'memory' && (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-bold text-white">Memory & Learning</h2>
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Memory & Learning</h2>
           <MemorySection />
-          <AnalystAgent game={selectedGame} />
+          <EvolutionView evolution={evolutionData} />
         </div>
       )}
 
       {activeTab === 'telegram' && (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-bold text-white">Telegram Integration</h2>
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Telegram Integration</h2>
           <TelegramSection />
         </div>
       )}
 
       {activeTab === 'settings' && (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-bold text-white">Settings</h2>
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Settings</h2>
           <SettingsSection />
           <DataQualitySection />
         </div>

@@ -1,53 +1,53 @@
-import { Github, BookOpen, Send, LayoutDashboard, Shield, Mail } from 'lucide-react';
+import { Github, Send, LayoutDashboard, Mail } from 'lucide-react';
 
 export function Footer() {
   return (
-    <footer className="border-t border-white/[0.06] mt-12">
+    <footer className="mt-12 border-t-4 border-ink bg-paper">
       <div className="mx-auto max-w-[1600px] px-4 py-8">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8">
+        <div className="mb-8 grid grid-cols-2 gap-6 md:grid-cols-4">
           <div>
-            <h4 className="text-xs font-semibold text-white uppercase tracking-wider mb-3">Product</h4>
+            <h4 className="mb-3 text-xs font-black uppercase tracking-tight text-ink">Product</h4>
             <ul className="space-y-2">
-              <li><a href="#" className="text-xs text-slate-400 hover:text-white transition-colors">Dashboard</a></li>
-              <li><a href="#" className="text-xs text-slate-400 hover:text-white transition-colors">Documentation</a></li>
-              <li><a href="#" className="text-xs text-slate-400 hover:text-white transition-colors">Dashboard Guide</a></li>
+              <li><a href="#" className="text-xs font-semibold text-ink/75 underline decoration-2 underline-offset-4 hover:text-ink">Dashboard</a></li>
+              <li><a href="#" className="text-xs font-semibold text-ink/75 underline decoration-2 underline-offset-4 hover:text-ink">Documentation</a></li>
+              <li><a href="#" className="text-xs font-semibold text-ink/75 underline decoration-2 underline-offset-4 hover:text-ink">Dashboard Guide</a></li>
             </ul>
           </div>
           <div>
-            <h4 className="text-xs font-semibold text-white uppercase tracking-wider mb-3">Integration</h4>
+            <h4 className="mb-3 text-xs font-black uppercase tracking-tight text-ink">Integration</h4>
             <ul className="space-y-2">
-              <li><a href="#" className="text-xs text-slate-400 hover:text-white transition-colors flex items-center gap-1.5"><Send className="h-3 w-3" />Telegram Setup</a></li>
-              <li><a href="#" className="text-xs text-slate-400 hover:text-white transition-colors flex items-center gap-1.5"><Github className="h-3 w-3" />GitHub</a></li>
+              <li><a href="#" className="flex items-center gap-1.5 text-xs font-semibold text-ink/75 underline decoration-2 underline-offset-4 hover:text-ink"><Send className="h-3 w-3" />Telegram Setup</a></li>
+              <li><a href="#" className="flex items-center gap-1.5 text-xs font-semibold text-ink/75 underline decoration-2 underline-offset-4 hover:text-ink"><Github className="h-3 w-3" />GitHub</a></li>
             </ul>
           </div>
           <div>
-            <h4 className="text-xs font-semibold text-white uppercase tracking-wider mb-3">Legal</h4>
+            <h4 className="mb-3 text-xs font-black uppercase tracking-tight text-ink">Legal</h4>
             <ul className="space-y-2">
-              <li><a href="#" className="text-xs text-slate-400 hover:text-white transition-colors">Disclaimer</a></li>
-              <li><a href="#" className="text-xs text-slate-400 hover:text-white transition-colors">Privacy</a></li>
+              <li><a href="#" className="text-xs font-semibold text-ink/75 underline decoration-2 underline-offset-4 hover:text-ink">Disclaimer</a></li>
+              <li><a href="#" className="text-xs font-semibold text-ink/75 underline decoration-2 underline-offset-4 hover:text-ink">Privacy</a></li>
             </ul>
           </div>
           <div>
-            <h4 className="text-xs font-semibold text-white uppercase tracking-wider mb-3">Contact</h4>
+            <h4 className="mb-3 text-xs font-black uppercase tracking-tight text-ink">Contact</h4>
             <ul className="space-y-2">
-              <li><a href="#" className="text-xs text-slate-400 hover:text-white transition-colors flex items-center gap-1.5"><Mail className="h-3 w-3" />Contact</a></li>
+              <li><a href="#" className="flex items-center gap-1.5 text-xs font-semibold text-ink/75 underline decoration-2 underline-offset-4 hover:text-ink"><Mail className="h-3 w-3" />Contact</a></li>
             </ul>
           </div>
         </div>
 
         <div className="stitch-line mb-6" />
 
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
           <div className="flex items-center gap-2">
-            <div className="h-6 w-6 rounded bg-accent-red/20 border border-accent-red/30 flex items-center justify-center">
-              <LayoutDashboard className="h-3 w-3 text-accent-red" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-md border-2 border-ink bg-accent-red shadow-neo-sm">
+              <LayoutDashboard className="h-3.5 w-3.5 text-ink" />
             </div>
-            <span className="text-xs font-semibold text-white">MLB Stats Bot</span>
+            <span className="text-xs font-black uppercase tracking-tight text-ink">MLB Stats Bot</span>
           </div>
-          <p className="text-[11px] text-slate-500 text-center max-w-lg">
+          <p className="max-w-lg text-center text-[11px] font-semibold text-ink/70">
             MLB Stats Bot is an analytics and educational tool. Probabilities are model estimates and do not guarantee outcomes.
           </p>
-          <span className="text-[11px] text-slate-500">v2.0</span>
+          <span className="rounded-md border-2 border-ink bg-accent-yellow px-2 py-1 text-[11px] font-black text-ink shadow-neo-sm">v2.0</span>
         </div>
       </div>
     </footer>

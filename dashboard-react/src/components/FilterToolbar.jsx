@@ -24,12 +24,12 @@ export default function FilterToolbar({
   const activeFilterLabel = filters.find(([value]) => value === activeFilter)?.[1] || 'All games';
   const activeSortLabel = sorts.find(([value]) => value === sort)?.[1] || 'Game time';
   return (
-    <Card className="sticky top-[88px] z-10 border-slate-200 shadow-none">
+    <Card className="sticky top-[88px] z-10 border-ink shadow-none">
       <CardContent className="p-3">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-ink/50">
             <span>{activeFilterLabel}</span>
-            <span className="text-slate-300">/</span>
+            <span className="text-ink/30">/</span>
             <span>{activeSortLabel}</span>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
@@ -50,7 +50,7 @@ export default function FilterToolbar({
           </div>
         </div>
         {open ? (
-          <div className="mt-3 grid gap-3 border-t border-slate-100 pt-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
+          <div className="mt-3 grid gap-3 border-t-3 border-ink pt-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
             <Field label="Show">
               <Select value={activeFilter} onChange={(event) => onFilterChange(event.target.value)}>
                 {filters.map(([value, label]) => <option key={value} value={value}>{label}</option>)}

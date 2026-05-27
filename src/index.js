@@ -138,11 +138,18 @@ function helpText() {
   return [
     uiTitle('⚾', 'MLB Bot | command utama'),
     '',
-    uiSection('📋', '6 command aktif'),
+    uiSection('📋', 'Shortcut analyst'),
+    uiCommand('/picks', 'top 5 pick model hari ini'),
+    uiCommand('/picks YYYY-MM-DD', 'top pick untuk tanggal tertentu'),
+    uiCommand('/analyze', 'analisa edge, risk, value, dan no-bet slate hari ini'),
+    uiCommand('/analyze TEAM', 'analisa tim/game tertentu dari data bot'),
+    uiCommand('/news', 'ringkas injury, lineup, market, weather, dan data-quality risk'),
+    '',
+    uiSection('📊', 'Data & kontrol'),
     uiCommand('/today', 'list ringkas semua game hari ini'),
     uiCommand('/deep', 'semua game dengan statistik lengkap'),
     uiCommand('/game TEAM', 'cek tim tertentu hari ini'),
-    uiCommand('/ask pertanyaan', 'tanya Analyst Agent, termasuk top pick'),
+    uiCommand('/ask pertanyaan', 'tanya Analyst Agent bebas'),
     uiCommand('/audit', 'belajar dari hasil final + update guardrail'),
     uiCommand('/linealerts on|off|status', 'atur notifikasi line movement'),
     '',
@@ -155,11 +162,44 @@ function botCommandList() {
   return [
     { command: 'today', description: 'List ringkas semua game' },
     { command: 'deep', description: 'Semua game dengan statistik lengkap' },
+    { command: 'picks', description: 'Top model picks' },
+    { command: 'analyze', description: 'Analisa slate atau tim' },
+    { command: 'news', description: 'Risk/news context dari data bot' },
     { command: 'game', description: 'Cek tim tertentu hari ini' },
     { command: 'ask', description: 'Tanya Analyst Agent' },
     { command: 'audit', description: 'Audit + learning memory' },
     { command: 'linealerts', description: 'Atur line movement alerts' }
   ];
+}
+
+function parseDateArg(args) {
+  const first = args[0];
+  if (!isValidDateYmd(first)) {
+    return { dateYmd: dateInTimezone(config.timezone), rest: args };
+  }
+  return { dateYmd: first, rest: args.slice(1) };
+}
+
+function buildPicksQuestion(args) {
+  const { dateYmd } = parseDateArg(args);
+  return { dateYmd, question: 'best 5 top pick for today' };
+}
+
+function buildAnalyzeQuestion(args) {
+  const text = args.join(' ').trim();
+  return text
+    ? `Analisa ${text}. Fokus pada edge model, risiko utama, market value, dan no-bet warning dari data yang tersedia.`
+    : 'Analisa slate MLB hari ini. Fokus pada edge terkuat, risiko terbesar, market value, dan game yang sebaiknya no bet.';
+}
+
+function buildNewsQuestion(args) {
+  const { dateYmd, rest } = parseDateArg(args);
+  const target = rest.join(' ').trim();
+  const scope = target ? `untuk ${target}` : 'untuk slate MLB hari ini';
+  return {
+    dateYmd,
+    question: `Ringkas risk/news context ${scope} dari data yang tersedia saja: lineup, injury, probable pitcher, weather/park, market movement, dan data-quality warning. Jangan mengarang headline atau berita live yang tidak ada di data.`
+  };
 }
 
 function isAllowed(chatId) {
@@ -1965,6 +2005,38 @@ async function handleMessage(bot, message) {
       return;
     }
     await sendKnowledgeAnswer(bot, chatId, query);
+    return;
+  }
+
+  if (command === '/picks') {
+    const { dateYmd, question } = buildPicksQuestion(args);
+    if (!acquireCommandLock(chatId, 'picks')) return;
+    try {
+      await askAgent(bot, chatId, question, dateYmd);
+    } finally {
+      releaseCommandLock(chatId, 'picks');
+    }
+    return;
+  }
+
+  if (command === '/analyze') {
+    if (!acquireCommandLock(chatId, 'analyze')) return;
+    try {
+      await askAgent(bot, chatId, buildAnalyzeQuestion(args));
+    } finally {
+      releaseCommandLock(chatId, 'analyze');
+    }
+    return;
+  }
+
+  if (command === '/news') {
+    const { dateYmd, question } = buildNewsQuestion(args);
+    if (!acquireCommandLock(chatId, 'news')) return;
+    try {
+      await askAgent(bot, chatId, question, dateYmd);
+    } finally {
+      releaseCommandLock(chatId, 'news');
+    }
     return;
   }
 

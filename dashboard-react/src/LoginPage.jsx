@@ -23,17 +23,17 @@ export default function LoginPage({ onLogin }) {
   }
 
   return (
-    <main className="min-h-screen bg-canvas px-4 py-10">
+    <main className="min-h-screen bg-cream px-4 py-10 text-ink">
       <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-md items-center">
         <Card className="w-full">
           <CardHeader>
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-blue-50 text-blue-700">
-                <LockKeyhole size={20} />
+              <div className="flex h-11 w-11 items-center justify-center rounded-md border-3 border-ink bg-accent-blue text-ink shadow-neo-sm">
+                <LockKeyhole size={22} />
               </div>
               <div>
                 <CardTitle>MLB Dashboard</CardTitle>
-                <p className="mt-1 text-sm text-slate-500">Sign in with your dashboard token.</p>
+                <p className="mt-1 text-sm font-semibold text-ink/75">Sign in with your dashboard token.</p>
               </div>
             </div>
           </CardHeader>
@@ -48,8 +48,8 @@ export default function LoginPage({ onLogin }) {
                   onChange={(event) => setToken(event.target.value)}
                 />
               </Field>
-              {error ? <p className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p> : null}
-              <Button className="w-full" type="submit">
+              {error ? <p className="rounded-md border-2 border-ink bg-accent-red px-3 py-2 text-sm font-black text-ink shadow-neo-sm">{error}</p> : null}
+              <Button className="w-full" type="submit" variant="primary">
                 Sign in
               </Button>
             </form>

@@ -2,10 +2,10 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
 
 function StatRow({ label, away, home, highlight }) {
   return (
-    <div className="flex items-center justify-between py-1.5 border-b border-white/[0.04] last:border-0">
-      <span className={`text-xs w-16 text-right ${highlight === 'away' ? 'text-accent-green font-semibold' : 'text-slate-300'}`}>{away}</span>
-      <span className="text-[11px] text-slate-500 flex-1 text-center">{label}</span>
-      <span className={`text-xs w-16 ${highlight === 'home' ? 'text-accent-green font-semibold' : 'text-slate-300'}`}>{home}</span>
+    <div className="flex items-center justify-between border-b-2 border-ink py-1.5 last:border-0">
+      <span className={`w-16 text-right text-xs font-black ${highlight === 'away' ? 'text-green-700' : 'text-ink/70'}`}>{away}</span>
+      <span className="flex-1 text-center text-[11px] font-black uppercase text-ink/50">{label}</span>
+      <span className={`w-16 text-xs font-black ${highlight === 'home' ? 'text-green-700' : 'text-ink/70'}`}>{home}</span>
     </div>
   );
 }
@@ -18,7 +18,7 @@ export default function TeamAnalytics({ game }) {
           <CardTitle>Team & Pitcher Analytics</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-slate-500 text-sm text-center py-8">Select a game to view team analytics</p>
+          <p className="py-8 text-center text-sm font-black uppercase text-ink/60">Select a game to view team analytics</p>
         </CardContent>
       </Card>
     );
@@ -48,18 +48,18 @@ export default function TeamAnalytics({ game }) {
           {/* Left column: Team comparison */}
           <div>
             <div className="flex items-center justify-between mb-4">
-              <span className="text-sm font-bold text-white">{awayTeam}</span>
-              <span className="text-[11px] text-slate-500">vs</span>
-              <span className="text-sm font-bold text-white">{homeTeam}</span>
+              <span className="text-sm font-black text-ink">{awayTeam}</span>
+              <span className="rounded-md border-2 border-ink bg-accent-yellow px-2 py-0.5 text-[11px] font-black uppercase text-ink shadow-neo-sm">vs</span>
+              <span className="text-sm font-black text-ink">{homeTeam}</span>
             </div>
 
             {/* Moneyline probabilities */}
             <div className="space-y-0.5 mb-4">
-              <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-2 text-center">Model Probabilities</p>
+              <p className="text-[10px] text-ink/50 uppercase tracking-wider mb-2 text-center">Model Probabilities</p>
               <StatRow
                 label="Win %"
-                away={awayProb ? `${(awayProb * 100).toFixed(1)}%` : '-'}
-                home={homeProb ? `${(homeProb * 100).toFixed(1)}%` : '-'}
+                away={awayProb ? `${awayProb.toFixed(1)}%` : '-'}
+                home={homeProb ? `${homeProb.toFixed(1)}%` : '-'}
                 highlight={awayProb > homeProb ? 'away' : homeProb > awayProb ? 'home' : undefined}
               />
               <StatRow
@@ -73,7 +73,7 @@ export default function TeamAnalytics({ game }) {
             {/* Totals */}
             {(totals.over_probability || totals.line || totals.total) && (
               <div className="space-y-0.5 mb-4">
-                <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-2 text-center">Totals</p>
+                <p className="text-[10px] text-ink/50 uppercase tracking-wider mb-2 text-center">Totals</p>
                 {totals.line && (
                   <StatRow label="Line" away={String(totals.line)} home="" />
                 )}
@@ -81,10 +81,10 @@ export default function TeamAnalytics({ game }) {
                   <StatRow label="Total" away={String(totals.total)} home="" />
                 )}
                 {totals.over_probability != null && (
-                  <StatRow label="Over %" away={`${(Number(totals.over_probability) * 100).toFixed(1)}%`} home="" />
+                  <StatRow label="Over %" away={`${Number(totals.over_probability).toFixed(1)}%`} home="" />
                 )}
                 {totals.under_probability != null && (
-                  <StatRow label="Under %" away={`${(Number(totals.under_probability) * 100).toFixed(1)}%`} home="" />
+                  <StatRow label="Under %" away={`${Number(totals.under_probability).toFixed(1)}%`} home="" />
                 )}
               </div>
             )}
@@ -92,7 +92,7 @@ export default function TeamAnalytics({ game }) {
             {/* Data quality */}
             {quality.score != null && (
               <div className="space-y-0.5 mb-4">
-                <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-2 text-center">Data Quality</p>
+                <p className="text-[10px] text-ink/50 uppercase tracking-wider mb-2 text-center">Data Quality</p>
                 <StatRow label="Score" away={String(quality.score)} home="" />
                 {quality.tier && <StatRow label="Tier" away={quality.tier} home="" />}
               </div>
@@ -104,22 +104,22 @@ export default function TeamAnalytics({ game }) {
             {/* Probable Pitchers */}
             {(pitchers.away || pitchers.home) && (
               <div className="mb-4">
-                <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Probable Pitchers</h4>
+                <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">Probable Pitchers</h4>
                 <div className="space-y-2">
                   {pitchers.away && (
-                    <div className="flex items-center gap-3 py-2 px-3 rounded bg-white/[0.03] border border-white/[0.06]">
-                      <span className="text-[10px] text-slate-500 uppercase w-10">Away</span>
-                      <span className="text-sm font-semibold text-white">{pitchers.away}</span>
+                    <div className="flex items-center gap-3 py-2 px-3 rounded border-2 border-ink bg-paper shadow-neo-sm">
+                      <span className="text-[10px] text-ink/50 uppercase w-10">Away</span>
+                      <span className="text-sm font-semibold text-ink">{pitchers.away}</span>
                     </div>
                   )}
                   {pitchers.home && (
-                    <div className="flex items-center gap-3 py-2 px-3 rounded bg-white/[0.03] border border-white/[0.06]">
-                      <span className="text-[10px] text-slate-500 uppercase w-10">Home</span>
-                      <span className="text-sm font-semibold text-white">{pitchers.home}</span>
+                    <div className="flex items-center gap-3 py-2 px-3 rounded border-2 border-ink bg-paper shadow-neo-sm">
+                      <span className="text-[10px] text-ink/50 uppercase w-10">Home</span>
+                      <span className="text-sm font-semibold text-ink">{pitchers.home}</span>
                     </div>
                   )}
                   {pitchers.status && (
-                    <p className="text-[11px] text-slate-500 text-center mt-1">Status: {pitchers.status}</p>
+                    <p className="text-[11px] text-ink/50 text-center mt-1">Status: {pitchers.status}</p>
                   )}
                 </div>
               </div>
@@ -128,10 +128,10 @@ export default function TeamAnalytics({ game }) {
             {/* Main Factors */}
             {factors.length > 0 && (
               <div className="mb-4">
-                <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Main Factors</h4>
+                <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">Main Factors</h4>
                 <ul className="space-y-1.5">
                   {factors.map((f, i) => (
-                    <li key={i} className="flex items-start gap-2 text-xs text-slate-300 py-1 px-2 rounded bg-white/[0.02]">
+                    <li key={i} className="flex items-start gap-2 text-xs text-ink/70 py-1 px-2 rounded border-2 border-ink bg-paper shadow-neo-sm">
                       <span className="text-accent-green mt-0.5">▸</span>
                       <span>{f}</span>
                     </li>
@@ -143,10 +143,10 @@ export default function TeamAnalytics({ game }) {
             {/* Risk Factors */}
             {risks.length > 0 && (
               <div className="mb-4">
-                <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Risk Factors</h4>
+                <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">Risk Factors</h4>
                 <ul className="space-y-1.5">
                   {risks.map((r, i) => (
-                    <li key={i} className="flex items-start gap-2 text-xs text-slate-300 py-1 px-2 rounded bg-white/[0.02]">
+                    <li key={i} className="flex items-start gap-2 text-xs text-ink/70 py-1 px-2 rounded border-2 border-ink bg-paper shadow-neo-sm">
                       <span className="text-accent-red mt-0.5">▸</span>
                       <span>{r}</span>
                     </li>
@@ -157,7 +157,7 @@ export default function TeamAnalytics({ game }) {
 
             {/* Empty state */}
             {!pitchers.away && !pitchers.home && factors.length === 0 && risks.length === 0 && (
-              <p className="text-slate-500 text-sm text-center py-4">No additional data available</p>
+              <p className="text-ink/50 text-sm text-center py-4">No additional data available</p>
             )}
           </div>
         </div>

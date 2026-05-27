@@ -14,17 +14,17 @@ import { Button } from './ui/button.jsx';
 import { Card, CardContent } from './ui/card.jsx';
 
 function decisionTone(decision) {
-  if (decision === 'BET') return 'border-emerald-200 bg-emerald-50/60';
-  if (decision === 'LEAN') return 'border-amber-200 bg-amber-50/50';
-  return 'border-slate-200 bg-slate-50';
+  if (decision === 'BET') return 'border-ink bg-accent-green';
+  if (decision === 'LEAN') return 'border-ink bg-accent-yellow';
+  return 'border-ink bg-paper';
 }
 
 function Stat({ label, value, helper }) {
   return (
-    <div className="min-w-0 rounded-md bg-slate-50 px-3 py-2">
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className="mt-1 truncate text-sm font-bold text-ink">{value}</p>
-      {helper ? <p className="mt-1 truncate text-xs text-slate-500">{helper}</p> : null}
+    <div className="min-w-0 rounded-md border-2 border-ink bg-paper px-3 py-2 shadow-neo-sm">
+      <p className="text-xs font-black uppercase text-ink/50">{label}</p>
+      <p className="mt-1 truncate text-sm font-black text-ink">{value}</p>
+      {helper ? <p className="mt-1 truncate text-xs font-semibold text-ink/50">{helper}</p> : null}
     </div>
   );
 }
@@ -39,7 +39,7 @@ export default function GameCard({ game }) {
   const edge = Math.max(Math.abs(Number(moneyline.edge) || 0), Math.abs(Number(totals.edge) || 0));
   const quality = Number(game.data_quality?.score) || 0;
   return (
-    <Card className="border-slate-200 shadow-none">
+    <Card>
       <CardContent className="p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
@@ -49,10 +49,10 @@ export default function GameCard({ game }) {
               <DataQualityBadge score={quality} />
             </div>
             <h3 className="text-lg font-bold leading-tight text-ink">{game.away_team} @ {game.home_team}</h3>
-            <p className="mt-1 text-sm text-slate-500">{game.game_time} | {game.ballpark}</p>
+            <p className="mt-1 text-sm font-semibold text-ink/50">{game.game_time} | {game.ballpark}</p>
           </div>
-          <div className={cn('rounded-md border px-4 py-3 lg:min-w-56', decisionTone(game.decision))}>
-            <p className="text-xs font-semibold text-slate-500">Decision</p>
+          <div className={cn('rounded-md border-2 px-4 py-3 shadow-neo-sm lg:min-w-56', decisionTone(game.decision))}>
+            <p className="text-xs font-black uppercase text-ink/50">Decision</p>
             <p className="mt-1 text-base font-bold text-ink">{game.decision} - {game.final_lean}</p>
           </div>
         </div>
@@ -67,7 +67,7 @@ export default function GameCard({ game }) {
         <NoBetReason reason={game.no_bet_reason} />
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-slate-500">{(game.main_factors || [])[0] || 'No major model note'}</p>
+          <p className="text-sm font-semibold text-ink/50">{(game.main_factors || [])[0] || 'No major model note'}</p>
           <Button
             variant="secondary"
             size="sm"
@@ -80,27 +80,27 @@ export default function GameCard({ game }) {
         </div>
 
         {open ? (
-          <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
+          <div className="mt-4 space-y-4 border-t-3 border-ink pt-4">
             <div className="grid gap-3 md:grid-cols-3">
-              <div className="rounded-md bg-slate-50 p-3">
-                <p className="text-xs font-semibold text-slate-500">Pitchers</p>
+              <div className="rounded-md border-2 border-ink bg-paper p-3 shadow-neo-sm">
+                <p className="text-xs font-semibold text-ink/50">Pitchers</p>
                 <p className="mt-2 text-sm text-ink">{game.probable_pitchers?.away}</p>
                 <p className="text-sm text-ink">{game.probable_pitchers?.home}</p>
                 <div className="mt-2"><PredictionBadge>{game.probable_pitchers?.status}</PredictionBadge></div>
               </div>
-              <div className="rounded-md bg-slate-50 p-3">
-                <p className="text-xs font-semibold text-slate-500">Status</p>
+              <div className="rounded-md border-2 border-ink bg-paper p-3 shadow-neo-sm">
+                <p className="text-xs font-semibold text-ink/50">Status</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <PredictionBadge>{game.lineup_status}</PredictionBadge>
                   <PredictionBadge>{game.weather_status}</PredictionBadge>
                   <PredictionBadge>{game.odds_status}</PredictionBadge>
                 </div>
-                <p className="mt-2 text-sm text-slate-500">{game.weather_summary}</p>
+                <p className="mt-2 text-sm text-ink/50">{game.weather_summary}</p>
               </div>
-              <div className="rounded-md bg-slate-50 p-3">
-                <p className="text-xs font-semibold text-slate-500">Risk</p>
+              <div className="rounded-md border-2 border-ink bg-paper p-3 shadow-neo-sm">
+                <p className="text-xs font-semibold text-ink/50">Risk</p>
                 <p className="mt-2 text-2xl font-bold text-ink">{(game.risk_factors || []).length}</p>
-                <p className="mt-1 text-sm text-slate-500">{(game.risk_factors || [])[0] || 'No major risk note'}</p>
+                <p className="mt-1 text-sm text-ink/50">{(game.risk_factors || [])[0] || 'No major risk note'}</p>
               </div>
             </div>
             <RiskFactors title="Main Factors" items={game.main_factors} />

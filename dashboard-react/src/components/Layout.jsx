@@ -3,7 +3,7 @@ import { Footer } from './Footer.jsx';
 
 export default function Layout({ children, activeTab, onTabChange, onRefresh, date, onDateChange }) {
   return (
-    <div className="min-h-screen bg-navy-950">
+    <div className="min-h-screen bg-cream text-ink">
       <Navbar
         activeTab={activeTab}
         onTabChange={onTabChange}
@@ -11,7 +11,7 @@ export default function Layout({ children, activeTab, onTabChange, onRefresh, da
         date={date}
         onDateChange={onDateChange}
       />
-      <main className="mx-auto max-w-[1600px] px-4 py-6">
+      <main className="mx-auto max-w-[1600px] px-4 py-8">
         {children}
       </main>
       <Footer />

@@ -4,7 +4,7 @@ export function Input({ className = '', ...props }) {
   return (
     <input
       className={cn(
-        'h-10 rounded-md border border-line bg-white px-3 text-sm text-ink outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100',
+        'h-10 rounded-md border-3 border-ink bg-white px-3 text-sm font-semibold text-ink shadow-neo-sm outline-none transition focus:bg-paper focus:ring-4 focus:ring-accent-yellow',
         className
       )}
       {...props}
@@ -16,7 +16,7 @@ export function Select({ className = '', children, ...props }) {
   return (
     <select
       className={cn(
-        'h-10 rounded-md border border-line bg-white px-3 text-sm text-ink outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100',
+        'h-10 rounded-md border-3 border-ink bg-white px-3 text-sm font-semibold text-ink shadow-neo-sm outline-none transition focus:bg-paper focus:ring-4 focus:ring-accent-yellow',
         className
       )}
       {...props}
@@ -28,25 +28,25 @@ export function Select({ className = '', children, ...props }) {
 
 export function Field({ label, helper, children, className = '' }) {
   return (
-    <label className={cn('grid gap-1.5 text-sm font-semibold text-ink', className)}>
+    <label className={cn('grid gap-1.5 text-sm font-black uppercase tracking-tight text-ink', className)}>
       {label}
       {children}
-      {helper ? <span className="text-xs font-normal text-slate-500">{helper}</span> : null}
+      {helper ? <span className="text-xs font-semibold normal-case text-ink/70">{helper}</span> : null}
     </label>
   );
 }
 
 export function Switch({ checked, onChange, label, helper }) {
   return (
-    <label className="flex items-center justify-between gap-4 rounded-lg border border-line bg-white px-4 py-3">
+    <label className="flex items-center justify-between gap-4 rounded-md border-3 border-ink bg-paper px-4 py-3 shadow-neo-sm">
       <span>
-        <span className="block text-sm font-semibold text-ink">{label}</span>
-        {helper ? <span className="mt-1 block text-xs text-slate-500">{helper}</span> : null}
+        <span className="block text-sm font-black uppercase tracking-tight text-ink">{label}</span>
+        {helper ? <span className="mt-1 block text-xs font-semibold text-ink/70">{helper}</span> : null}
       </span>
       <input
         aria-label={label}
         type="checkbox"
-        className="h-5 w-5 accent-blue-600"
+        className="h-5 w-5 accent-black"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
       />
@@ -56,10 +56,10 @@ export function Switch({ checked, onChange, label, helper }) {
 
 export function Progress({ value = 0, className = '' }) {
   const width = Math.max(0, Math.min(100, Number(value) || 0));
-  const color = width >= 85 ? 'bg-emerald-500' : width >= 60 ? 'bg-amber-500' : 'bg-rose-500';
+  const color = width >= 85 ? 'bg-accent-green' : width >= 60 ? 'bg-accent-yellow' : 'bg-accent-red';
   return (
-    <div className={cn('h-2 overflow-hidden rounded-full bg-slate-100', className)}>
-      <div className={cn('h-full rounded-full transition-all', color)} style={{ width: `${width}%` }} />
+    <div className={cn('h-3 overflow-hidden rounded-full border-2 border-ink bg-white', className)}>
+      <div className={cn('h-full transition-all', color)} style={{ width: `${width}%` }} />
     </div>
   );
 }

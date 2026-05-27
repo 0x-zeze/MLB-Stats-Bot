@@ -72,6 +72,18 @@ export function stopProcesses(processes) {
   }
 }
 
+export async function waitForUrlOk(url, attempts = 20, delayMs = 500) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return true;
+    } catch {
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return false;
+}
+
 export function waitForProcesses(processes) {
   return new Promise((resolveExitCode) => {
     let shuttingDown = false;

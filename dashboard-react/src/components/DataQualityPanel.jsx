@@ -16,13 +16,13 @@ function qualityIcon(value) {
   if (text.includes('missing')) {
     return <XCircle size={16} className="text-rose-600" />;
   }
-  return <CircleDot size={16} className="text-slate-400" />;
+  return <CircleDot size={16} className="text-ink/60" />;
 }
 
 function CheckRow({ label, value }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-line py-2 last:border-0">
-      <span className="flex items-center gap-2 text-sm text-slate-600">
+      <span className="flex items-center gap-2 text-sm font-semibold text-ink/70">
         {qualityIcon(value)}
         {label}
       </span>
@@ -35,11 +35,11 @@ export default function DataQualityPanel({ quality }) {
   const score = Number(quality?.score) || 0;
   const issues = [...(quality?.issues || []), ...(quality?.stale_fields || [])];
   return (
-    <div className="rounded-lg border border-line bg-slate-50 p-4">
+    <div className="rounded-lg border-2 border-ink bg-paper p-4 shadow-neo-sm">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h4 className="text-sm font-bold text-ink">Data Quality</h4>
-          <p className="text-sm text-slate-500">Weak or stale inputs cap confidence and can trigger NO BET.</p>
+          <p className="text-sm font-semibold text-ink/50">Weak or stale inputs cap confidence and can trigger NO BET.</p>
         </div>
         <DataQualityBadge score={score} />
       </div>

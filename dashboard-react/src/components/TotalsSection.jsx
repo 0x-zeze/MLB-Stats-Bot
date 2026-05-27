@@ -7,12 +7,12 @@ function ProbBar({ over, under }) {
   const u = Number(under) || 50;
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[11px] text-accent-green w-8 text-right">{o}%</span>
-      <div className="flex-1 h-2 rounded-full bg-white/10 overflow-hidden flex">
-        <div className="h-full bg-accent-green/60 rounded-l-full" style={{ width: `${o}%` }} />
-        <div className="h-full bg-accent-red/40 rounded-r-full" style={{ width: `${u}%` }} />
+      <span className="w-8 text-right text-[11px] font-black text-green-700">{o}%</span>
+      <div className="flex h-3 flex-1 overflow-hidden rounded-full border-2 border-ink bg-white">
+        <div className="h-full bg-accent-green" style={{ width: `${o}%` }} />
+        <div className="h-full bg-accent-red" style={{ width: `${u}%` }} />
       </div>
-      <span className="text-[11px] text-accent-red w-8">{u}%</span>
+      <span className="w-8 text-[11px] font-black text-red-700">{u}%</span>
     </div>
   );
 }
@@ -37,12 +37,12 @@ export default function TotalsSection({ games = [] }) {
       <CardHeader>
         <div>
           <CardTitle>Totals / Over-Under</CardTitle>
-          <p className="text-xs text-slate-400 mt-1">Projected total runs vs market line.</p>
+          <p className="mt-1 text-xs font-semibold text-ink/70">Projected total runs vs market line.</p>
         </div>
       </CardHeader>
       <CardContent>
         {rows.length === 0 ? (
-          <div className="text-center py-8 text-sm text-slate-400">No totals data available.</div>
+          <div className="py-8 text-center text-sm font-black uppercase text-ink/70">No totals data available.</div>
         ) : (
           <div className="grid gap-4">
             {rows.map((game) => {
@@ -50,28 +50,28 @@ export default function TotalsSection({ games = [] }) {
               const isOver = leanLower.includes('over');
               const isUnder = leanLower.includes('under');
               return (
-                <div key={game.id} className="p-4 rounded-lg bg-white/[0.02] border border-white/[0.06] hover:border-white/[0.1] transition-colors">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                <div key={game.id} className="rounded-lg border-3 border-ink bg-paper p-4 shadow-neo-sm transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:bg-cream hover:shadow-neo">
+                  <div className="mb-3 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
                     <div className="flex items-center gap-3">
-                      <span className="text-sm font-semibold text-white">{game.matchup}</span>
+                      <span className="text-sm font-black text-ink">{game.matchup}</span>
                       <Badge variant={isOver ? 'success' : isUnder ? 'danger' : 'neutral'}>
-                        {isOver && <ArrowUp className="h-3 w-3 mr-1" />}
-                        {isUnder && <ArrowDown className="h-3 w-3 mr-1" />}
+                        {isOver && <ArrowUp className="mr-1 h-3 w-3" />}
+                        {isUnder && <ArrowDown className="mr-1 h-3 w-3" />}
                         {game.lean}
                       </Badge>
                     </div>
                     <div className="flex items-center gap-4">
                       <div className="text-center">
-                        <p className="text-xs text-slate-400">Projected</p>
-                        <p className="text-sm font-bold text-accent-blue">{game.projected.toFixed(1)}</p>
+                        <p className="text-xs font-black uppercase text-ink/60">Projected</p>
+                        <p className="text-sm font-black text-blue-700">{game.projected.toFixed(1)}</p>
                       </div>
                       <div className="text-center">
-                        <p className="text-xs text-slate-400">Market</p>
-                        <p className="text-sm font-bold text-white">{game.marketTotal}</p>
+                        <p className="text-xs font-black uppercase text-ink/60">Market</p>
+                        <p className="text-sm font-black text-ink">{game.marketTotal}</p>
                       </div>
                       <div className="text-center">
-                        <p className="text-xs text-slate-400">Diff</p>
-                        <p className={`text-sm font-bold ${game.diff > 0 ? 'text-accent-green' : game.diff < 0 ? 'text-accent-red' : 'text-slate-400'}`}>
+                        <p className="text-xs font-black uppercase text-ink/60">Diff</p>
+                        <p className={`text-sm font-black ${game.diff > 0 ? 'text-green-700' : game.diff < 0 ? 'text-red-700' : 'text-ink/70'}`}>
                           {game.diff > 0 ? '+' : ''}{game.diff.toFixed(1)}
                         </p>
                       </div>

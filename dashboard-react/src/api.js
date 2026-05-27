@@ -1,6 +1,8 @@
 import { getSessionToken } from './useAuth.js';
 
-const API_BASE = import.meta.env?.VITE_API_BASE_URL || '';
+const RAW_API_BASE = (import.meta.env?.VITE_API_BASE_URL || '').trim();
+const API_BASE = RAW_API_BASE.replace(/\/+$/, '');
+const API_LABEL = API_BASE || 'relative Vite proxy';
 
 function queryString(params = {}) {
   const query = new URLSearchParams();
@@ -24,6 +26,17 @@ async function errorMessage(response, fallback) {
   }
 }
 
+function buildError(message, status) {
+  const error = new Error(message);
+  if (status) error.status = status;
+  return error;
+}
+
+function connectionError(path, error) {
+  const reason = error?.message ? ` ${error.message}` : '';
+  return buildError(`Dashboard API request failed for ${path} using ${API_LABEL}.${reason}`);
+}
+
 export function buildRequestHeaders(extraHeaders = {}) {
   const token = getSessionToken();
   const headers = {
@@ -38,21 +51,30 @@ export function buildRequestHeaders(extraHeaders = {}) {
 
 async function request(path, options = {}) {
   const headers = buildRequestHeaders(options.headers || {});
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    throw connectionError(path, error);
+  }
   if (!response.ok) {
-    throw new Error(await errorMessage(response, `Request failed: ${response.status}`));
+    const message = await errorMessage(response, `Request failed: ${response.status}`);
+    throw buildError(message, response.status);
   }
   return response.json();
 }
 
 export const api = {
+  health: () => request('/health'),
   today: (params) => request(`/api/today${queryString(params)}`),
   history: () => request('/api/history'),
   performance: () => request('/api/performance'),
   evolution: () => request('/api/evolution'),
+  evolve: () => request('/api/evolve', { method: 'POST' }),
+  audit: () => request('/api/audit', { method: 'POST' }),
   settings: () => request('/api/settings'),
   saveSettings: (payload) =>
     request('/api/settings', {
@@ -71,7 +93,8 @@ export async function downloadExport(kind, params = {}) {
     headers: buildRequestHeaders({ 'Content-Type': 'text/csv' }),
   });
   if (!response.ok) {
-    throw new Error(await errorMessage(response, `Export failed: ${response.status}`));
+    const message = await errorMessage(response, `Export failed: ${response.status}`);
+    throw buildError(message, response.status);
   }
 
   const blob = await response.blob();

@@ -3,7 +3,8 @@ import {
   npmCommand,
   pythonCommand,
   startProcess,
-  waitForProcesses
+  waitForProcesses,
+  waitForUrlOk
 } from './process_runner.mjs';
 
 const apiHost = process.env.DASHBOARD_API_HOST || '0.0.0.0';
@@ -40,10 +41,22 @@ const processes = [
   ])
 ];
 
+const processExit = waitForProcesses(processes);
+const healthUrl = `http://127.0.0.1:${apiPort}/health`;
+const apiHealthy = await Promise.race([
+  waitForUrlOk(healthUrl),
+  processExit.then(() => false),
+]);
+
 console.log('Telegram bot: running from src/index.js');
 console.log(`Dashboard API: http://${apiHost}:${apiPort}`);
 console.log(`Dashboard Web: http://localhost:${webPort}`);
+if (apiHealthy) {
+  console.log(`Dashboard API health: ${healthUrl}`);
+} else {
+  console.warn(`Dashboard API health check did not pass at ${healthUrl}. Verify DASHBOARD_API_PORT and stop any stale legacy dashboard process on that port.`);
+}
 console.log('Open from VPS IP with the dashboard web port, for example http://YOUR_VPS_IP:5173');
 
-const exitCode = await waitForProcesses(processes);
+const exitCode = await processExit;
 process.exit(exitCode);

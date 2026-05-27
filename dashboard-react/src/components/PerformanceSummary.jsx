@@ -20,7 +20,7 @@ function SmallTable({ title, rows, columns }) {
       <h3 className="mb-3 text-sm font-bold text-ink">{title}</h3>
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
-          <thead className="text-left text-xs uppercase text-slate-500">
+          <thead className="bg-accent-yellow text-left text-xs font-black uppercase text-ink">
             <tr>{columns.map((column) => <th key={column.key} className="py-2 pr-4">{column.label}</th>)}</tr>
           </thead>
           <tbody>

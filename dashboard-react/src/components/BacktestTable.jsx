@@ -9,13 +9,13 @@ export default function BacktestTable({ result }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
-        <Card><CardContent className="p-4"><p className="text-xs uppercase text-slate-500">Bets Taken</p><strong className="text-2xl">{summary.bets_taken || 0}</strong></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-xs uppercase text-slate-500">Win Rate</p><strong className="text-2xl">{percent(summary.win_rate)}</strong></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-xs uppercase text-slate-500">ROI</p><strong className="text-2xl">{percent(summary.roi)}</strong></CardContent></Card>
-        <Card><CardContent className="p-4"><p className="text-xs uppercase text-slate-500">No-Bet Count</p><strong className="text-2xl">{summary.no_bet_count || 0}</strong></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-xs uppercase text-ink/50">Bets Taken</p><strong className="text-2xl">{summary.bets_taken || 0}</strong></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-xs uppercase text-ink/50">Win Rate</p><strong className="text-2xl">{percent(summary.win_rate)}</strong></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-xs uppercase text-ink/50">ROI</p><strong className="text-2xl">{percent(summary.roi)}</strong></CardContent></Card>
+        <Card><CardContent className="p-4"><p className="text-xs uppercase text-ink/50">No-Bet Count</p><strong className="text-2xl">{summary.no_bet_count || 0}</strong></CardContent></Card>
       </div>
       <Card>
-        <CardContent className="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
+        <CardContent className="grid gap-4 text-sm text-ink/70 md:grid-cols-2">
           <div>
         <p><strong>Best segment:</strong> {summary.best_segment || '-'}</p>
         <p><strong>Weakest segment:</strong> {summary.weakest_segment || '-'}</p>
@@ -30,12 +30,12 @@ export default function BacktestTable({ result }) {
       </Card>
       <div className="overflow-x-auto rounded-lg border border-line bg-white">
         <table className="min-w-full divide-y divide-line text-sm">
-          <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+          <thead className="bg-accent-yellow text-left text-xs uppercase text-ink/50">
             <tr>{['Date', 'Matchup', 'Market', 'Lean', 'Result', 'Edge', 'P/L'].map((label) => <th key={label} className="px-3 py-3">{label}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-line">
             {rows.map((row, index) => (
-              <tr key={`${row.date}-${index}`} className="transition-colors hover:bg-slate-50">
+              <tr key={`${row.date}-${index}`} className="transition-colors hover:bg-accent-yellow">
                 <td className="px-3 py-3">{row.date}</td>
                 <td className="px-3 py-3 font-semibold">{row.matchup}</td>
                 <td className="px-3 py-3">{row.market}</td>

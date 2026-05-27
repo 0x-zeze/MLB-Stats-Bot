@@ -2,16 +2,16 @@ import { cn } from '../../lib/utils.js';
 
 export function Tabs({ tabs, active, onChange, className = '' }) {
   return (
-    <div className={cn('flex gap-1 overflow-x-auto scrollbar-none', className)}>
+    <div className={cn('flex gap-2 overflow-x-auto scrollbar-none', className)}>
       {tabs.map((tab) => (
         <button
           key={tab.id}
           onClick={() => onChange(tab.id)}
           className={cn(
-            'whitespace-nowrap px-4 py-2.5 text-sm font-medium transition-all duration-200 rounded-lg',
+            'whitespace-nowrap rounded-md border-3 border-ink px-4 py-2.5 text-sm font-black uppercase tracking-tight text-ink transition-all duration-150',
             active === tab.id
-              ? 'bg-accent-blue/10 text-accent-blue border border-accent-blue/20'
-              : 'text-slate-400 hover:text-white hover:bg-white/5 border border-transparent'
+              ? 'bg-accent-yellow shadow-neo-sm'
+              : 'bg-paper hover:-translate-x-0.5 hover:-translate-y-0.5 hover:bg-accent-blue hover:shadow-neo-sm'
           )}
         >
           {tab.label}

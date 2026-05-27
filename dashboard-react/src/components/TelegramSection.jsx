@@ -79,7 +79,7 @@ export default function TelegramSection() {
               <Send className="h-4 w-4 text-accent-blue" />
               Telegram Integration
             </CardTitle>
-            <p className="text-xs text-slate-400 mt-1">Bot status, alert configuration, and command reference.</p>
+            <p className="mt-1 text-xs font-semibold text-ink/70">Bot status, alert configuration, and command reference.</p>
           </div>
           <Badge variant="success">Connected</Badge>
         </div>
@@ -88,33 +88,33 @@ export default function TelegramSection() {
         <div className="grid lg:grid-cols-2 gap-6">
           <div className="space-y-4">
             <div>
-              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Bot Status</h4>
+              <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">Bot Status</h4>
               <div className="grid grid-cols-2 gap-2">
-                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <div className="rounded-lg border-2 border-ink bg-paper p-3 shadow-neo-sm">
                   <div className="flex items-center gap-2 mb-1">
                     <Bell className="h-3 w-3 text-accent-green" />
-                    <span className="text-[11px] text-slate-400">Auto Alerts</span>
+                    <span className="text-[11px] text-ink/60">Auto Alerts</span>
                   </div>
                   <p className="text-sm font-semibold text-accent-green">Enabled</p>
                 </div>
-                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <div className="rounded-lg border-2 border-ink bg-paper p-3 shadow-neo-sm">
                   <div className="flex items-center gap-2 mb-1">
                     <Clock className="h-3 w-3 text-accent-blue" />
-                    <span className="text-[11px] text-slate-400">Alert Time</span>
+                    <span className="text-[11px] text-ink/60">Alert Time</span>
                   </div>
-                  <p className="text-sm font-semibold text-white">10:00 AM</p>
+                  <p className="text-sm font-semibold text-ink">10:00 AM</p>
                 </div>
-                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <div className="rounded-lg border-2 border-ink bg-paper p-3 shadow-neo-sm">
                   <div className="flex items-center gap-2 mb-1">
                     <CheckCircle className="h-3 w-3 text-accent-green" />
-                    <span className="text-[11px] text-slate-400">Post-game</span>
+                    <span className="text-[11px] text-ink/60">Post-game</span>
                   </div>
                   <p className="text-sm font-semibold text-accent-green">Active</p>
                 </div>
-                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <div className="rounded-lg border-2 border-ink bg-paper p-3 shadow-neo-sm">
                   <div className="flex items-center gap-2 mb-1">
                     <Zap className="h-3 w-3 text-accent-blue" />
-                    <span className="text-[11px] text-slate-400">Agent</span>
+                    <span className="text-[11px] text-ink/60">Agent</span>
                   </div>
                   <p className="text-sm font-semibold text-accent-blue">Interactive</p>
                 </div>
@@ -122,16 +122,16 @@ export default function TelegramSection() {
             </div>
 
             <div>
-              <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Commands <span className="text-slate-500">(click to try)</span></h4>
+              <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">Commands <span className="text-ink/50">(click to try)</span></h4>
               <div className="space-y-1">
                 {COMMANDS.map((c) => (
                   <button
                     key={c.cmd}
                     onClick={() => handleCommandClick(c.cmd)}
-                    className="w-full flex items-center justify-between py-1.5 px-2 rounded hover:bg-white/[0.04] transition-colors text-left"
+                    className="flex w-full items-center justify-between rounded-md border-2 border-transparent px-2 py-1.5 text-left transition-colors hover:border-ink hover:bg-accent-yellow"
                   >
                     <code className="text-xs font-mono text-accent-blue">{c.cmd}</code>
-                    <span className="text-[11px] text-slate-500">{c.desc}</span>
+                    <span className="text-[11px] text-ink/50">{c.desc}</span>
                   </button>
                 ))}
               </div>
@@ -139,13 +139,13 @@ export default function TelegramSection() {
           </div>
 
           <div>
-            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Chat Preview</h4>
-            <div className="rounded-xl bg-navy-900 border border-white/[0.06] overflow-hidden flex flex-col h-[500px]">
-              <div className="px-4 py-2.5 border-b border-white/[0.06] flex items-center gap-2 flex-shrink-0">
-                <div className="h-6 w-6 rounded-full bg-accent-blue/20 flex items-center justify-center">
-                  <MessageSquare className="h-3 w-3 text-accent-blue" />
+            <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">Chat Preview</h4>
+            <div className="flex h-[500px] flex-col overflow-hidden rounded-xl border-3 border-ink bg-cream shadow-neo">
+              <div className="flex flex-shrink-0 items-center gap-2 border-b-3 border-ink bg-accent-blue px-4 py-2.5">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-ink bg-paper">
+                  <MessageSquare className="h-3 w-3 text-ink" />
                 </div>
-                <span className="text-xs font-semibold text-white">MLB Stats Bot</span>
+                <span className="text-xs font-semibold text-ink">MLB Stats Bot</span>
                 <Badge variant="success" className="ml-auto text-[9px]">Online</Badge>
               </div>
               <div className="flex-1 p-4 space-y-3 overflow-y-auto">
@@ -153,8 +153,8 @@ export default function TelegramSection() {
                   <div key={i} className={`flex ${msg.from === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[85%] rounded-lg px-3 py-2 text-xs ${
                       msg.from === 'user'
-                        ? 'bg-accent-blue/20 text-accent-blue border border-accent-blue/20'
-                        : 'bg-white/[0.04] text-slate-300 border border-white/[0.06]'
+                        ? 'border-2 border-ink bg-accent-blue text-ink shadow-neo-sm'
+                        : 'border-2 border-ink bg-paper text-ink shadow-neo-sm'
                     }`}>
                       <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed">{msg.text}</pre>
                     </div>
@@ -162,11 +162,11 @@ export default function TelegramSection() {
                 ))}
                 <div ref={chatEndRef} />
               </div>
-              <form onSubmit={handleSubmit} className="px-4 py-2.5 border-t border-white/[0.06] flex items-center gap-2 flex-shrink-0">
+              <form onSubmit={handleSubmit} className="flex flex-shrink-0 items-center gap-2 border-t-3 border-ink bg-paper px-4 py-2.5">
                 <input
                   ref={inputRef}
                   type="text"
-                  className="flex-1 px-3 py-2 text-sm rounded-lg bg-navy-800 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-accent-blue focus:ring-1 focus:ring-accent-blue/30"
+                  className="flex-1 rounded-lg border-2 border-ink bg-white px-3 py-2 text-sm font-semibold text-ink placeholder-ink/50 shadow-neo-sm focus:outline-none focus:ring-2 focus:ring-accent-yellow"
                   placeholder="Type a command... (e.g. /today)"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -175,7 +175,7 @@ export default function TelegramSection() {
                 />
                 <button
                   type="submit"
-                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-accent-blue text-navy-900 hover:bg-accent-blue/90 transition-colors"
+                  className="rounded-lg border-2 border-ink bg-accent-blue px-4 py-2 text-sm font-black uppercase text-ink shadow-neo-sm transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:bg-accent-yellow hover:shadow-neo"
                 >
                   Send
                 </button>

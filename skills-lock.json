@@ -1,0 +1,1001 @@
+{
+  "version": 1,
+  "skills": {
+    "abstraction-concrete-examples": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/abstraction-concrete-examples/SKILL.md",
+      "computedHash": "8b24fd69ad19ba63e472c28cd631f991c63f7c27246daf62fbd0781a2cf98816"
+    },
+    "academic-letter-architect": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/academic-letter-architect/SKILL.md",
+      "computedHash": "f1f721d14e5e1f50b05cac1223c0a766f402553123c5d67bf3d1c7161fb30a47"
+    },
+    "adr-architecture": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/adr-architecture/SKILL.md",
+      "computedHash": "4e53dd27937453bfd3503d528e4430e8d95207e281ee4ca2040d35e0954d984e"
+    },
+    "adverse-selection-prior": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/adverse-selection-prior/SKILL.md",
+      "computedHash": "02a892c9cf3c2f63e7888ad58cd3495d6f1cc532076cde07471f09bf80c406f0"
+    },
+    "alignment-values-north-star": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/alignment-values-north-star/SKILL.md",
+      "computedHash": "6752a1ffd990bc578d3477168c71ad80947455b4f17b5b18b17cc28e057b89c7"
+    },
+    "anomaly-fraud-scanner": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/anomaly-fraud-scanner/SKILL.md",
+      "computedHash": "1f29b93beafa682c5917481b9217f2e81104542386fe5a7876f306d6ace92228"
+    },
+    "auction-first-price-shading": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/auction-first-price-shading/SKILL.md",
+      "computedHash": "c959812c701652e5537630e63b3a88bb93635663363fc909fc74a7cde5311a0d"
+    },
+    "auction-winners-curse-haircut": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/auction-winners-curse-haircut/SKILL.md",
+      "computedHash": "bd7a385555ba14b2b81f9f30b4dd09cda869687764571e578934ee670d8b7eb1"
+    },
+    "bayesian-reasoning-calibration": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/bayesian-reasoning-calibration/SKILL.md",
+      "computedHash": "fa328e61b2c9ee9c8b7d4fd2fed5949c9347dbcfc429d4633d5e77cc44f60a74"
+    },
+    "betting": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/betting/SKILL.md",
+      "computedHash": "68553920d1e81e540a915509c5ccd1854862c7610adb4608605fdfe410ac25d1"
+    },
+    "brainstorm-diverge-converge": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/brainstorm-diverge-converge/SKILL.md",
+      "computedHash": "f961f3a073c73bcbca0dd60b6ce44a9c0f4ad07e059244e7338eea63f9a157d5"
+    },
+    "business-narrative-builder": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/business-narrative-builder/SKILL.md",
+      "computedHash": "a98e283490ee5a6e8c6ee17018454c3f13cc77ce08e5ec0729a697b483834998"
+    },
+    "capital-structure-optimizer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/capital-structure-optimizer/SKILL.md",
+      "computedHash": "47de60d88d4ea011cfa267f7b1b6524df5bca1700f42fbc2efed123989fbdcb6"
+    },
+    "career-document-architect": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/career-document-architect/SKILL.md",
+      "computedHash": "5bbf22f2df993592a8300272ec4197dff449f97f9e1d095a26d37bb1beaa7471"
+    },
+    "cash-flow-forecaster": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/cash-flow-forecaster/SKILL.md",
+      "computedHash": "a002e324ff5e244709a0541b52b6016fa453bc6b29968ca9ceee2f3d1fa65e09"
+    },
+    "category-allocation-best-response": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/category-allocation-best-response/SKILL.md",
+      "computedHash": "8610177a12dbf875772acc09991e9ee568a5d31b0eaa448cfa90c319d3628fb5"
+    },
+    "category-trend-analyzer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/category-trend-analyzer/SKILL.md",
+      "computedHash": "5950016acbcd8cf1c4bc132cefaa1aa25bf0bdb09114e2b80665a27a21dba838"
+    },
+    "causal-inference-root-cause": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/causal-inference-root-cause/SKILL.md",
+      "computedHash": "5e62da926b5275bd3f63706471db4e79efef3f6aadfebe3747ad5b7afe9d1553"
+    },
+    "cbb-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/cbb-data/SKILL.md",
+      "computedHash": "4b342adc70f209ac656896826a83f7e510a72afadcc57e4912a9c2c361227bf8"
+    },
+    "cfb-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/cfb-data/SKILL.md",
+      "computedHash": "b0ae369cc3b151ec5ac5dddf4ea0db5799460c41fe313c47cc361707968a471c"
+    },
+    "chain-estimation-decision-storytelling": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/chain-estimation-decision-storytelling/SKILL.md",
+      "computedHash": "76b471cbbde6316be7c8032fba6c8dd30a7aafcbb5e24744b9114172d3219c7d"
+    },
+    "chain-roleplay-debate-synthesis": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/chain-roleplay-debate-synthesis/SKILL.md",
+      "computedHash": "7acfa6577109870ae79ee43247a750d11311bfef3997074e4153ae73008e94ce"
+    },
+    "chain-spec-risk-metrics": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/chain-spec-risk-metrics/SKILL.md",
+      "computedHash": "ee5948fb5ef8065f54d33f5d1d4f4b6474e849327e2589e44650d835eee82f88"
+    },
+    "chef-assistant": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/chef-assistant/SKILL.md",
+      "computedHash": "5c8303082c46fe40715f3078efa9f9332cc7f2bd143e79238f489ab45ae80488"
+    },
+    "code-data-analysis-scaffolds": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/code-data-analysis-scaffolds/SKILL.md",
+      "computedHash": "7e3bbc69643f4c4800e0b458158d7ef5d0b296c46a39bf82ece53b7a84742033"
+    },
+    "cognitive-design": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/cognitive-design/SKILL.md",
+      "computedHash": "4f2664a911c401bd2c61fefd0cac29be6fd458f22d7be8ac604d02cba7ba6e32"
+    },
+    "cognitive-fallacies-guard": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/cognitive-fallacies-guard/SKILL.md",
+      "computedHash": "478d41977116a70c56c40154652f585db79c66c965cb32720f8b801905a6f5ad"
+    },
+    "communication-storytelling": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/communication-storytelling/SKILL.md",
+      "computedHash": "c408c3702beb4448707cc24f6f2ce3db9986e096e53c0b38aa089af96dfd6f46"
+    },
+    "component-extraction": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/component-extraction/SKILL.md",
+      "computedHash": "6e06737f1e0ca34aee5b71b7420684b75a5a1c60c0590bd3b211b2d1e5878839"
+    },
+    "concept-rediscovery-walk": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/concept-rediscovery-walk/SKILL.md",
+      "computedHash": "375ef90f681dd8f2399e69bc06d770531de78c4211eb3afb372ddf2ce6cd1b33"
+    },
+    "constraint-based-creativity": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/constraint-based-creativity/SKILL.md",
+      "computedHash": "a5d062f9cc7037aff33b2ab1638a483aa985855e726f2c345b88b26967da99dc"
+    },
+    "cost-of-capital-estimator": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/cost-of-capital-estimator/SKILL.md",
+      "computedHash": "f85c17b96377f8630a6eeb65d58ab756160b8a90ae6aa1ec3bb9b0e068892a9e"
+    },
+    "d3-visualization": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/d3-visualization/SKILL.md",
+      "computedHash": "edbcbdac1211715557ed9b0b0ec1faf644fc37c3433fcab1443fa923f626b1cb"
+    },
+    "data-schema-knowledge-modeling": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/data-schema-knowledge-modeling/SKILL.md",
+      "computedHash": "c07c4b9b8b27349b6202385687048c7f58c0a93daf2067594358a9cb2b920727"
+    },
+    "decision-matrix": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/decision-matrix/SKILL.md",
+      "computedHash": "e23423fb6b804d05943dc37e1886a6e82198fdca6bc0c622ba49235fca99093d"
+    },
+    "decomposition-reconstruction": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/decomposition-reconstruction/SKILL.md",
+      "computedHash": "c43fad6aa1c84be4652c8ed3b1ac71e35af6357df19236c21fe75bfbc512be1f"
+    },
+    "deliberation-debate-red-teaming": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/deliberation-debate-red-teaming/SKILL.md",
+      "computedHash": "52a8f135f59db7415a31f1fbd0be5dcec2ecca748bfc6fa856d1735c2036e700"
+    },
+    "design-evaluation-audit": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/design-evaluation-audit/SKILL.md",
+      "computedHash": "d4c6010751e6dc3935da1de1c67ded16247b0b926fc83c3e681196be8fa247d6"
+    },
+    "design-of-experiments": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/design-of-experiments/SKILL.md",
+      "computedHash": "6a14a53f9aac441194a910ff0531823a92f550a11c6ea4df899579017039ce55"
+    },
+    "dialectical-mapping-steelmanning": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/dialectical-mapping-steelmanning/SKILL.md",
+      "computedHash": "faa9ca206d39fd24efd70f22ab6d2c8fbfc75f3c9f415332c65f4afb66aae503"
+    },
+    "discovery-interviews-surveys": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/discovery-interviews-surveys/SKILL.md",
+      "computedHash": "69d306f687e276aa174983827a4b99f264f5f54525ce3d6ba55804e5d6e1045c"
+    },
+    "dividend-buyback-analyzer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/dividend-buyback-analyzer/SKILL.md",
+      "computedHash": "2751394bb07735baf7f39ecfe00a60d1109b19d5e3e6e391645526c11b2e2efe"
+    },
+    "domain-research-health-science": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/domain-research-health-science/SKILL.md",
+      "computedHash": "4a03f798c60dcba3104e75e80b00f695596568d6601f9fd6ee8cddca6c35594d"
+    },
+    "embedding-fusion-strategy": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/embedding-fusion-strategy/SKILL.md",
+      "computedHash": "c447d26582d63bfdb596278ef33ae1d8baf374adb89e3c509e92e722e6b8dc3f"
+    },
+    "environmental-scanning-foresight": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/environmental-scanning-foresight/SKILL.md",
+      "computedHash": "e4dcf87314f84376c7f89b8907a4f9d5315eee12df12063613212a7f42be9c11"
+    },
+    "equivariant-architecture-designer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/equivariant-architecture-designer/SKILL.md",
+      "computedHash": "21a951527cc6f95a3493f0b6654c3f22387a77fd070368bbf25d3cbef831094f"
+    },
+    "estimation-fermi": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/estimation-fermi/SKILL.md",
+      "computedHash": "53bb0b7d8eb4eea8f553dc70bf951dbe6b111b53569ce83ecc01fd5390289742"
+    },
+    "ethics-safety-impact": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/ethics-safety-impact/SKILL.md",
+      "computedHash": "ea8acd7cc1d0e1648ab4d27256f4b4194371b7473b5107795115e72ed9b2db55"
+    },
+    "evaluation-rubrics": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/evaluation-rubrics/SKILL.md",
+      "computedHash": "f94976dab7424db52dfc16fbd4f56fa374a4cd367e42388ed208d76bf7cc74c4"
+    },
+    "expected-value": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/expected-value/SKILL.md",
+      "computedHash": "8d0da76435d1a1fac2332e5e64a1e62979a2b53e51b1b91f55585053e06201f8"
+    },
+    "facilitation-patterns": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/facilitation-patterns/SKILL.md",
+      "computedHash": "a2f14ba10663e2bd066b54ea986e3c676bb69ae58537ae4e82f932dc7323f4dc"
+    },
+    "fetch-arxiv-recent": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/fetch-arxiv-recent/SKILL.md",
+      "computedHash": "dedd6d2c8998cfbae6074473ad7253d086ddd881564b7414bd3ee703050380b5"
+    },
+    "fetch-preprint-recent": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/fetch-preprint-recent/SKILL.md",
+      "computedHash": "31af0d5d74ad113a2f23c138ebff88cc57cb2178a1233de6b0b7b53c80282b36"
+    },
+    "fetch-pubmed-recent": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/fetch-pubmed-recent/SKILL.md",
+      "computedHash": "dddfb77a6942b6c9fc146bd474975c6fd314346d8435b2afa25e1c914ca648ac"
+    },
+    "financial-statement-analyzer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/financial-statement-analyzer/SKILL.md",
+      "computedHash": "3aedbdcab7973010b17a20219c8aa365535e8f3df9230dcaf4147517ab6bffc9"
+    },
+    "financial-unit-economics": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/financial-unit-economics/SKILL.md",
+      "computedHash": "c107de0fa94a50d1c2bbaa36a731152ec9522e3e8ca4e72f4a56173c872821a7"
+    },
+    "focus-timeboxing-8020": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/focus-timeboxing-8020/SKILL.md",
+      "computedHash": "9065aa7210daeb5948d8b07b2601c0e6eff47dccafeb62016a2acd1ac2cb49c4"
+    },
+    "football-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/football-data/SKILL.md",
+      "computedHash": "0242e8ca77778c07f441303a8ea3aef6ce59662d551854b29240ced72b184ce1"
+    },
+    "forecast-premortem": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/forecast-premortem/SKILL.md",
+      "computedHash": "db909e71ef832b65d97136cd0bd70eb82cd8d70853cfe85bcacffebe5e71e980"
+    },
+    "geometric-algebraic-bridge": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/geometric-algebraic-bridge/SKILL.md",
+      "computedHash": "b0c6b96979adc7843372c0c426c49995dffdb985ea4d156701007e095f4aab1f"
+    },
+    "golf-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/golf-data/SKILL.md",
+      "computedHash": "ac4777101a6542e951f523d754f5ff59abeeeb8b1401a2eaa5adfc06d361cb32"
+    },
+    "grant-proposal-assistant": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/grant-proposal-assistant/SKILL.md",
+      "computedHash": "1107eda1e9f25f8bd3099d36c410b9d82208ebb9f6e90fa7c0ca0609dc2ad816"
+    },
+    "graphrag-evaluation": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/graphrag-evaluation/SKILL.md",
+      "computedHash": "0c591d65b8b0e9bc2c077e61e26a34518b622d1570a07f7459da3810e6bdce9b"
+    },
+    "graphrag-system-design": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/graphrag-system-design/SKILL.md",
+      "computedHash": "211f990e35e656db55f56daf22cdbacce8a270199c5f7bc426c5af7221f82679"
+    },
+    "heuristics-and-checklists": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/heuristics-and-checklists/SKILL.md",
+      "computedHash": "d3284d93ab57d8d08d574b925bc16da3135d593e5981f99899276f35f1feaee2"
+    },
+    "high-dim-intuition-rebuild": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/high-dim-intuition-rebuild/SKILL.md",
+      "computedHash": "ab6651712767ff5f55fce9d4ec1857538f1e088da7fdf511576a93f3600eeedb"
+    },
+    "household-finance-dashboard-builder": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/household-finance-dashboard-builder/SKILL.md",
+      "computedHash": "b2f2abbf9ccd3d103f362c19e70b14790ef33a52b37b3749d0c4a87ed06ea89d"
+    },
+    "hsa-receipt-vault": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/hsa-receipt-vault/SKILL.md",
+      "computedHash": "7406c2371edc0c8ed3359960a52155216a829660be29a1fae2f70a1070b743da"
+    },
+    "hypotheticals-counterfactuals": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/hypotheticals-counterfactuals/SKILL.md",
+      "computedHash": "1718e4ac47ae02309f0fc5ccd0456143acb471c23c8201ef42f2ef21abd7b79b"
+    },
+    "information-architecture": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/information-architecture/SKILL.md",
+      "computedHash": "1fe0664007f6116b2f9af778d9ec3a5979178b4928df19649aba1a7b042455c5"
+    },
+    "inspectional-reading": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/inspectional-reading/SKILL.md",
+      "computedHash": "bcb1485429cd42163d99248ec6fb737abb70f17f595d705f63cb16c2fc445ae3"
+    },
+    "intrinsic-valuation-dcf": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/intrinsic-valuation-dcf/SKILL.md",
+      "computedHash": "55b06f078d603c2e9f2bd3da16c0adb8d648f1ecc8313185ca3a8f9adc8dd5fc"
+    },
+    "kalshi": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/kalshi/SKILL.md",
+      "computedHash": "b2d42e7041c28e739e3d850ea09c152f5692b40ea96bd031c87cdb8b5aa97977"
+    },
+    "kill-criteria-exit-ramps": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/kill-criteria-exit-ramps/SKILL.md",
+      "computedHash": "8643d42fe8b51f89e4d28a39d27abcb08865788efcb389abbdb952559db12bb5"
+    },
+    "knowledge-graph-construction": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/knowledge-graph-construction/SKILL.md",
+      "computedHash": "1e9711c735ecaab191e97c8757fcbaf73013eeb718af849b666da92ca9eca185"
+    },
+    "layered-reasoning": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/layered-reasoning/SKILL.md",
+      "computedHash": "ea5de8daf57c05dc738e2aaef62ecc7823b624ee3824715cb788216299ef279e"
+    },
+    "mapping-visualization-scaffolds": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mapping-visualization-scaffolds/SKILL.md",
+      "computedHash": "59f6f602fb27a3ac9e1fecfaa136c0318346ce7274f888e075f67996fb46db99"
+    },
+    "markdown-to-pdf": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/markdown-to-pdf/SKILL.md",
+      "computedHash": "07ec006c015a70c5d2fb5eb1e61e6b7aa292e034c28c7f9ce2d2bf03dd950276"
+    },
+    "market-mechanics-betting": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/market-mechanics-betting/SKILL.md",
+      "computedHash": "6fe61fae92723155a9217ae72693cebb626243ea972a300514ee6e69d4280e61"
+    },
+    "markets": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/markets/SKILL.md",
+      "computedHash": "24e8fed7613990f85854dec26a484a725ed8bbe54c2ab25f3cb07857e9e8299a"
+    },
+    "matchup-win-probability-sim": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/matchup-win-probability-sim/SKILL.md",
+      "computedHash": "4fc66bf300702d70c4770f481561c18fc4beef43650e3331f3e17a97164b9b83"
+    },
+    "memory-retrieval-learning": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/memory-retrieval-learning/SKILL.md",
+      "computedHash": "1d8b99ad5d5a1a4d843e4f0a1caa97068f652539991ef961ceb5d0cd6507717f"
+    },
+    "meta-prompt-engineering": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/meta-prompt-engineering/SKILL.md",
+      "computedHash": "545ed70b543dd97f10ba88fd7b21f4df6f68eca5f29ffc425455ded4187f1a1c"
+    },
+    "metrics-tree": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/metrics-tree/SKILL.md",
+      "computedHash": "51a3ff82ef51718e666a839be48cf90b92b1e358df8d9a08c80d3e713b6f5a4f"
+    },
+    "ml-primitive-decoder": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/ml-primitive-decoder/SKILL.md",
+      "computedHash": "25f77a98f141e75fa1bc2fd9e6746fac99b7b02633925229452d3e0ce25ea475"
+    },
+    "mlb-beginner-translator": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-beginner-translator/SKILL.md",
+      "computedHash": "d82a0bb8bc6f17247e9d6083eba528d8e86a85641b78f7b420ac8de01811e02a"
+    },
+    "mlb-category-state-analyzer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-category-state-analyzer/SKILL.md",
+      "computedHash": "153b8da34adf1d9590fbf9dd00f291cf9431e8fd348b257035745b8b7a46a725"
+    },
+    "mlb-closer-tracker": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-closer-tracker/SKILL.md",
+      "computedHash": "0f21ba3e550e69c81ed8e68a32450219c165a6bccae9ff5252a5d112b081e439"
+    },
+    "mlb-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-data/SKILL.md",
+      "computedHash": "576d0f098795cca3a55611647a0101b517ae994524d78c9e3b019ca681dd19ba"
+    },
+    "mlb-decision-logger": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-decision-logger/SKILL.md",
+      "computedHash": "418bf12df38f3558cb5eaf524253dc39ae644115e2bf8c4edf3096b664e86d55"
+    },
+    "mlb-faab-sizer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-faab-sizer/SKILL.md",
+      "computedHash": "6872725351247ac03466e50bce48a585c7e815df34d57ca4ea7f234bc6f7f9d0"
+    },
+    "mlb-league-state-reader": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-league-state-reader/SKILL.md",
+      "computedHash": "8d66e6fa39e9bded3d57efbed926d59d53f962c35f45e2ca8a07802bfab8ea2f"
+    },
+    "mlb-matchup-analyzer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-matchup-analyzer/SKILL.md",
+      "computedHash": "c0ff86d8031370a5e899e3082b272a18ce4ff516b8e1175b114b20b54a0e59a6"
+    },
+    "mlb-opponent-profiler": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-opponent-profiler/SKILL.md",
+      "computedHash": "4adf582c64c28315491ea83c3894f23e37354c042a958e5e9a821431630279f8"
+    },
+    "mlb-player-analyzer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-player-analyzer/SKILL.md",
+      "computedHash": "1d774e3c0bb23917c7729a13585a99d8411cf093ec60502a4ed6b5302ce0d6df"
+    },
+    "mlb-playoff-scheduler": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-playoff-scheduler/SKILL.md",
+      "computedHash": "1759ee77024f37ef8515a105bcc1bad9abb1c7e20de0397665d8206e5c546eef"
+    },
+    "mlb-regression-flagger": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-regression-flagger/SKILL.md",
+      "computedHash": "d9b1230475e78cf6546e3fca2efc03d9e4f3e0c55be655f5dcf39a3202e739b7"
+    },
+    "mlb-trade-evaluator": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-trade-evaluator/SKILL.md",
+      "computedHash": "fa68e02903988e53511e36840728d973efe6c5fa2d6da8201e99f8caf7d530fa"
+    },
+    "mlb-two-start-scout": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/mlb-two-start-scout/SKILL.md",
+      "computedHash": "842e2b57854b01e6e079cd2ffe47a83c5db9f98d054ee803a624ec57f23ab7ce"
+    },
+    "model-equivariance-auditor": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/model-equivariance-auditor/SKILL.md",
+      "computedHash": "a7053a6fcc9e508330a84551e4e92f41fbe0dfce3f3ed402372c1e348b5b6268"
+    },
+    "morphological-analysis-triz": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/morphological-analysis-triz/SKILL.md",
+      "computedHash": "a4c268fb4c980feb60e0dfddd5b731f3376078c129537c891089e3d60a03b1b8"
+    },
+    "nba-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/nba-data/SKILL.md",
+      "computedHash": "724d57bdb49249f4637b0b8fc20c1a22f1168c8a82592254edf52299f0202962"
+    },
+    "negative-contrastive-framing": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/negative-contrastive-framing/SKILL.md",
+      "computedHash": "c360e4035f94953f35be469e1abba2215a91ccc80a190359ef4bf293d7b1a623"
+    },
+    "negotiation-alignment-governance": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/negotiation-alignment-governance/SKILL.md",
+      "computedHash": "43ca0f983af76b0c86f83624ee74f7845ec62211090ad5f00e710c423eb761d7"
+    },
+    "nfl-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/nfl-data/SKILL.md",
+      "computedHash": "d201e172b7d433ca1db4fcf7f64384c5ea66e4f830536961a82fb5dcf4e8b6b4"
+    },
+    "nhl-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/nhl-data/SKILL.md",
+      "computedHash": "129cf6058116be62782b5f4159813e487f1371e586eaf8c205c63c5f7c3bd6e0"
+    },
+    "one-pager-prd": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/one-pager-prd/SKILL.md",
+      "computedHash": "2336106d52c06c8f486dac4971bd1176652be186a10de911193abc252a5968d2"
+    },
+    "opponent-archetype-classifier": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/opponent-archetype-classifier/SKILL.md",
+      "computedHash": "9796677217801c1dc15783e47afe5f1f78f30d420e1e909f9139d5d21086b8ac"
+    },
+    "paper-cluster-by-theme": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/paper-cluster-by-theme/SKILL.md",
+      "computedHash": "18224e7e7eeb4371b7a1b9a3fc09036488a8663affc4c38bff7c0c34f4c77dda"
+    },
+    "paper-relevance-filter": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/paper-relevance-filter/SKILL.md",
+      "computedHash": "b8dec1fadf12dfcc74a98bc12d92e7f5d113db4439b3a6da7ff1a04e2bd47db8"
+    },
+    "paper-three-pass-extraction": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/paper-three-pass-extraction/SKILL.md",
+      "computedHash": "85cd00d13d0f23ee130427696eadc116808e9abc310938ad18bef4821c2746d1"
+    },
+    "pdf-statement-parser": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/pdf-statement-parser/SKILL.md",
+      "computedHash": "2f8eda7a749df9c661ebb062f6badc1254ffc4d22fb2292f977b937c1779a3d0"
+    },
+    "polymarket": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/polymarket/SKILL.md",
+      "computedHash": "dab1876808778a13fc197df3635e50323dec67d324946eaad9b73c6b8fb8738f"
+    },
+    "portfolio-drift-rebalancer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/portfolio-drift-rebalancer/SKILL.md",
+      "computedHash": "fde86d461ece5032cb2346ca885e7ee945e8cdbb60b9444f9acf7e4b5e27353e"
+    },
+    "portfolio-roadmapping-bets": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/portfolio-roadmapping-bets/SKILL.md",
+      "computedHash": "3b713d04ef3197d9ee9a0f3697be8e6456cdcfbe6c651fc65d3f4883a3623748"
+    },
+    "postmortem": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/postmortem/SKILL.md",
+      "computedHash": "8452687bab0120f9456364ff55659bc33508a544c27cd7c7759712031600c724"
+    },
+    "prioritization-effort-impact": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/prioritization-effort-impact/SKILL.md",
+      "computedHash": "642e1cca60c807abd03fe629eb58358246311f438230d064cc373bbd8cc4d551"
+    },
+    "project-investment-analyzer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/project-investment-analyzer/SKILL.md",
+      "computedHash": "b623217b095c74030a82cbd20cd2b2d9bc172c1e0c77abc37b2e6d74df3d424a"
+    },
+    "project-risk-register": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/project-risk-register/SKILL.md",
+      "computedHash": "ceb9b3d97a9c52eda8e18af26449fb3b1a4f029cc15b20e3cf25d54c7ba8f633"
+    },
+    "prototyping-pretotyping": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/prototyping-pretotyping/SKILL.md",
+      "computedHash": "f686f6a60c069d5a1b87a8808d5406c79aff7e3ba63d412599a598df6c1d8192"
+    },
+    "recurring-charge-detector": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/recurring-charge-detector/SKILL.md",
+      "computedHash": "98263fd84b77d08fced870138402a9ca32106ac16da111f81f8f3ce3c111d95c"
+    },
+    "reference-class-forecasting": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/reference-class-forecasting/SKILL.md",
+      "computedHash": "8add3572ace1794e329b54e37320097edf048622ace5856c3c7d800121877b45"
+    },
+    "relative-valuation-multiples": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/relative-valuation-multiples/SKILL.md",
+      "computedHash": "cb8785ea83486660f6e702c94836e369d08b00387ccc588f0a8b9d8c2c051aa0"
+    },
+    "research-claim-map": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/research-claim-map/SKILL.md",
+      "computedHash": "885d88f1b9b398d78d12451c49c5b1a28f310a5bb28cc010e268dd85fc1d5207"
+    },
+    "retrieval-search-orchestration": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/retrieval-search-orchestration/SKILL.md",
+      "computedHash": "8ab6a680bf5c0e5227a431a460108d7da56afdf65bd20bc47b66af212fc6c321"
+    },
+    "reviews-retros-reflection": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/reviews-retros-reflection/SKILL.md",
+      "computedHash": "1fcf3911767adcf37062741af541cbe3f2b773026fd699da59d04d4c145517b4"
+    },
+    "roadmap-backcast": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/roadmap-backcast/SKILL.md",
+      "computedHash": "c3beb7cb7e39bf17618d587b8281f8c6ececc145c106a9eceaa02d7af756fff5"
+    },
+    "role-switch": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/role-switch/SKILL.md",
+      "computedHash": "e4d484240c439f6bb1257c2e8c68ef712d2ed33db17ea376ea3f863b626d1c9c"
+    },
+    "scientific-clarity-checker": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/scientific-clarity-checker/SKILL.md",
+      "computedHash": "df94d2a3871516eea46ed5983a6b365dca59a24c3eedc0c7f21a7dfd13054880"
+    },
+    "scientific-email-polishing": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/scientific-email-polishing/SKILL.md",
+      "computedHash": "af8555a908f239529d056d84cc19614b1336a295e4473cad0c8aac710e3ebd7e"
+    },
+    "scientific-manuscript-review": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/scientific-manuscript-review/SKILL.md",
+      "computedHash": "25958555f5bd77e9558abee308dc650d3faf8671464d91c21ae19a66afd83acf"
+    },
+    "scout-mindset-bias-check": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/scout-mindset-bias-check/SKILL.md",
+      "computedHash": "0357f965f1e5a0ef2548ece21138cd4d28875088ce661884b803f8b9dc6b092c"
+    },
+    "security-threat-model": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/security-threat-model/SKILL.md",
+      "computedHash": "6ceb542a79ad0e8109e8be1ff27f7e9f749496d5e302131ba9a17e4de54f4625"
+    },
+    "skill-construction": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/skill-construction/SKILL.md",
+      "computedHash": "bcfb0dc3e5dcf51b5ea0d16ddfdc163f1234765bd374cd3e7e023b83d92d9245"
+    },
+    "skill-creator": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/skill-creator/SKILL.md",
+      "computedHash": "07a1de0136b13485922404d84b3a17c26689e3850d6855e4263397a664b98706"
+    },
+    "socratic-teaching-scaffolds": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/socratic-teaching-scaffolds/SKILL.md",
+      "computedHash": "88db40d40e43a7ac8c2cef0789c615fe362b9694b7607c8311d24eb0d614ef36"
+    },
+    "sports-news": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/sports-news/SKILL.md",
+      "computedHash": "22027d086e04af2a6758150406e96202192c5704bffc953f9a4bc5fc202458f5"
+    },
+    "sports-reporter": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/sports-reporter/SKILL.md",
+      "computedHash": "0693f67063e04e25c6440699ccb5bfdac119e1eccf93a4422d6c774f56fc54c2"
+    },
+    "stakeholders-org-design": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/stakeholders-org-design/SKILL.md",
+      "computedHash": "6543a7a5a45a0b85f16380da602a6379fe2196f17dd5231d30c7f72215e31884"
+    },
+    "statement-reconciler": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/statement-reconciler/SKILL.md",
+      "computedHash": "2376025e81533ef312da4e655f371a7ae7da63826fe3a976b5544c960e2b7db3"
+    },
+    "strategist-voice": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/strategist-voice/SKILL.md",
+      "computedHash": "7849ee0687def310f17fca8901863a671f3cf4c94a966cac87e07cd93e9edaa2"
+    },
+    "strategy-and-competitive-analysis": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/strategy-and-competitive-analysis/SKILL.md",
+      "computedHash": "a6a863f6971d0f306801fa685fa6e65a9e1e0972736317580ad8244ec1720b50"
+    },
+    "structural-analysis": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/structural-analysis/SKILL.md",
+      "computedHash": "b514963019c6ad76d856ff713fe4ed47a525f75b3a5ad562c33fe3b758d88d0e"
+    },
+    "symmetry-discovery-questionnaire": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/symmetry-discovery-questionnaire/SKILL.md",
+      "computedHash": "7497970f5c8b93853c82454ad5e24ed433d9cfb7613fb708f1a3a8ac464676fe"
+    },
+    "symmetry-group-identifier": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/symmetry-group-identifier/SKILL.md",
+      "computedHash": "a6c13b5cf3bb9a82e45aff839142a1e0ada512d22114d17f43af0cb25f242cbf"
+    },
+    "symmetry-validation-suite": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/symmetry-validation-suite/SKILL.md",
+      "computedHash": "9af52a785d6915fbe8dbd91ff23579c7e1f7251ecbb6754497c6c0dfc78d3c4f"
+    },
+    "synthesis-and-analogy": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/synthesis-and-analogy/SKILL.md",
+      "computedHash": "69375b54e5071e72f0d141c3f9bf23af030369a6b0f8f7b8a75b5022222d083b"
+    },
+    "synthesis-application": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/synthesis-application/SKILL.md",
+      "computedHash": "976d712882ecfdd007284bdfb8b68616dad10c292a445d3bf819ccafa481d68d"
+    },
+    "systems-thinking-leverage": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/systems-thinking-leverage/SKILL.md",
+      "computedHash": "cbb028ad19ac7c9b5b9a14cb30afef5335d990e6e52c0c9c684c220f7e8b87d2"
+    },
+    "tax-loss-harvest-scanner": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/tax-loss-harvest-scanner/SKILL.md",
+      "computedHash": "a92b8026e882a35395656d370cee2b81826dfc1d7e69faa228798291e5dd3380"
+    },
+    "tennis-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/tennis-data/SKILL.md",
+      "computedHash": "15172291bf3bd58ae26b1786d390ce773bcbf0b88182fb2553fd7db460f767e1"
+    },
+    "transaction-categorizer": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/transaction-categorizer/SKILL.md",
+      "computedHash": "f19caa4b9113fc8d35c2bc5efecb702747e0f379bc61bb0ae38c286d6cdbfd9a"
+    },
+    "transaction-deduplicator": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/transaction-deduplicator/SKILL.md",
+      "computedHash": "b92ab5d41ab84434137ddc9cc735480925b32ba1145d1df58070f851cc2cbff1"
+    },
+    "translation-reframing-audience-shift": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/translation-reframing-audience-shift/SKILL.md",
+      "computedHash": "4e14e4ce0690cdeb276d7499981995c5d2162ae8b4ab87da9cf3ce5026ba65de"
+    },
+    "valuation-reconciler": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/valuation-reconciler/SKILL.md",
+      "computedHash": "f48e8e3359221cc3d8de23fc51995d1eff0cd9aa3b86bb7f25612d53d94f4f97"
+    },
+    "variance-strategy-selector": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/variance-strategy-selector/SKILL.md",
+      "computedHash": "e076c4ff8812490190059e2fbbdfb0f56361ef844151475ff393c74ba5a34872"
+    },
+    "visual-storytelling-design": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/visual-storytelling-design/SKILL.md",
+      "computedHash": "5e6f820a1fff81984f85e3c62f109d72670bb44c4f4c4e477934b0e3aef65551"
+    },
+    "visualization-choice-reporting": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/visualization-choice-reporting/SKILL.md",
+      "computedHash": "00945d749f1918af60dbebf54a21854a64d45bf823751ab71706b53620e35455"
+    },
+    "volleyball-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/volleyball-data/SKILL.md",
+      "computedHash": "a3aadd6a3f489d27715ff8045d3841cfa4d738f2bf2efb3ec330cbed9db6e038"
+    },
+    "wnba-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/wnba-data/SKILL.md",
+      "computedHash": "dd75ecc5199767c9b44dd833c7932d34d0f5fe79ffdfdadf9665b12bfee9cf04"
+    },
+    "worked-example-walkthrough": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/worked-example-walkthrough/SKILL.md",
+      "computedHash": "5a86d067aebf03e57b06ee14be3621aa87438eb3e259de47e9e7bbc9193bc498"
+    },
+    "writing-pre-publish-checklist": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/writing-pre-publish-checklist/SKILL.md",
+      "computedHash": "430b2ad6aa470ed4dadbbfdfb50fa2f6ff9bb51c039f7adcdff17e3681167cef"
+    },
+    "writing-revision": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/writing-revision/SKILL.md",
+      "computedHash": "8685c8b43174853991b385f75b759cdf021312625ee761cc377e584461c7ffb4"
+    },
+    "writing-stickiness": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/writing-stickiness/SKILL.md",
+      "computedHash": "fab1deb254d805ab9acfb40625d16e48a29335bb7f8a1b9bf78b7877ef37ee67"
+    },
+    "writing-structure-planner": {
+      "source": "lyndonkl/claude",
+      "sourceType": "github",
+      "skillPath": "skills/writing-structure-planner/SKILL.md",
+      "computedHash": "f31abb1f91be0315414b6e270ec88ebacd776afd8ea086da8d95f9482eb4ed7c"
+    },
+    "xctf-data": {
+      "source": "machina-sports/sports-skills",
+      "sourceType": "github",
+      "skillPath": "skills/xctf-data/SKILL.md",
+      "computedHash": "068ca68294a98b142e3ab79f06d0c4df30aa0c83117b18e9c66f26d93000cfee"
+    }
+  }
+}

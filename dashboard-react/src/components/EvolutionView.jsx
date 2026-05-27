@@ -1,4 +1,5 @@
-import { Activity, BookOpen, GitBranch, ShieldCheck } from 'lucide-react';
+import { useState } from 'react';
+import { Activity, BookOpen, GitBranch, ShieldCheck, ChevronDown, ChevronUp } from 'lucide-react';
 import PredictionBadge from './PredictionBadge.jsx';
 import SummaryCard from './SummaryCard.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
@@ -31,28 +32,40 @@ function Section({ title, children }) {
 function EmptyRow({ colSpan = 6 }) {
   return (
     <tr>
-      <td className="px-3 py-4 text-sm text-slate-500" colSpan={colSpan}>No records yet.</td>
+      <td className="px-3 py-4 text-sm text-ink/50" colSpan={colSpan}>No records yet.</td>
     </tr>
   );
 }
 
 function Details({ payload }) {
+  const [open, setOpen] = useState(false);
   return (
-    <details className="text-xs text-slate-500">
-      <summary className="cursor-pointer font-semibold text-slate-600">Details</summary>
-      <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-slate-50 p-3 text-[11px] leading-relaxed">
-        {JSON.stringify(payload, null, 2)}
-      </pre>
-    </details>
+    <div className="text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="inline-flex items-center gap-1 font-semibold text-accent-blue hover:text-accent-blue/80 transition-colors cursor-pointer"
+      >
+        {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        {open ? 'Hide' : 'Details'}
+      </button>
+      {open && (
+        <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-paper p-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words">
+          {JSON.stringify(payload, null, 2)}
+        </pre>
+      )}
+    </div>
   );
 }
 
 function Trajectories({ rows }) {
+  const [expandedRow, setExpandedRow] = useState(null);
+
   return (
     <Section title="Recent Trajectories">
       <div className="overflow-x-auto">
         <table className="min-w-full text-left text-sm">
-          <thead className="text-xs uppercase text-slate-500">
+          <thead className="text-xs uppercase text-ink/50">
             <tr>
               <th className="px-3 py-2">Game</th>
               <th className="px-3 py-2">Market</th>
@@ -62,19 +75,46 @@ function Trajectories({ rows }) {
               <th className="px-3 py-2">Details</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows?.length ? rows.map((row) => (
-              <tr key={`${row.game_id}-${row.timestamp}`}>
-                <td className="px-3 py-3 font-semibold text-ink">{text(row.matchup)}</td>
-                <td className="px-3 py-3">{text(row.market)}</td>
-                <td className="px-3 py-3">{text(row.prediction?.final_lean || row.prediction?.lean)}</td>
-                <td className="px-3 py-3"><PredictionBadge>{text(row.prediction?.confidence)}</PredictionBadge></td>
-                <td className="px-3 py-3 text-xs text-slate-500">{text(row.prompt_version)} / {text(row.weight_version)}</td>
-                <td className="px-3 py-3"><Details payload={{ tools: row.tool_usage, data_quality: row.input_snapshot?.data_quality, risk_factors: row.risk_factors }} /></td>
-              </tr>
-            )) : <EmptyRow />}
+          <tbody className="divide-y divide-ink">
+            {rows?.length ? rows.map((row) => {
+              const rowKey = `${row.game_id}-${row.timestamp}`;
+              const isExpanded = expandedRow === rowKey;
+              const payload = { tools: row.tool_usage, data_quality: row.input_snapshot?.data_quality, risk_factors: row.risk_factors };
+              return (
+                <tr key={rowKey} className={isExpanded ? 'bg-cream' : ''}>
+                  <td className="px-3 py-3 font-semibold text-ink">{text(row.matchup)}</td>
+                  <td className="px-3 py-3">{text(row.market)}</td>
+                  <td className="px-3 py-3">{text(row.prediction?.final_lean || row.prediction?.lean)}</td>
+                  <td className="px-3 py-3"><PredictionBadge>{text(row.prediction?.confidence)}</PredictionBadge></td>
+                  <td className="px-3 py-3 text-xs text-ink/50">{text(row.prompt_version)} / {text(row.weight_version)}</td>
+                  <td className="px-3 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedRow(isExpanded ? null : rowKey)}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-accent-blue hover:text-accent-blue/80 transition-colors cursor-pointer"
+                    >
+                      {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                      {isExpanded ? 'Hide' : 'Details'}
+                    </button>
+                  </td>
+                </tr>
+              );
+            }) : <EmptyRow />}
           </tbody>
         </table>
+        {expandedRow && rows?.length > 0 && (() => {
+          const row = rows.find((r) => `${r.game_id}-${r.timestamp}` === expandedRow);
+          if (!row) return null;
+          const payload = { tools: row.tool_usage, data_quality: row.input_snapshot?.data_quality, risk_factors: row.risk_factors };
+          return (
+            <div className="mt-2 rounded-md border border-ink bg-paper p-4">
+              <p className="text-xs font-semibold text-ink/70 mb-2">Trajectory Details — {text(row.matchup)}</p>
+              <pre className="max-h-64 overflow-auto text-[11px] leading-relaxed text-ink/80 whitespace-pre-wrap break-words">
+                {JSON.stringify(payload, null, 2)}
+              </pre>
+            </div>
+          );
+        })()}
       </div>
     </Section>
   );
@@ -88,14 +128,14 @@ function Lessons({ rows }) {
           <div key={row.lesson_id} className="rounded-md border border-line p-4">
             <div className="flex flex-wrap items-center gap-2">
               <PredictionBadge tone={row.result === 'win' ? 'green' : row.result === 'loss' ? 'red' : 'gray'}>{text(row.result)}</PredictionBadge>
-              <span className="text-xs font-semibold uppercase text-slate-500">{text(row.market)}</span>
-              <span className="text-xs text-slate-400">{text(row.lesson_type)}</span>
+              <span className="text-xs font-semibold uppercase text-ink/50">{text(row.market)}</span>
+              <span className="text-xs text-ink/60">{text(row.lesson_type)}</span>
             </div>
             <p className="mt-3 text-sm font-semibold text-ink">{text(row.game_id)}</p>
-            <p className="mt-2 text-sm text-slate-600">{text(row.summary)}</p>
-            <p className="mt-2 text-xs text-slate-500">{text(row.suggested_adjustment)}</p>
+            <p className="mt-2 text-sm text-ink/70">{text(row.summary)}</p>
+            <p className="mt-2 text-xs text-ink/50">{text(row.suggested_adjustment)}</p>
           </div>
-        )) : <p className="text-sm text-slate-500">No lessons yet.</p>}
+        )) : <p className="text-sm text-ink/50">No lessons yet.</p>}
       </div>
     </Section>
   );
@@ -109,11 +149,11 @@ function Losses({ rows }) {
           <div key={row.loss_id} className="flex flex-col gap-2 rounded-md border border-line p-4 md:flex-row md:items-start md:justify-between">
             <div>
               <p className="text-sm font-semibold text-ink">{text(row.loss_summary)}</p>
-              <p className="mt-1 text-xs text-slate-500">{text(row.market)} / {text(row.affected_factor)}</p>
+              <p className="mt-1 text-xs text-ink/50">{text(row.market)} / {text(row.affected_factor)}</p>
             </div>
             <PredictionBadge tone={statusTone(row.severity)}>{text(row.severity)}</PredictionBadge>
           </div>
-        )) : <p className="text-sm text-slate-500">No language losses yet.</p>}
+        )) : <p className="text-sm text-ink/50">No language losses yet.</p>}
       </div>
     </Section>
   );
@@ -127,9 +167,9 @@ function Gradients({ rows }) {
           <div key={row.gradient_id} className="rounded-md border border-line p-4">
             <p className="text-xs font-semibold uppercase text-blue-700">{text(row.target)}</p>
             <p className="mt-2 text-sm font-semibold text-ink">{text(row.gradient)}</p>
-            <p className="mt-2 text-xs text-slate-500">{text(row.reason)}</p>
+            <p className="mt-2 text-xs text-ink/50">{text(row.reason)}</p>
           </div>
-        )) : <p className="text-sm text-slate-500">No gradients yet.</p>}
+        )) : <p className="text-sm text-ink/50">No gradients yet.</p>}
       </div>
     </Section>
   );
@@ -143,12 +183,12 @@ function Candidates({ rows }) {
           <div key={row.candidate_id} className="rounded-md border border-line p-4">
             <div className="flex flex-wrap items-center gap-2">
               <PredictionBadge tone={statusTone(row.promotion_status || row.status)}>{text(row.promotion_status || row.status)}</PredictionBadge>
-              <span className="text-xs font-semibold uppercase text-slate-500">{text(row.type)}</span>
+              <span className="text-xs font-semibold uppercase text-ink/50">{text(row.type)}</span>
             </div>
             <p className="mt-2 text-sm font-semibold text-ink">{text(row.update || row.rule)}</p>
-            <p className="mt-2 text-xs text-slate-500">Backtest: {text(row.backtest_status)} / Sources: {text(row.source_losses)}</p>
+            <p className="mt-2 text-xs text-ink/50">Backtest: {text(row.backtest_status)} / Sources: {text(row.source_losses)}</p>
           </div>
-        )) : <p className="text-sm text-slate-500">No candidates yet.</p>}
+        )) : <p className="text-sm text-ink/50">No candidates yet.</p>}
       </div>
     </Section>
   );
@@ -162,12 +202,12 @@ function ApprovedChanges({ rows }) {
           <div key={`${row.date}-${index}`} className="rounded-md border border-line p-4">
             <div className="flex flex-wrap items-center gap-2">
               <PredictionBadge tone="green">{text(row.decision?.status, 'approved')}</PredictionBadge>
-              <span className="text-xs text-slate-500">{text(row.date)}</span>
+              <span className="text-xs text-ink/50">{text(row.date)}</span>
             </div>
             <p className="mt-2 text-sm font-semibold text-ink">{text(row.candidate?.update || row.candidate?.rule || row.candidate?.candidate_id)}</p>
-            <p className="mt-2 text-xs text-slate-500">Rollback supported: {row.rollback_supported ? 'yes' : 'no'}</p>
+            <p className="mt-2 text-xs text-ink/50">Rollback supported: {row.rollback_supported ? 'yes' : 'no'}</p>
           </div>
-        )) : <p className="text-sm text-slate-500">No approved changes yet.</p>}
+        )) : <p className="text-sm text-ink/50">No approved changes yet.</p>}
       </div>
     </Section>
   );
@@ -182,7 +222,7 @@ function RiskWarnings({ rows }) {
             <p className="text-sm font-semibold text-amber-900">{text(row.pattern)}</p>
             <p className="mt-1 text-sm text-amber-800">{text(row.note)}</p>
           </div>
-        )) : <p className="text-sm text-slate-500">No repeated weakness patterns detected yet.</p>}
+        )) : <p className="text-sm text-ink/50">No repeated weakness patterns detected yet.</p>}
       </div>
     </Section>
   );
@@ -199,7 +239,7 @@ function AuditDiagnostics({ audit }) {
     <Section title="Audit Diagnostics">
       <div className="grid gap-4 lg:grid-cols-2">
         <div>
-          <p className="text-xs font-semibold uppercase text-slate-500">Snapshot</p>
+          <p className="text-xs font-semibold uppercase text-ink/50">Snapshot</p>
           <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
             <span>Evaluated: {summary.evaluated || 0}</span>
             <span>Accuracy: {summary.accuracy || 0}%</span>
@@ -208,43 +248,43 @@ function AuditDiagnostics({ audit }) {
           </div>
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase text-slate-500">Candidate Priority</p>
+          <p className="text-xs font-semibold uppercase text-ink/50">Candidate Priority</p>
           <div className="mt-2 space-y-2">
             {candidates.length ? candidates.slice(0, 3).map((row) => (
-              <p key={row.candidate_id} className="text-sm text-slate-600">
+              <p key={row.candidate_id} className="text-sm text-ink/70">
                 <span className="font-semibold text-ink">{text(row.type)}</span> score {text(row.priority_score)} / {text(row.backtest_status)}
               </p>
-            )) : <p className="text-sm text-slate-500">No prioritized candidates yet.</p>}
+            )) : <p className="text-sm text-ink/50">No prioritized candidates yet.</p>}
           </div>
         </div>
       </div>
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <div>
-          <p className="text-xs font-semibold uppercase text-slate-500">Weakest Segments</p>
+          <p className="text-xs font-semibold uppercase text-ink/50">Weakest Segments</p>
           <div className="mt-2 space-y-2">
             {weakest.length ? weakest.slice(0, 4).map((row) => (
-              <p key={row.segment} className="text-sm text-slate-600">
+              <p key={row.segment} className="text-sm text-ink/70">
                 <span className="font-semibold text-ink">{text(row.segment)}</span>: {row.wins || 0}-{row.losses || 0}, {row.loss_rate || 0}% loss
               </p>
-            )) : <p className="text-sm text-slate-500">Not enough segment sample yet.</p>}
+            )) : <p className="text-sm text-ink/50">Not enough segment sample yet.</p>}
           </div>
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase text-slate-500">Root Causes</p>
+          <p className="text-xs font-semibold uppercase text-ink/50">Root Causes</p>
           <div className="mt-2 space-y-2">
             {causes.length ? causes.slice(0, 4).map((row) => (
-              <p key={row.loss_type} className="text-sm text-slate-600">
+              <p key={row.loss_type} className="text-sm text-ink/70">
                 <span className="font-semibold text-ink">{text(row.loss_type)}</span>: {row.count || 0}x / {text(row.primary_factor)}
               </p>
-            )) : <p className="text-sm text-slate-500">No language losses yet.</p>}
+            )) : <p className="text-sm text-ink/50">No language losses yet.</p>}
           </div>
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase text-slate-500">Top Fixes</p>
+          <p className="text-xs font-semibold uppercase text-ink/50">Top Fixes</p>
           <div className="mt-2 space-y-2">
             {recommendations.length ? recommendations.slice(0, 3).map((row) => (
-              <p key={row.recommendation} className="text-sm text-slate-600">{text(row.recommendation)}</p>
-            )) : <p className="text-sm text-slate-500">Run /evolve after settled games to build fixes.</p>}
+              <p key={row.recommendation} className="text-sm text-ink/70">{text(row.recommendation)}</p>
+            )) : <p className="text-sm text-ink/50">Run /evolve after settled games to build fixes.</p>}
           </div>
         </div>
       </div>

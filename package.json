@@ -9,7 +9,7 @@
     "start": "node scripts/start_all.mjs",
     "bot": "node src/index.js",
     "predashboard": "node scripts/prepare_start.js",
-    "dashboard": "node scripts/run_control_center.mjs",
+    "dashboard": "node scripts/start_all.mjs",
     "dashboard:legacy": "node src/dashboard.js",
     "dashboard:api": "node scripts/run_api.mjs",
     "dashboard:web": "npm --prefix dashboard-react run dev -- --host 0.0.0.0 --port 5173",

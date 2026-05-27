@@ -7,10 +7,10 @@ function SignalMeter({ value }) {
   const color = v >= 60 ? 'bg-accent-green' : v <= 40 ? 'bg-accent-red' : 'bg-accent-yellow';
   return (
     <div className="flex items-center gap-2">
-      <div className="w-20 h-2 rounded-full bg-white/10 overflow-hidden">
-        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${v}%` }} />
+      <div className="h-3 w-20 overflow-hidden rounded-full border-2 border-ink bg-white">
+        <div className={`h-full ${color} transition-all`} style={{ width: `${v}%` }} />
       </div>
-      <span className="text-[11px] text-slate-400">{v}%</span>
+      <span className="text-[11px] font-black text-ink">{v}%</span>
     </div>
   );
 }
@@ -36,12 +36,12 @@ export default function YrfiSection({ games = [] }) {
       <CardHeader>
         <div>
           <CardTitle>YRFI / NRFI Analysis</CardTitle>
-          <p className="text-xs text-slate-400 mt-1">Will there be a run in the 1st inning? Model analyzes team scoring rates, pitcher vulnerability, leadoff OBP, and venue history.</p>
+          <p className="mt-1 text-xs font-semibold text-ink/70">Will there be a run in the 1st inning? Model analyzes team scoring rates, pitcher vulnerability, leadoff OBP, and venue history.</p>
         </div>
       </CardHeader>
       <CardContent>
         {rows.length === 0 ? (
-          <div className="text-center py-8 text-sm text-slate-400">No YRFI data available.</div>
+          <div className="py-8 text-center text-sm font-black uppercase text-ink/70">No YRFI data available.</div>
         ) : (
           <div className="grid gap-3">
             {rows.map((game) => {
@@ -49,31 +49,31 @@ export default function YrfiSection({ games = [] }) {
               const isNrfi = game.lean === 'NRFI' || game.lean === 'NO';
               const isNoBet = !isYrfi && !isNrfi;
               return (
-                <div key={game.id} className="p-4 rounded-lg bg-white/[0.02] border border-white/[0.06] hover:border-white/[0.1] transition-colors">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div key={game.id} className="rounded-lg border-3 border-ink bg-paper p-4 shadow-neo-sm transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:bg-cream hover:shadow-neo">
+                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
                     <div className="flex items-center gap-3">
-                      <span className="text-sm font-semibold text-white">{game.matchup}</span>
+                      <span className="text-sm font-black text-ink">{game.matchup}</span>
                       <Badge variant={isYrfi ? 'success' : isNrfi ? 'default' : 'nobet'}>
-                        {isYrfi && <Zap className="h-3 w-3 mr-1" />}
-                        {isNrfi && <ShieldCheck className="h-3 w-3 mr-1" />}
-                        {isNoBet && <AlertCircle className="h-3 w-3 mr-1" />}
+                        {isYrfi && <Zap className="mr-1 h-3 w-3" />}
+                        {isNrfi && <ShieldCheck className="mr-1 h-3 w-3" />}
+                        {isNoBet && <AlertCircle className="mr-1 h-3 w-3" />}
                         {game.lean}
                       </Badge>
                     </div>
                     <SignalMeter value={game.signal} />
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+                  <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase">YRFI Prob</p>
-                      <p className="text-xs text-slate-300">{game.yrfiProb.toFixed(1)}%</p>
+                      <p className="text-[10px] font-black uppercase text-ink/60">YRFI Prob</p>
+                      <p className="text-xs font-black text-ink">{game.yrfiProb.toFixed(1)}%</p>
                     </div>
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase">Confidence</p>
-                      <p className={`text-xs capitalize ${game.confidence.toLowerCase() === 'high' ? 'text-accent-green' : game.confidence.toLowerCase() === 'medium' ? 'text-accent-blue' : 'text-accent-yellow'}`}>{game.confidence}</p>
+                      <p className="text-[10px] font-black uppercase text-ink/60">Confidence</p>
+                      <p className={`text-xs font-black capitalize ${game.confidence.toLowerCase() === 'high' ? 'text-green-700' : game.confidence.toLowerCase() === 'medium' ? 'text-blue-700' : 'text-yellow-700'}`}>{game.confidence}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase">Signal</p>
-                      <p className="text-xs text-slate-300">{game.signal >= 60 ? 'YRFI Lean' : game.signal <= 40 ? 'NRFI Lean' : 'Neutral'}</p>
+                      <p className="text-[10px] font-black uppercase text-ink/60">Signal</p>
+                      <p className="text-xs font-black text-ink">{game.signal >= 60 ? 'YRFI Lean' : game.signal <= 40 ? 'NRFI Lean' : 'Neutral'}</p>
                     </div>
                   </div>
                 </div>

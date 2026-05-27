@@ -1,14 +1,7 @@
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
-import { Badge } from './ui/badge.jsx';
 import { ArrowRight, CheckCircle, XCircle, Brain, RefreshCw } from 'lucide-react';
-
-const MOCK_MEMORY = [
-  { date: '2026-05-25', matchup: 'NYY @ TOR', pick: 'NYY', result: 'win', closingMove: '+3', brier: 0.18, roi: '+1.0', lesson: 'Cole dominance pattern confirmed vs weak lineups', status: 'Updated' },
-  { date: '2026-05-25', matchup: 'LAD @ ARI', pick: 'LAD', result: 'loss', closingMove: '-5', brier: 0.35, roi: '-1.0', lesson: 'Desert heat + day game fatigue underweighted', status: 'Updated' },
-  { date: '2026-05-24', matchup: 'ATL @ MIA', pick: 'ATL', result: 'win', closingMove: '+1', brier: 0.12, roi: '+1.0', lesson: 'Bullpen fatigue signal correctly identified', status: 'Updated' },
-  { date: '2026-05-24', matchup: 'HOU @ SEA', pick: 'HOU', result: 'loss', closingMove: '-8', brier: 0.42, roi: '-1.0', lesson: 'Sharp money against pick was correct — respect closing line movement', status: 'Updated' },
-  { date: '2026-05-23', matchup: 'CLE @ DET', pick: 'CLE', result: 'win', closingMove: '0', brier: 0.21, roi: '+1.0', lesson: 'Pitcher rest days advantage validated', status: 'Updated' },
-];
+import { api } from '../api.js';
 
 const LOOP_STEPS = [
   { label: 'Pre-game Prediction', icon: Brain, active: false },
@@ -18,13 +11,42 @@ const LOOP_STEPS = [
   { label: 'Better Future Picks', icon: Brain, active: false },
 ];
 
+function brierScore(probability, correct) {
+  const p = (probability || 50) / 100;
+  const y = correct ? 1 : 0;
+  return ((p - y) ** 2).toFixed(2);
+}
+
 export default function MemorySection() {
+  const [log, setLog] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.performance()
+      .then((data) => {
+        setLog(data?.recent_log || []);
+        setStats(data?.overall || null);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
   return (
     <Card>
       <CardHeader>
-        <div>
-          <CardTitle>Memory & Learning Loop</CardTitle>
-          <p className="text-xs text-slate-400 mt-1">Post-game evaluation feeds back into the model for continuous improvement.</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle>Memory & Learning Loop</CardTitle>
+            <p className="mt-1 text-xs font-semibold text-ink/70">Post-game evaluation feeds back into the model for continuous improvement.</p>
+          </div>
+          {stats && (
+            <div className="flex items-center gap-3 text-xs">
+              <span className="text-accent-green font-semibold">{stats.wins || 0}W</span>
+              <span className="text-accent-red font-semibold">{stats.losses || 0}L</span>
+              <span className="font-black text-ink/70">{stats.win_rate || 0}% WR</span>
+            </div>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -32,55 +54,63 @@ export default function MemorySection() {
           {LOOP_STEPS.map((step, i) => (
             <div key={step.label} className="flex items-center gap-1">
               <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium whitespace-nowrap ${
-                step.active ? 'bg-accent-blue/15 text-accent-blue border border-accent-blue/30' : 'bg-white/[0.03] text-slate-400 border border-white/[0.06]'
+                step.active ? 'border-2 border-ink bg-accent-blue text-ink shadow-neo-sm' : 'border-2 border-ink bg-paper text-ink/60'
               }`}>
                 <step.icon className="h-3 w-3" />
                 {step.label}
               </div>
-              {i < LOOP_STEPS.length - 1 && <ArrowRight className="h-3 w-3 text-slate-600 flex-shrink-0" />}
+              {i < LOOP_STEPS.length - 1 && <ArrowRight className="h-3 w-3 flex-shrink-0 text-ink/50" />}
             </div>
           ))}
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.06]">
-                <th className="text-left px-3 py-2 text-[11px] font-medium text-slate-400 uppercase">Date</th>
-                <th className="text-left px-3 py-2 text-[11px] font-medium text-slate-400 uppercase">Matchup</th>
-                <th className="text-left px-3 py-2 text-[11px] font-medium text-slate-400 uppercase">Pick</th>
-                <th className="text-left px-3 py-2 text-[11px] font-medium text-slate-400 uppercase">Result</th>
-                <th className="text-right px-3 py-2 text-[11px] font-medium text-slate-400 uppercase hidden sm:table-cell">CLV</th>
-                <th className="text-right px-3 py-2 text-[11px] font-medium text-slate-400 uppercase hidden md:table-cell">Brier</th>
-                <th className="text-right px-3 py-2 text-[11px] font-medium text-slate-400 uppercase hidden md:table-cell">ROI</th>
-                <th className="text-left px-3 py-2 text-[11px] font-medium text-slate-400 uppercase hidden lg:table-cell">Lesson</th>
-              </tr>
-            </thead>
-            <tbody>
-              {MOCK_MEMORY.map((row, i) => (
-                <tr key={i} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
-                  <td className="px-3 py-2.5 text-xs text-slate-400">{row.date}</td>
-                  <td className="px-3 py-2.5 text-xs text-white font-medium">{row.matchup}</td>
-                  <td className="px-3 py-2.5 text-xs text-white">{row.pick}</td>
-                  <td className="px-3 py-2.5">
-                    {row.result === 'win'
-                      ? <span className="inline-flex items-center gap-1 text-xs text-accent-green"><CheckCircle className="h-3 w-3" />Win</span>
-                      : <span className="inline-flex items-center gap-1 text-xs text-accent-red"><XCircle className="h-3 w-3" />Loss</span>
-                    }
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-xs hidden sm:table-cell">
-                    <span className={row.closingMove.startsWith('+') ? 'text-accent-green' : row.closingMove.startsWith('-') ? 'text-accent-red' : 'text-slate-400'}>{row.closingMove}</span>
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-xs text-slate-300 hidden md:table-cell">{row.brier.toFixed(2)}</td>
-                  <td className="px-3 py-2.5 text-right text-xs hidden md:table-cell">
-                    <span className={row.roi.startsWith('+') ? 'text-accent-green' : 'text-accent-red'}>{row.roi}</span>
-                  </td>
-                  <td className="px-3 py-2.5 text-xs text-slate-400 max-w-[200px] truncate hidden lg:table-cell">{row.lesson}</td>
+        {loading ? (
+          <p className="py-8 text-center text-sm font-black uppercase text-ink/60">Loading learning history...</p>
+        ) : log.length === 0 ? (
+          <p className="py-8 text-center text-sm font-black uppercase text-ink/60">No learning data yet. Run /postgame after games settle to build the learning loop.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b-3 border-ink bg-accent-yellow">
+                  <th className="px-3 py-2 text-left text-[11px] font-black uppercase text-ink">Date</th>
+                  <th className="px-3 py-2 text-left text-[11px] font-black uppercase text-ink">Matchup</th>
+                  <th className="px-3 py-2 text-left text-[11px] font-black uppercase text-ink">Pick</th>
+                  <th className="px-3 py-2 text-left text-[11px] font-black uppercase text-ink">Result</th>
+                  <th className="hidden px-3 py-2 text-right text-[11px] font-black uppercase text-ink sm:table-cell">Edge</th>
+                  <th className="hidden px-3 py-2 text-right text-[11px] font-black uppercase text-ink md:table-cell">Brier</th>
+                  <th className="hidden px-3 py-2 text-left text-[11px] font-black uppercase text-ink md:table-cell">Confidence</th>
+                  <th className="hidden px-3 py-2 text-left text-[11px] font-black uppercase text-ink lg:table-cell">Lesson</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {log.map((row, i) => (
+                  <tr key={row.gamePk || i} className={`${i % 2 === 0 ? 'bg-paper' : 'bg-cream'} border-b-2 border-ink transition-colors hover:bg-accent-yellow`}>
+                    <td className="px-3 py-2.5 text-xs text-ink/60">{row.at ? new Date(row.at).toLocaleDateString() : '-'}</td>
+                    <td className="px-3 py-2.5 text-xs text-ink font-medium">{row.matchup || '-'}</td>
+                    <td className="px-3 py-2.5 text-xs text-ink">{row.pick || '-'}</td>
+                    <td className="px-3 py-2.5">
+                      {row.correct
+                        ? <span className="inline-flex items-center gap-1 text-xs text-accent-green"><CheckCircle className="h-3 w-3" />Win</span>
+                        : <span className="inline-flex items-center gap-1 text-xs text-accent-red"><XCircle className="h-3 w-3" />Loss</span>
+                      }
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-xs hidden sm:table-cell">
+                      <span className={row.edge > 0 ? 'text-accent-green' : row.edge < 0 ? 'text-accent-red' : 'text-ink/60'}>
+                        {row.edge != null ? `${row.edge > 0 ? '+' : ''}${Number(row.edge).toFixed(1)}%` : '-'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-xs text-ink/70 hidden md:table-cell">{brierScore(row.pickProbability, row.correct)}</td>
+                    <td className="px-3 py-2.5 text-xs hidden md:table-cell">
+                      <span className="capitalize text-ink/70">{row.confidence || '-'}</span>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-ink/60 max-w-[250px] truncate hidden lg:table-cell">{row.note || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -13,13 +13,13 @@ export default function AnalystAgent({ game }) {
                 <Brain className="h-4 w-4 text-accent-purple" />
                 Analyst Agent
               </CardTitle>
-              <p className="text-xs text-slate-400 mt-1">AI reasoning terminal — mlb-analyst-v1.1</p>
+              <p className="text-xs text-ink/60 mt-1">AI reasoning terminal — mlb-analyst-v1.1</p>
             </div>
             <Badge variant="success">Active</Badge>
           </div>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-center py-12 text-slate-500">
+          <div className="flex items-center justify-center py-12 text-ink/50">
             <Terminal className="h-5 w-5 mr-2" />
             <span className="text-sm">Select a game to view agent analysis</span>
           </div>
@@ -39,7 +39,7 @@ export default function AnalystAgent({ game }) {
     data_quality,
   } = game;
 
-  const predictedWinner = moneyline?.predicted_winner || 'N/A';
+  const predictedWinner = game?.predicted_winner || moneyline?.predicted_winner || 'N/A';
   const winProb = moneyline?.home_probability != null
     ? (moneyline.predicted_winner === home_team
         ? moneyline.home_probability
@@ -57,11 +57,11 @@ export default function AnalystAgent({ game }) {
   };
 
   const getDecisionColor = (d) => {
-    if (!d) return 'text-slate-400';
+    if (!d) return 'text-ink/60';
     const uc = String(d).toUpperCase();
-    if (uc.includes('VALUE')) return 'success';
-    if (uc.includes('LEAN')) return 'warning';
-    return 'danger';
+    if (uc.includes('VALUE')) return 'text-green-700';
+    if (uc.includes('LEAN')) return 'text-yellow-700';
+    return 'text-red-700';
   };
 
   const matchTitle = `${away_team} @ ${home_team}`;
@@ -75,7 +75,7 @@ export default function AnalystAgent({ game }) {
               <Brain className="h-4 w-4 text-accent-purple" />
               Analyst Agent
             </CardTitle>
-            <p className="text-xs text-slate-400 mt-1">AI reasoning terminal — mlb-analyst-v1.1</p>
+            <p className="text-xs text-ink/60 mt-1">AI reasoning terminal — mlb-analyst-v1.1</p>
           </div>
           <Badge variant="success">Active</Badge>
         </div>
@@ -83,7 +83,7 @@ export default function AnalystAgent({ game }) {
       <CardContent>
         <div className="space-y-4">
           {/* Agent Reasoning Terminal */}
-          <div className="p-4 rounded-lg bg-navy-900 border border-white/[0.06]">
+          <div className="rounded-lg border-3 border-ink bg-cream p-4 shadow-neo-sm">
             <div className="flex items-center gap-2 mb-3">
               <Terminal className="h-3.5 w-3.5 text-accent-blue" />
               <span className="text-xs font-semibold text-accent-blue">Agent Reasoning — {matchTitle}</span>
@@ -92,7 +92,7 @@ export default function AnalystAgent({ game }) {
               {/* Input */}
               <p>
                 <span className="highlight">[INPUT]</span>{' '}
-                Baseline model: {home_team} {moneyline?.home_probability != null ? (moneyline.home_probability * 100).toFixed(1) + '%' : 'N/A'} | {away_team} {moneyline?.away_probability != null ? (moneyline.away_probability * 100).toFixed(1) + '%' : 'N/A'}
+                Baseline model: {home_team} {moneyline?.home_probability != null ? moneyline.home_probability.toFixed(1) + '%' : 'N/A'} | {away_team} {moneyline?.away_probability != null ? moneyline.away_probability.toFixed(1) + '%' : 'N/A'}
               </p>
 
               {/* Pitcher context */}
@@ -147,14 +147,14 @@ export default function AnalystAgent({ game }) {
               <p>
                 <span className="highlight">[CONFIDENCE]</span>{' '}
                 {confidence}
-                {edge != null ? ` (edge ${(edge * 100).toFixed(1)}%)` : ''}
+                {edge != null ? ` (edge ${edge.toFixed(1)}%)` : ''}
               </p>
 
               {/* Data Quality warning */}
-              {data_quality && data_quality.score != null && data_quality.score < 0.7 && (
+              {data_quality && data_quality.score != null && data_quality.score < 70 && (
                 <p>
                   <span className="warning">[DATA QUALITY]</span>{' '}
-                  <span className="warning">Low data quality score ({(data_quality.score * 100).toFixed(0)}%) — results may be less reliable</span>
+                  <span className="warning">Low data quality score ({data_quality.score.toFixed(0)}%) — results may be less reliable</span>
                 </p>
               )}
             </div>
@@ -163,16 +163,16 @@ export default function AnalystAgent({ game }) {
           {/* Bottom cards */}
           <div className="grid sm:grid-cols-2 gap-3">
             {/* Final Pick */}
-            <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.06]">
+            <div className="rounded-lg border-2 border-ink bg-paper p-3 shadow-neo-sm">
               <div className="flex items-center gap-2 mb-2">
                 <CheckCircle className="h-3.5 w-3.5 text-accent-green" />
-                <span className="text-xs font-semibold text-white">Final Pick</span>
+                <span className="text-xs font-semibold text-ink">Final Pick</span>
               </div>
-              <p className="text-lg font-bold text-white">{predictedWinner}</p>
-              <p className="text-xs text-slate-400 mt-1">
+              <p className="text-lg font-bold text-ink">{predictedWinner}</p>
+              <p className="text-xs text-ink/60 mt-1">
                 Confidence: {confidence}
-                {edge != null ? ` | Edge: +${(edge * 100).toFixed(1)}%` : ''}
-                {winProb != null ? ` | Win Prob: ${(winProb * 100).toFixed(1)}%` : ''}
+                {edge != null ? ` | Edge: +${edge.toFixed(1)}%` : ''}
+                {winProb != null ? ` | Win Prob: ${winProb.toFixed(1)}%` : ''}
               </p>
               {decision && (
                 <p className={`text-xs mt-1 font-semibold ${getDecisionColor(decision)}`}>
@@ -182,26 +182,26 @@ export default function AnalystAgent({ game }) {
             </div>
 
             {/* Caution Notes */}
-            <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.06]">
+            <div className="rounded-lg border-2 border-ink bg-paper p-3 shadow-neo-sm">
               <div className="flex items-center gap-2 mb-2">
                 <AlertTriangle className="h-3.5 w-3.5 text-accent-yellow" />
-                <span className="text-xs font-semibold text-white">Caution Notes</span>
+                <span className="text-xs font-semibold text-ink">Caution Notes</span>
               </div>
               {risk_factors && risk_factors.length > 0 ? (
-                <ul className="text-xs text-slate-400 space-y-1">
+                <ul className="text-xs text-ink/60 space-y-1">
                   {risk_factors.map((risk, i) => (
                     <li key={i}>• {typeof risk === 'string' ? risk : risk.description || risk.text || JSON.stringify(risk)}</li>
                   ))}
                 </ul>
               ) : (
-                <p className="text-xs text-slate-500">No caution notes</p>
+                <p className="text-xs text-ink/50">No caution notes</p>
               )}
             </div>
           </div>
 
           {/* Educational note */}
-          <div className="p-3 rounded-lg bg-accent-blue/5 border border-accent-blue/20">
-            <p className="text-xs text-slate-400">
+          <div className="rounded-lg border-2 border-ink bg-accent-blue p-3 shadow-neo-sm">
+            <p className="text-xs text-ink/60">
               <span className="text-accent-blue font-semibold">Educational note:</span>{' '}
               This analysis combines sabermetric data with contextual factors. The model probability represents the estimated likelihood based on available data. Market inefficiencies create value when model probability significantly exceeds implied odds probability.
             </p>

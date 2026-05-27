@@ -21,11 +21,11 @@ function Toggle({ enabled, onChange }) {
   return (
     <button
       onClick={() => onChange(!enabled)}
-      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-        enabled ? 'bg-accent-green' : 'bg-slate-600'
+      className={`relative inline-flex h-6 w-10 items-center rounded-full border-2 border-ink transition-colors ${
+        enabled ? 'bg-accent-green' : 'bg-paper'
       }`}
     >
-      <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+      <span className={`inline-block h-4 w-4 rounded-full border-2 border-ink bg-white transition-transform ${
         enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
       }`} />
     </button>
@@ -86,10 +86,10 @@ export default function SettingsSection() {
         <div className="flex items-center justify-between">
           <div>
             <CardTitle className="flex items-center gap-2">
-              <Settings className="h-4 w-4 text-slate-400" />
+              <Settings className="h-4 w-4 text-ink" />
               Settings
             </CardTitle>
-            <p className="text-xs text-slate-400 mt-1">Configuration and integration status.</p>
+            <p className="mt-1 text-xs font-semibold text-ink/70">Configuration and integration status.</p>
           </div>
           <Button size="sm" variant={saved ? 'success' : 'secondary'} onClick={handleSave}>
             {saved ? <><Check className="h-3 w-3" /> Saved</> : <><Save className="h-3 w-3" /> Save Changes</>}
@@ -97,22 +97,22 @@ export default function SettingsSection() {
         </div>
       </CardHeader>
       <CardContent>
-        {loading && <p className="text-xs text-slate-400 py-4">Loading settings...</p>}
+        {loading && <p className="py-4 text-xs font-black uppercase text-ink/70">Loading settings...</p>}
         {error && (
-          <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
+          <div className="mb-4 rounded-lg border-3 border-ink bg-accent-red p-3 text-xs font-black text-ink shadow-neo-sm">
             {error}
           </div>
         )}
         <div className="space-y-6">
           <div>
-            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">General</h4>
+            <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">General</h4>
             <div className="space-y-2">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+              <div className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                 <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
-                    <Globe className="h-4 w-4 text-slate-400" />
+                  <div className="h-8 w-8 rounded-lg border-2 border-ink bg-accent-blue flex items-center justify-center shadow-neo-sm">
+                    <Globe className="h-4 w-4 text-ink/60" />
                   </div>
-                  <span className="text-sm text-white">Timezone</span>
+                  <span className="text-sm text-ink">Timezone</span>
                 </div>
                 <select
                   value={settings.timezone}
@@ -126,12 +126,12 @@ export default function SettingsSection() {
                   <option value="Asia/Jakarta">Asia/Jakarta</option>
                 </select>
               </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+              <div className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                 <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
-                    <Eye className="h-4 w-4 text-slate-400" />
+                  <div className="h-8 w-8 rounded-lg border-2 border-ink bg-accent-blue flex items-center justify-center shadow-neo-sm">
+                    <Eye className="h-4 w-4 text-ink/60" />
                   </div>
-                  <span className="text-sm text-white">Alert Detail</span>
+                  <span className="text-sm text-ink">Alert Detail</span>
                 </div>
                 <select
                   value={settings.alertDetail}
@@ -146,23 +146,23 @@ export default function SettingsSection() {
           </div>
 
           <div>
-            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Analyst Agent</h4>
+            <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">Analyst Agent</h4>
             <div className="space-y-2">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+              <div className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                 <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
-                    <Brain className="h-4 w-4 text-slate-400" />
+                  <div className="h-8 w-8 rounded-lg border-2 border-ink bg-accent-blue flex items-center justify-center shadow-neo-sm">
+                    <Brain className="h-4 w-4 text-ink/60" />
                   </div>
-                  <span className="text-sm text-white">Agent Enabled</span>
+                  <span className="text-sm text-ink">Agent Enabled</span>
                 </div>
                 <Toggle enabled={settings.agentEnabled} onChange={(v) => update('agentEnabled', v)} />
               </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+              <div className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                 <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
-                    <Database className="h-4 w-4 text-slate-400" />
+                  <div className="h-8 w-8 rounded-lg border-2 border-ink bg-accent-blue flex items-center justify-center shadow-neo-sm">
+                    <Database className="h-4 w-4 text-ink/60" />
                   </div>
-                  <span className="text-sm text-white">API Provider</span>
+                  <span className="text-sm text-ink">API Provider</span>
                 </div>
                 <input
                   value={settings.apiProvider}
@@ -170,12 +170,12 @@ export default function SettingsSection() {
                   className="glass-input px-3 py-1.5 text-xs w-32 text-right"
                 />
               </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+              <div className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                 <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
-                    <Brain className="h-4 w-4 text-slate-400" />
+                  <div className="h-8 w-8 rounded-lg border-2 border-ink bg-accent-blue flex items-center justify-center shadow-neo-sm">
+                    <Brain className="h-4 w-4 text-ink/60" />
                   </div>
-                  <span className="text-sm text-white">Model</span>
+                  <span className="text-sm text-ink">Model</span>
                 </div>
                 <input
                   value={settings.modelName}
@@ -187,32 +187,32 @@ export default function SettingsSection() {
           </div>
 
           <div>
-            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Alerts</h4>
+            <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">Alerts</h4>
             <div className="space-y-2">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+              <div className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                 <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
-                    <Bell className="h-4 w-4 text-slate-400" />
+                  <div className="h-8 w-8 rounded-lg border-2 border-ink bg-accent-blue flex items-center justify-center shadow-neo-sm">
+                    <Bell className="h-4 w-4 text-ink/60" />
                   </div>
-                  <span className="text-sm text-white">Auto Alerts</span>
+                  <span className="text-sm text-ink">Auto Alerts</span>
                 </div>
                 <Toggle enabled={settings.autoAlerts} onChange={(v) => update('autoAlerts', v)} />
               </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+              <div className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                 <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
-                    <Bell className="h-4 w-4 text-slate-400" />
+                  <div className="h-8 w-8 rounded-lg border-2 border-ink bg-accent-blue flex items-center justify-center shadow-neo-sm">
+                    <Bell className="h-4 w-4 text-ink/60" />
                   </div>
-                  <span className="text-sm text-white">Post-game Alerts</span>
+                  <span className="text-sm text-ink">Post-game Alerts</span>
                 </div>
                 <Toggle enabled={settings.postGameAlerts} onChange={(v) => update('postGameAlerts', v)} />
               </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+              <div className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                 <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
-                    <Bell className="h-4 w-4 text-slate-400" />
+                  <div className="h-8 w-8 rounded-lg border-2 border-ink bg-accent-blue flex items-center justify-center shadow-neo-sm">
+                    <Bell className="h-4 w-4 text-ink/60" />
                   </div>
-                  <span className="text-sm text-white">Line Movement Alerts</span>
+                  <span className="text-sm text-ink">Line Movement Alerts</span>
                 </div>
                 <Toggle enabled={settings.lineMovementAlerts} onChange={(v) => update('lineMovementAlerts', v)} />
               </div>
@@ -220,14 +220,14 @@ export default function SettingsSection() {
           </div>
 
           <div>
-            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Data Sources</h4>
+            <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">Data Sources</h4>
             <div className="space-y-2">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+              <div className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                 <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
-                    <Database className="h-4 w-4 text-slate-400" />
+                  <div className="h-8 w-8 rounded-lg border-2 border-ink bg-accent-blue flex items-center justify-center shadow-neo-sm">
+                    <Database className="h-4 w-4 text-ink/60" />
                   </div>
-                  <span className="text-sm text-white">Odds Provider</span>
+                  <span className="text-sm text-ink">Odds Provider</span>
                 </div>
                 <input
                   value={settings.oddsProvider}
@@ -235,12 +235,12 @@ export default function SettingsSection() {
                   className="glass-input px-3 py-1.5 text-xs w-32 text-right"
                 />
               </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+              <div className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                 <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
-                    <Shield className="h-4 w-4 text-slate-400" />
+                  <div className="h-8 w-8 rounded-lg border-2 border-ink bg-accent-blue flex items-center justify-center shadow-neo-sm">
+                    <Shield className="h-4 w-4 text-ink/60" />
                   </div>
-                  <span className="text-sm text-white">Dashboard API Token</span>
+                  <span className="text-sm text-ink">Dashboard API Token</span>
                 </div>
                 <input
                   type="password"

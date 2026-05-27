@@ -6,7 +6,7 @@ const STATUS_CONFIG = {
   CONNECTED: { icon: CheckCircle, color: 'text-accent-green', bg: 'bg-accent-green/10', variant: 'success' },
   PARTIAL: { icon: AlertCircle, color: 'text-accent-yellow', bg: 'bg-accent-yellow/10', variant: 'warning' },
   MISSING: { icon: XCircle, color: 'text-accent-red', bg: 'bg-accent-red/10', variant: 'danger' },
-  UNAVAILABLE: { icon: MinusCircle, color: 'text-slate-400', bg: 'bg-slate-500/10', variant: 'neutral' },
+  UNAVAILABLE: { icon: MinusCircle, color: 'text-ink/60', bg: 'bg-paper', variant: 'neutral' },
 };
 
 const DATA_SOURCES = [
@@ -32,11 +32,11 @@ export default function DataQualitySection() {
         <div className="flex items-center justify-between">
           <div>
             <CardTitle>Data Quality & Reliability</CardTitle>
-            <p className="text-xs text-slate-400 mt-1">Real-time status of all data sources feeding the prediction engine.</p>
+            <p className="mt-1 text-xs font-semibold text-ink/70">Real-time status of all data sources feeding the prediction engine.</p>
           </div>
           <div className="text-right">
-            <p className="text-lg font-bold text-white">{connected}/{total}</p>
-            <p className="text-[10px] text-slate-400">Sources Active</p>
+            <p className="text-lg font-black text-ink">{connected}/{total}</p>
+            <p className="text-[10px] font-black uppercase text-ink/60">Sources Active</p>
           </div>
         </div>
       </CardHeader>
@@ -46,20 +46,20 @@ export default function DataQualitySection() {
             const config = STATUS_CONFIG[source.status];
             const Icon = config.icon;
             return (
-              <div key={source.name} className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/[0.04] hover:border-white/[0.08] transition-colors">
+              <div key={source.name} className="flex items-center justify-between rounded-lg border-2 border-ink bg-paper p-3 shadow-neo-sm transition-colors hover:bg-cream">
                 <div className="flex items-center gap-3">
-                  <div className={`h-8 w-8 rounded-lg ${config.bg} flex items-center justify-center`}>
+                  <div className={`flex h-8 w-8 items-center justify-center rounded-lg border-2 border-ink ${config.bg} shadow-neo-sm`}>
                     <Icon className={`h-4 w-4 ${config.color}`} />
                   </div>
                   <div>
-                    <p className="text-sm font-medium text-white">{source.name}</p>
-                    <p className="text-[11px] text-slate-500">{source.provider}</p>
+                    <p className="text-sm font-black text-ink">{source.name}</p>
+                    <p className="text-[11px] font-semibold text-ink/50">{source.provider}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
                   <div className="text-right hidden sm:block">
-                    <p className="text-[11px] text-slate-400">{source.latency}</p>
-                    <p className="text-[10px] text-slate-500">{source.lastUpdate}</p>
+                    <p className="text-[11px] font-black text-ink/60">{source.latency}</p>
+                    <p className="text-[10px] font-semibold text-ink/50">{source.lastUpdate}</p>
                   </div>
                   <Badge variant={config.variant}>{source.status}</Badge>
                 </div>

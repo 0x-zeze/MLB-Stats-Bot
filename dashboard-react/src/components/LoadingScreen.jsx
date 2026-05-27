@@ -10,21 +10,21 @@ export default function LoadingScreen() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-navy-950 flex items-center justify-center">
-      <div className="text-center animate-fade-in">
-        <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-accent-red/20 border border-accent-red/30 mb-6">
-          <Activity className="h-8 w-8 text-accent-red animate-pulse-slow" />
+    <div className="flex min-h-screen items-center justify-center bg-cream">
+      <div className="animate-fade-in rounded-xl border-4 border-ink bg-paper p-8 text-center shadow-neo-lg">
+        <div className="mb-6 inline-flex h-16 w-16 items-center justify-center rounded-2xl border-3 border-ink bg-accent-red shadow-neo">
+          <Activity className="h-8 w-8 animate-pulse-slow text-ink" />
         </div>
-        <h1 className="text-xl font-bold text-white mb-2">MLB Stats Bot</h1>
-        <p className="text-sm text-slate-400 mb-6">AI-powered MLB slate analysis, predictions, alerts, and post-game learning.</p>
+        <h1 className="mb-2 text-xl font-black uppercase text-ink">MLB Stats Bot</h1>
+        <p className="mb-6 text-sm font-semibold text-ink/70">AI-powered MLB slate analysis, predictions, alerts, and post-game learning.</p>
         <div className="flex items-center justify-center gap-2">
           <div className="h-1.5 w-1.5 rounded-full bg-accent-blue animate-pulse" style={{ animationDelay: '0ms' }} />
           <div className="h-1.5 w-1.5 rounded-full bg-accent-blue animate-pulse" style={{ animationDelay: '200ms' }} />
           <div className="h-1.5 w-1.5 rounded-full bg-accent-blue animate-pulse" style={{ animationDelay: '400ms' }} />
         </div>
-        <p className="text-xs text-slate-500 mt-4">Loading today's slate...</p>
+        <p className="mt-4 text-xs font-black uppercase text-ink/60">Loading today's slate...</p>
         {showRetry && (
-          <p className="text-xs text-slate-500 mt-3">
+          <p className="mt-3 text-xs font-semibold text-ink/60">
             Taking longer than expected. Make sure the API server is running.
           </p>
         )}
