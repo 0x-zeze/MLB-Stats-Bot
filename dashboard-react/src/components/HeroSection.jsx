@@ -27,7 +27,7 @@ export default function HeroSection({ onRefresh, onTabChange, summary = {}, load
 
       <div className="mb-6 flex flex-wrap gap-3">
         <Button variant="primary" size="sm" onClick={onRefresh}>Refresh Slate</Button>
-        <Button size="sm" onClick={() => onTabChange('predictions')}>Run Analysis</Button>
+        <Button size="sm" onClick={onRefresh} disabled={loading}>{loading ? 'Running...' : 'Run Analysis'}</Button>
         <Button variant="secondary" size="sm" onClick={() => onTabChange('telegram')}>Open Telegram Bot</Button>
         <Button variant="secondary" size="sm" onClick={() => onTabChange('backtest')}>View Backtest</Button>
       </div>

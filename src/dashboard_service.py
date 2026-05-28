@@ -21,10 +21,12 @@ from typing import Any
 from .backtest import run_backtest
 from .evaluate import (
     calculate_metrics,
+    calibration_rows,
     load_prediction_log,
     performance_by_confidence,
     performance_by_market_total,
 )
+from .calibration import calibration_table
 from .prediction_pipeline import run_prediction_pipeline
 from .utils import data_path, safe_float
 
@@ -392,7 +394,7 @@ def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> d
             "home_probability": _as_percent(game.get("probabilities", {}).get("home")),
             "model_probability": _as_percent(game.get("pick", {}).get("probability")),
             "market_implied_probability": None,
-            "edge": None,
+            "edge": _as_edge_pct(total_runs.get("modelEdge")),
             "current_odds": "Unavailable",
             "confidence": _status(game.get("pick", {}).get("confidence"), "Low").title(),
         },
@@ -481,7 +483,7 @@ def _sample_game_to_dashboard(game_id: int, pipeline: dict[str, Any], settings: 
     market_line = safe_float(totals.get("market_total"), 8.5)
     over = totals.get("over_probabilities") or {}
     under = totals.get("under_probabilities") or {}
-    line_key = market_line if market_line in over else min(over.keys(), key=lambda item: abs(item - market_line)) if over else 8.5
+    line_key = market_line if market_line in over else min(over.keys(), key=lambda item: abs(float(item) - market_line)) if over else 8.5
     projected_total = safe_float(totals.get("projected_total_runs"), 0.0)
     dashboard_game = {
         "id": str(game_id),
@@ -785,47 +787,173 @@ def get_evolution_dashboard(limit: int = 20) -> dict[str, Any]:
     return build_evolution_summary(limit=limit)
 
 
-def run_dashboard_backtest(params: dict[str, Any]) -> dict[str, Any]:
-    """Run a sample backtest and shape it for the dashboard."""
-    market = params.get("market_type") or params.get("market") or "moneyline"
-    rows = run_backtest(
+def _json_tail(payload: dict[str, Any], limit: int = 2000) -> str:
+    """Return a compact dashboard-friendly JSON output snippet."""
+    text = json.dumps(payload, indent=2, default=str)
+    return text[-limit:] if len(text) > limit else text
+
+
+def run_evolve_cycle() -> dict[str, Any]:
+    """Run the full evolution cycle and return the result."""
+    try:
+        from .evolution.evolution_engine import run_evolution_cycle as run_engine_evolution_cycle
+
+        result = run_engine_evolution_cycle()
+        return {
+            **result,
+            "status": "ok",
+            "result": result,
+            "output": _json_tail(result),
+            "detail": "",
+        }
+    except Exception as exc:
+        return {"status": "error", "output": "", "detail": str(exc)}
+
+
+def run_audit_cycle() -> dict[str, Any]:
+    """Run ingest + audit and return the result."""
+    try:
+        from .evolution.evolution_audit import build_evolution_audit
+        from .evolution.evolution_engine import ingest_bot_history
+
+        learning_ingest = ingest_bot_history()
+        audit = build_evolution_audit(
+            min_segment_sample=3,
+            candidate_limit=10,
+            persist=True,
+            apply_safe=True,
+            update_memory=True,
+        )
+        output = {
+            "learning_ingest": learning_ingest,
+            "audit": audit,
+        }
+        return {
+            **audit,
+            "status": "ok",
+            "learning_ingest": learning_ingest,
+            "result": audit,
+            "output": _json_tail(output),
+            "detail": "",
+        }
+    except Exception as exc:
+        return {"status": "error", "output": "", "detail": str(exc)}
+
+
+def _dashboard_backtest_rows(params: dict[str, Any], market: str) -> list[dict[str, Any]]:
+    return run_backtest(
         season=int(params["season"]) if params.get("season") else None,
         start_date=params.get("start_date") or None,
         end_date=params.get("end_date") or None,
         market=market,
     )
-    if not rows:
-        return load_mock_dashboard().get("backtest", {})
-    metrics = calculate_metrics(rows)
+
+
+def _camel_backtest_summary(metrics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "totalBets": metrics.get("bets", 0),
+        "winRate": round(_as_percent(metrics.get("win_rate")) or 0.0, 1),
+        "roi": round(_as_edge_pct(metrics.get("roi")) or 0.0, 1),
+        "clv": round(_as_edge_pct(metrics.get("average_clv")) or 0.0, 1),
+        "brier": round(safe_float(metrics.get("brier_score"), 0.0), 3),
+    }
+
+
+def run_dashboard_backtest(params: dict[str, Any]) -> dict[str, Any]:
+    """Run a sample backtest and shape it for the dashboard."""
+    requested_market = params.get("market_type") or params.get("market") or "moneyline"
+    market_map = {"moneyline": ["moneyline"], "totals": ["totals"], "all": ["moneyline", "totals"]}
+    markets = market_map.get(requested_market)
+    if not markets:
+        supported = ", ".join(sorted(market_map))
+        raise ValueError(f"market must be one of: {supported}")
+
+    tagged_rows: list[dict[str, Any]] = []
+    for market in markets:
+        tagged_rows.extend({**row, "dashboard_market": market} for row in _dashboard_backtest_rows(params, market))
+
+    if not tagged_rows:
+        empty_metrics = calculate_metrics([])
+        return {
+            "summary": {
+                "bets_taken": 0,
+                "win_rate": 0.0,
+                "roi": 0.0,
+                "average_edge": 0.0,
+                "average_clv": 0.0,
+                "best_segment": "No rows in selected window",
+                "weakest_segment": "No rows in selected window",
+                "calibration_summary": "No settled bets in selected window.",
+                "no_bet_count": 0,
+                **_camel_backtest_summary(empty_metrics),
+            },
+            "byMarket": [
+                {"market": market.title(), "bets": 0, "winRate": 0.0, "roi": 0.0}
+                for market in markets
+            ],
+            "calibration": [],
+            "no_bet_reasons": [],
+            "rows": [],
+        }
+
+    metrics = calculate_metrics(tagged_rows)
     no_bet_reasons: dict[str, int] = {}
-    for row in rows:
+    for row in tagged_rows:
         if row.get("result") == "no_bet":
             reason = row.get("final_lean") or "NO BET"
             no_bet_reasons[reason] = no_bet_reasons.get(reason, 0) + 1
+
+    by_market = []
+    for market in markets:
+        market_rows = [row for row in tagged_rows if row.get("dashboard_market") == market]
+        market_metrics = calculate_metrics(market_rows)
+        by_market.append(
+            {
+                "market": market.title(),
+                "bets": market_metrics.get("bets", 0),
+                "winRate": round(_as_percent(market_metrics.get("win_rate")) or 0.0, 1),
+                "roi": round(_as_edge_pct(market_metrics.get("roi")) or 0.0, 1),
+            }
+        )
+
+    calibration = [
+        {
+            "bucket": row["bucket"],
+            "count": row["count"],
+            "predicted": round(_as_percent(row["avg_probability"]) or 0.0, 1),
+            "actual": round(_as_percent(row["actual_rate"]) or 0.0, 1),
+        }
+        for row in calibration_table(calibration_rows(tagged_rows))
+    ]
+
+    summary = {
+        "bets_taken": metrics.get("bets", 0),
+        "win_rate": _as_percent(metrics.get("win_rate")) or 0.0,
+        "roi": _as_edge_pct(metrics.get("roi")) or 0.0,
+        "average_edge": _as_edge_pct(metrics.get("average_edge")) or 0.0,
+        "average_clv": metrics.get("average_clv", 0.0),
+        "best_segment": "See performance by market total",
+        "weakest_segment": "See performance by market total",
+        "calibration_summary": "Generated from local CSV backtest.",
+        "no_bet_count": sum(1 for row in tagged_rows if row.get("result") == "no_bet"),
+        **_camel_backtest_summary(metrics),
+    }
     return {
-        "summary": {
-            "bets_taken": metrics.get("bets", 0),
-            "win_rate": _as_percent(metrics.get("win_rate")) or 0.0,
-            "roi": _as_edge_pct(metrics.get("roi")) or 0.0,
-            "average_edge": _as_edge_pct(metrics.get("average_edge")) or 0.0,
-            "average_clv": metrics.get("average_clv", 0.0),
-            "best_segment": "See performance by market total",
-            "weakest_segment": "See performance by market total",
-            "calibration_summary": "Generated from local CSV backtest.",
-            "no_bet_count": sum(1 for row in rows if row.get("result") == "no_bet"),
-        },
+        "summary": summary,
+        "byMarket": by_market,
+        "calibration": calibration,
         "no_bet_reasons": [{"reason": key, "count": value} for key, value in no_bet_reasons.items()],
         "rows": [
             {
                 "date": row.get("date"),
                 "matchup": f"{row.get('away_team')} @ {row.get('home_team')}",
-                "market": market,
+                "market": row.get("dashboard_market"),
                 "lean": row.get("final_lean"),
                 "result": row.get("result"),
                 "edge": _as_edge_pct(row.get("model_edge")),
                 "profit_loss": row.get("profit_loss"),
             }
-            for row in rows
+            for row in tagged_rows
         ],
     }
 

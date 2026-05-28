@@ -1,6 +1,7 @@
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import src.dashboard_service as dashboard_service
 from src.dashboard_service import (
@@ -156,6 +157,65 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertEqual(4, performance["overall"]["bets_taken"])
         self.assertEqual(75.0, performance["overall"]["win_rate"])
         self.assertEqual(50.0, performance["overall"]["roi"])
+
+    def test_run_dashboard_backtest_supports_all_market_dashboard_shape(self):
+        moneyline_row = {
+            "date": "2026-05-04",
+            "away_team": "Away",
+            "home_team": "Home",
+            "final_lean": "Home ML",
+            "result": "win",
+            "model_edge": 0.05,
+            "profit_loss": 1.0,
+            "model_probability": 0.6,
+        }
+        totals_row = {
+            "date": "2026-05-04",
+            "away_team": "Away",
+            "home_team": "Home",
+            "final_lean": "Over",
+            "result": "loss",
+            "model_edge": 0.02,
+            "profit_loss": -1.0,
+            "model_probability": 0.55,
+        }
+
+        def fake_run_backtest(*, market, **_kwargs):
+            return [moneyline_row] if market == "moneyline" else [totals_row]
+
+        with patch("src.dashboard_service.run_backtest", side_effect=fake_run_backtest):
+            payload = dashboard_service.run_dashboard_backtest({"market": "all", "start_date": "2026-05-04", "end_date": "2026-05-25"})
+
+        self.assertEqual(2, payload["summary"]["totalBets"])
+        self.assertEqual(["Moneyline", "Totals"], [row["market"] for row in payload["byMarket"]])
+        self.assertIn("winRate", payload["byMarket"][0])
+        self.assertIn("predicted", payload["calibration"][0])
+        self.assertEqual({"moneyline", "totals"}, {row["market"] for row in payload["rows"]})
+
+    def test_run_evolve_cycle_uses_engine_directly(self):
+        result = {"summary": {"total_predictions_evaluated": 3}, "symbolic_candidates": 1}
+
+        with patch("src.dashboard_service.subprocess.run", side_effect=AssertionError("subprocess not expected")):
+            with patch("src.evolution.evolution_engine.run_evolution_cycle", return_value=result):
+                payload = dashboard_service.run_evolve_cycle()
+
+        self.assertEqual("ok", payload["status"])
+        self.assertEqual(result, payload["result"])
+        self.assertIn("total_predictions_evaluated", payload["output"])
+
+    def test_run_audit_cycle_uses_engine_and_audit_directly(self):
+        ingest = {"history_rows": 4, "evaluated": 2}
+        audit = {"summary": {"evaluated": 2}, "applied_updates": {"rules_added": []}}
+
+        with patch("src.dashboard_service.subprocess.run", side_effect=AssertionError("subprocess not expected")):
+            with patch("src.evolution.evolution_engine.ingest_bot_history", return_value=ingest):
+                with patch("src.evolution.evolution_audit.build_evolution_audit", return_value=audit):
+                    payload = dashboard_service.run_audit_cycle()
+
+        self.assertEqual("ok", payload["status"])
+        self.assertEqual(ingest, payload["learning_ingest"])
+        self.assertEqual(audit, payload["result"])
+        self.assertIn("applied_updates", payload["output"])
 
 
 if __name__ == "__main__":

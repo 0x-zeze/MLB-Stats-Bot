@@ -23,7 +23,9 @@ from .dashboard_service import (
     get_today_dashboard,
     load_dashboard_settings,
     rows_to_csv,
+    run_audit_cycle,
     run_dashboard_backtest,
+    run_evolve_cycle,
     save_dashboard_settings,
 )
 
@@ -219,6 +221,18 @@ def api_performance() -> dict[str, Any]:
 def api_evolution(limit: int = 20) -> dict[str, Any]:
     """Return read-only evolution engine summaries for the dashboard."""
     return get_evolution_dashboard(limit=limit)
+
+
+@app.post("/api/evolve", dependencies=API_DEPENDENCIES)
+def api_evolve() -> dict[str, Any]:
+    """Run the full evolution cycle (evaluate, learn, propose, backtest)."""
+    return run_evolve_cycle()
+
+
+@app.post("/api/audit", dependencies=API_DEPENDENCIES)
+def api_audit() -> dict[str, Any]:
+    """Run ingest + audit pipeline (learn from history, apply safe guardrails)."""
+    return run_audit_cycle()
 
 
 @app.post("/api/backtest", dependencies=API_DEPENDENCIES)

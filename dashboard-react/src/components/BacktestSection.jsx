@@ -17,6 +17,7 @@ export default function BacktestSection() {
     e.preventDefault();
     setRunning(true);
     setError(null);
+    setResults(null);
     try {
       const data = await api.backtest({ start_date: startDate, end_date: endDate, market });
       setResults(data);
@@ -26,6 +27,16 @@ export default function BacktestSection() {
       setRunning(false);
     }
   }
+
+  const summary = results?.summary || {};
+  const byMarket = Array.isArray(results?.byMarket) ? results.byMarket : [];
+  const calibration = Array.isArray(results?.calibration) ? results.calibration : [];
+  const rows = Array.isArray(results?.rows) ? results.rows : [];
+  const totalBets = summary.totalBets ?? summary.bets_taken ?? 0;
+  const winRate = summary.winRate ?? summary.win_rate ?? 0;
+  const roi = summary.roi ?? 0;
+  const clv = summary.clv ?? summary.average_clv ?? 0;
+  const brier = summary.brier ?? summary.brier_score ?? 0;
 
   return (
     <Card>
@@ -65,7 +76,6 @@ export default function BacktestSection() {
               <option value="all">All Markets</option>
               <option value="moneyline">Moneyline</option>
               <option value="totals">Totals</option>
-              <option value="yrfi">YRFI/NRFI</option>
             </select>
           </div>
           <Button type="submit" size="sm" variant="primary" disabled={running}>
@@ -84,25 +94,25 @@ export default function BacktestSection() {
             <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
               <div className="metric-card text-center">
                 <BarChart3 className="h-4 w-4 text-accent-blue mx-auto mb-1" />
-                <p className="text-lg font-bold text-ink">{results.summary.totalBets}</p>
+                <p className="text-lg font-bold text-ink">{totalBets}</p>
                 <p className="text-[10px] text-ink/60">Total Bets</p>
               </div>
               <div className="metric-card text-center">
                 <Target className="h-4 w-4 text-accent-blue mx-auto mb-1" />
-                <p className="text-lg font-bold text-ink">{results.summary.winRate}%</p>
+                <p className="text-lg font-bold text-ink">{winRate}%</p>
                 <p className="text-[10px] text-ink/60">Win Rate</p>
               </div>
               <div className="metric-card text-center">
                 <TrendingUp className="h-4 w-4 text-accent-green mx-auto mb-1" />
-                <p className="text-lg font-bold text-accent-green">+{results.summary.roi}%</p>
+                <p className={`text-lg font-bold ${roi >= 0 ? 'text-accent-green' : 'text-accent-red'}`}>{roi >= 0 ? '+' : ''}{roi}%</p>
                 <p className="text-[10px] text-ink/60">ROI</p>
               </div>
               <div className="metric-card text-center">
-                <p className="text-lg font-bold text-accent-blue">+{results.summary.clv}%</p>
+                <p className={`text-lg font-bold ${clv >= 0 ? 'text-accent-blue' : 'text-accent-red'}`}>{clv >= 0 ? '+' : ''}{clv}%</p>
                 <p className="text-[10px] text-ink/60">Avg CLV</p>
               </div>
               <div className="metric-card text-center">
-                <p className="text-lg font-bold text-ink">{results.summary.brier}</p>
+                <p className="text-lg font-bold text-ink">{brier}</p>
                 <p className="text-[10px] text-ink/60">Brier Score</p>
               </div>
             </div>
@@ -111,7 +121,12 @@ export default function BacktestSection() {
               <div>
                 <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">By Market</h4>
                 <div className="space-y-2">
-                  {results.byMarket.map((row) => (
+                  {byMarket.length === 0 && (
+                    <div className="rounded-lg border-2 border-ink bg-paper p-3 text-xs font-semibold text-ink/60 shadow-neo-sm">
+                      No market breakdown available for this backtest.
+                    </div>
+                  )}
+                  {byMarket.map((row) => (
                     <div key={row.market} className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
                       <div>
                         <p className="text-sm font-medium text-ink">{row.market}</p>
@@ -137,8 +152,15 @@ export default function BacktestSection() {
               <div>
                 <h4 className="text-xs font-semibold text-ink/60 uppercase tracking-wider mb-3">Calibration</h4>
                 <div className="space-y-2">
-                  {results.calibration.map((row) => {
-                    const error = row.actual - row.predicted;
+                  {calibration.length === 0 && (
+                    <div className="rounded-lg border-2 border-ink bg-paper p-3 text-xs font-semibold text-ink/60 shadow-neo-sm">
+                      No calibration buckets available for this backtest.
+                    </div>
+                  )}
+                  {calibration.map((row) => {
+                    const predicted = Number(row.predicted ?? row.expected ?? row.avg_probability ?? 0);
+                    const actual = Number(row.actual ?? row.actual_rate ?? 0);
+                    const error = actual - predicted;
                     const isOverconfident = error < -5;
                     return (
                       <div key={row.bucket} className="flex items-center justify-between p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm">
@@ -148,11 +170,11 @@ export default function BacktestSection() {
                         </div>
                         <div className="flex items-center gap-4">
                           <div className="text-right">
-                            <p className="text-xs text-ink/70">{row.predicted.toFixed(1)}%</p>
+                            <p className="text-xs text-ink/70">{predicted.toFixed(1)}%</p>
                             <p className="text-[10px] text-ink/50">Predicted</p>
                           </div>
                           <div className="text-right">
-                            <p className="text-xs text-ink/70">{row.actual.toFixed(1)}%</p>
+                            <p className="text-xs text-ink/70">{actual.toFixed(1)}%</p>
                             <p className="text-[10px] text-ink/50">Actual</p>
                           </div>
                           <Badge variant={isOverconfident ? 'danger' : 'success'}>
@@ -165,6 +187,12 @@ export default function BacktestSection() {
                 </div>
               </div>
             </div>
+
+            {rows.length === 0 && (
+              <div className="mt-4 rounded-lg border-3 border-ink bg-accent-yellow p-4 text-sm font-black text-ink shadow-neo-sm">
+                Backtest ran, but no rows were found for this market/date range. Try a wider date range or another supported market.
+              </div>
+            )}
           </>
         )}
       </CardContent>
