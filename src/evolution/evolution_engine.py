@@ -144,6 +144,80 @@ def _read_bot_history(state_path: str | Path | None = None) -> tuple[dict[str, d
     return {}, [], None
 
 
+def _read_line_snapshots(source: str | Path | None) -> dict[str, dict[str, float]]:
+    """Read stored line snapshots per game from the bot's sqlite state.
+
+    Keyed by game_pk, then by market name (e.g. "moneyline_home",
+    "closing_home", "total"). Used to recover closing odds for CLV.
+    """
+    snapshots: dict[str, dict[str, float]] = {}
+    if not source:
+        return snapshots
+    path = Path(source)
+    if path.suffix.lower() not in {".sqlite", ".sqlite3", ".db"} or not path.exists():
+        return snapshots
+    try:
+        with sqlite3.connect(path) as connection:
+            connection.row_factory = sqlite3.Row
+            for row in connection.execute("SELECT game_pk, market, value FROM line_snapshots"):
+                value = safe_float(row["value"], None)
+                if value is None:
+                    continue
+                snapshots.setdefault(str(row["game_pk"]), {})[str(row["market"])] = value
+    except (sqlite3.DatabaseError, OSError):
+        return snapshots
+    return snapshots
+
+
+def _plausible_moneyline(value: float | None) -> float | None:
+    """Reject in-game/stale American odds that would corrupt CLV.
+
+    Pre-game MLB moneylines are effectively always within +/-1000 and never
+    inside the (-100, 100) dead zone. Snapshots outside this band are live or
+    suspended-game prices, not closing lines.
+    """
+    if value is None:
+        return None
+    if abs(value) < 100 or abs(value) > 1000:
+        return None
+    return value
+
+
+def _plausible_total(value: float | None) -> float | None:
+    """Reject implausible total lines (live totals inflate after runs score)."""
+    if value is None:
+        return None
+    if value < 4.0 or value > 14.0:
+        return None
+    return value
+
+
+def _closing_odds_from_snapshots(game_snapshots: dict[str, float]) -> dict[str, Any]:
+    """Map stored line snapshots to the closing-odds keys the evaluator reads.
+
+    Prefers the dedicated closing_* snapshot captured near first pitch; falls
+    back to the last-seen live moneyline_*/total snapshot the line monitor
+    overwrites on every poll (the best closing proxy when no dedicated capture
+    fired). Values that fail a plausibility check are dropped so CLV stays
+    null rather than being computed from stale in-game prices.
+    """
+    if not game_snapshots:
+        return {}
+    pairs = (
+        ("closing_home_moneyline", ("closing_home", "moneyline_home"), _plausible_moneyline),
+        ("closing_away_moneyline", ("closing_away", "moneyline_away"), _plausible_moneyline),
+        ("closing_total", ("closing_total", "total"), _plausible_total),
+    )
+    result: dict[str, Any] = {}
+    for target_key, source_keys, validate in pairs:
+        for source_key in source_keys:
+            value = validate(game_snapshots.get(source_key))
+            if value is not None:
+                result[target_key] = value
+                break
+    return result
+
+
 def _score_from_learning_log(entry: dict[str, Any]) -> tuple[int, int] | None:
     score = str(entry.get("score") or "")
     match = re.search(r"\s(\d+)\s*-\s*(\d+)\s", f" {score} ")
@@ -161,6 +235,17 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
     if confidence.lower() not in ("low", "medium", "high"):
         confidence = "Low"
     pick_probability = safe_float(pick.get("winProbability"), 50.0)
+    bet_decision = prediction.get("betDecision") or {}
+    # True market edge = model probability - market-implied probability.
+    # Falls back to a coinflip-distance proxy (prob - 50) only when no odds
+    # were available; that proxy is NOT a betting edge and saturates at the
+    # model's 70% probability clamp, so prefer the real edge whenever present.
+    market_edge = bet_decision.get("edge")
+    moneyline_edge = (
+        round(safe_float(market_edge), 3)
+        if market_edge not in (None, "")
+        else round(pick_probability - 50.0, 3)
+    )
     context = {
         "game_id": prediction.get("gamePk"),
         "date": prediction.get("dateYmd"),
@@ -182,7 +267,7 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
             "home_probability": home.get("winProbability"),
             "away_probability": away.get("winProbability"),
             "confidence": confidence,
-            "edge": round(pick_probability - 50.0, 3),
+            "edge": moneyline_edge,
             "current_odds": prediction.get("currentOdds") or {},
         },
         "model_breakdown": prediction.get("modelBreakdown") or {},
@@ -329,6 +414,7 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
     evolution artifacts; it never promotes production rule changes.
     """
     predictions, learning_log, source = _read_bot_history(state_path)
+    line_snapshots = _read_line_snapshots(source)
     existing = _existing_outcome_keys()
     evaluated = 0
     skipped_duplicates = 0
@@ -362,6 +448,7 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
                 continue
 
             final_result = {"away_score": away_score, "home_score": home_score}
+            final_result.update(_closing_odds_from_snapshots(line_snapshots.get(game_pk, {})))
             if market == "totals":
                 final_result["actual_total"] = total_score
             elif market == "yrfi":

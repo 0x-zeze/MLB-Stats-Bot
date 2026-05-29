@@ -19,6 +19,7 @@ from .explanation_layer import build_prediction_explanation
 from .feature_engineering_layer import build_game_features
 from .market_comparison import compare_markets
 from .prediction_layer import build_predictions
+from .probability_calibrator import calibrate
 from .prediction_tier import (
     apply_tier_confidence_cap,
     determine_prediction_tier,
@@ -104,15 +105,20 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
     )
     over_values = list((totals.get("over_probabilities") or {}).values())
     under_values = list((totals.get("under_probabilities") or {}).values())
-    totals["model_probability"] = max(over_values + under_values + [0.0])
+    totals["model_probability"] = calibrate(
+        max(over_values + under_values + [0.0]), market="totals"
+    )
     totals["american_odds"] = (
         market.get("over_odds")
         if str(totals.get("raw_lean", "")).lower().startswith("over")
         else market.get("under_odds")
     )
-    first_inning["model_probability"] = max(
-        first_inning.get("yrfi_probability", 0.0),
-        first_inning.get("nrfi_probability", 0.0),
+    first_inning["model_probability"] = calibrate(
+        max(
+            first_inning.get("yrfi_probability", 0.0),
+            first_inning.get("nrfi_probability", 0.0),
+        ),
+        market="yrfi",
     )
 
     moneyline = apply_risk_framework(moneyline, quality_report)

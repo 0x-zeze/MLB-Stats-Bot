@@ -22,10 +22,12 @@ import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils
 import { startDashboard } from './dashboard.js';
 import {
   attachCurrentOdds,
+  americanImpliedProbability,
   captureClosingLines,
   checkLineMovement,
   configureLineMonitor,
   lineMonitorSettings,
+  resolveClosingLine,
   startLineMonitor,
   stopLineMonitorForChat
 } from './lineMovement.js';
@@ -1816,14 +1818,15 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
 
     let clv = null;
     const openingOdds = prediction.openingOdds;
-    const closingHome = storage.getLineSnapshot(result.gamePk, 'closing_home');
-    const closingAway = storage.getLineSnapshot(result.gamePk, 'closing_away');
-    if (openingOdds && (closingHome || closingAway)) {
-      const pickIsHome = String(prediction.pick.id) === String(prediction.home?.id);
+    const pickIsHome = String(prediction.pick.id) === String(prediction.home?.id);
+    const closingLine = resolveClosingLine(result.gamePk, pickIsHome ? 'home' : 'away');
+    if (openingOdds && Number.isFinite(closingLine)) {
       const openingLine = pickIsHome ? openingOdds.homeMoneyline : openingOdds.awayMoneyline;
-      const closingLine = pickIsHome ? closingHome?.value : closingAway?.value;
-      if (Number.isFinite(openingLine) && Number.isFinite(closingLine)) {
-        clv = Math.round(openingLine - closingLine);
+      const openingImplied = americanImpliedProbability(openingLine);
+      const closingImplied = americanImpliedProbability(closingLine);
+      if (Number.isFinite(openingImplied) && Number.isFinite(closingImplied)) {
+        // CLV as implied-probability edge: positive means we beat the closing line.
+        clv = Math.round((closingImplied - openingImplied) * 1000) / 10;
       }
     }
 
@@ -2510,7 +2513,9 @@ async function captureClosingLinesForUpcoming() {
     const start = p.start || p.gameTime;
     if (!start) return false;
     const startMs = new Date(start).getTime();
-    return Number.isFinite(startMs) && startMs - now <= 5 * 60_000 && startMs > now;
+    // Capture anytime within 30 min before first pitch (was 5 min, which
+    // rarely aligned with the 60s poll and left CLV uncomputable).
+    return Number.isFinite(startMs) && startMs - now <= 30 * 60_000 && startMs > now;
   });
 
   if (soonGames.length > 0) {

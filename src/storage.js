@@ -292,7 +292,9 @@ function compactPrediction(prediction, dateYmd) {
           marketDeltaRuns: prediction.totalRuns.marketDeltaRuns,
           modelEdge: prediction.totalRuns.modelEdge,
           bestLean: prediction.totalRuns.bestLean,
-          confidence: prediction.totalRuns.confidence
+          confidence: prediction.totalRuns.confidence,
+          overMarketProbability: prediction.totalRuns.overMarketProbability,
+          underMarketProbability: prediction.totalRuns.underMarketProbability
         }
       : null,
     modelBreakdown: prediction.modelBreakdown || null,
@@ -305,6 +307,14 @@ function compactPrediction(prediction, dateYmd) {
     auditAdjustments: prediction.auditAdjustments || [],
     agentRisk: agent?.risk || '',
     agentMemoryNote: agent?.memoryNote || '',
+    agentShift: agent?.probabilityShift
+      ? {
+          applied: agent.probabilityShift.applied,
+          shift: agent.probabilityShift.shift,
+          baselineAwayProbability: agent.probabilityShift.baselineAwayProbability,
+          baselineHomeProbability: agent.probabilityShift.baselineHomeProbability
+        }
+      : null,
     savedAt: new Date().toISOString()
   };
 }

@@ -517,7 +517,11 @@ function sanitizeAnalysis(prediction, raw) {
     probabilityShift: {
       applied: probabilityShift.applied,
       shift: probabilityShift.shift,
-      reason: probabilityShift.reason
+      reason: probabilityShift.reason,
+      // Pre-LLM baseline so post-game eval can compare model-only vs
+      // model+LLM accuracy (paired Brier). See P4 measurement.
+      baselineAwayProbability: normalizedAwayProbability,
+      baselineHomeProbability: normalizedHomeProbability
     },
     betOverride: applyAgentBetOverride(prediction, raw, {
       confidence: deterministicConfidenceFromPrediction(prediction, pickProbability),

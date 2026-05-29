@@ -1,8 +1,8 @@
-"""Isotonic regression calibrator for moneyline probabilities.
+"""Isotonic regression calibrator for model probabilities.
 
 Maps raw model probabilities to calibrated probabilities using historical
-prediction outcomes. Uses piecewise-linear interpolation from binned averages
-(no sklearn dependency).
+prediction outcomes, per market (moneyline, totals, yrfi). Uses
+piecewise-linear interpolation from binned averages (no sklearn dependency).
 """
 
 from __future__ import annotations
@@ -17,27 +17,43 @@ from .utils import clamp, safe_float
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _OUTCOMES_PATH = _DATA_DIR / "evolution" / "prediction_outcomes.csv"
+# Legacy single-market (moneyline) map; kept for backward compatibility.
 _CALIBRATION_MAP_PATH = _DATA_DIR / "calibration_map.json"
+# Per-market maps: {"moneyline": [[x,y],...], "totals": [...], "yrfi": [...]}.
+_CALIBRATION_MAPS_PATH = _DATA_DIR / "calibration_maps.json"
+
+_MARKETS = ("moneyline", "totals", "yrfi")
 
 _MIN_SAMPLES = 50
 _BUCKET_SIZE = 0.03
 _MIN_BIN_COUNT = 3
 
-_cached_map: list[tuple[float, float]] | None = None
+_cached_maps: dict[str, list[tuple[float, float]]] | None = None
 
 
-def _load_calibration_map() -> list[tuple[float, float]]:
-    global _cached_map
-    if _cached_map is not None:
-        return _cached_map
-    if not _CALIBRATION_MAP_PATH.exists():
-        return []
-    try:
-        raw = json.loads(_CALIBRATION_MAP_PATH.read_text())
-        _cached_map = [(float(pair[0]), float(pair[1])) for pair in raw]
-        return _cached_map
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return []
+def _load_calibration_maps() -> dict[str, list[tuple[float, float]]]:
+    global _cached_maps
+    if _cached_maps is not None:
+        return _cached_maps
+
+    maps: dict[str, list[tuple[float, float]]] = {}
+    # Prefer the per-market file; fall back to the legacy moneyline-only file.
+    if _CALIBRATION_MAPS_PATH.exists():
+        try:
+            raw = json.loads(_CALIBRATION_MAPS_PATH.read_text())
+            for market, pairs in raw.items():
+                maps[market] = [(float(p[0]), float(p[1])) for p in pairs]
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            maps = {}
+    if "moneyline" not in maps and _CALIBRATION_MAP_PATH.exists():
+        try:
+            raw = json.loads(_CALIBRATION_MAP_PATH.read_text())
+            maps["moneyline"] = [(float(p[0]), float(p[1])) for p in raw]
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            pass
+
+    _cached_maps = maps
+    return maps
 
 
 def _interpolate(mapping: list[tuple[float, float]], raw: float) -> float:
@@ -63,9 +79,14 @@ def _interpolate(mapping: list[tuple[float, float]], raw: float) -> float:
     return y0 + t * (y1 - y0)
 
 
-def calibrate(raw_probability: float) -> float:
-    """Map a raw model probability to a calibrated probability."""
-    mapping = _load_calibration_map()
+def calibrate(raw_probability: float, market: str = "moneyline") -> float:
+    """Map a raw model probability to a calibrated probability for a market.
+
+    Falls back to the raw probability when no calibration map exists for the
+    market (e.g. not enough samples yet), so an uncalibrated market is never
+    worse than the model's own estimate.
+    """
+    mapping = _load_calibration_maps().get(str(market).strip().lower())
     if not mapping:
         return raw_probability
     calibrated = _interpolate(mapping, raw_probability)
@@ -90,7 +111,7 @@ def _extract_predicted_probability(row: dict[str, Any]) -> float | None:
     result = row.get("result", "").strip().lower()
     if brier is not None and result in ("win", "loss"):
         outcome = 1.0 if result == "win" else 0.0
-        prob = outcome - (1 - 2 * outcome) * (brier ** 0.5)
+        prob = outcome + (1 - 2 * outcome) * (brier ** 0.5)
         return clamp(prob, 0.05, 0.95)
     return None
 
@@ -120,30 +141,10 @@ def _make_isotonic(points: list[tuple[float, float]]) -> list[tuple[float, float
     return result
 
 
-def retrain() -> dict[str, Any]:
-    """Rebuild calibration map from prediction outcomes."""
-    global _cached_map
-
-    if not _OUTCOMES_PATH.exists():
-        return {"status": "error", "reason": "prediction_outcomes.csv not found"}
-
-    rows: list[tuple[float, float]] = []
-    with open(_OUTCOMES_PATH, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row.get("market", "").strip().lower() != "moneyline":
-                continue
-            result = row.get("result", "").strip().lower()
-            if result not in ("win", "loss"):
-                continue
-            prob = _extract_predicted_probability(row)
-            if prob is None:
-                continue
-            outcome = 1.0 if result == "win" else 0.0
-            rows.append((prob, outcome))
-
+def _fit_market_map(rows: list[tuple[float, float]]) -> tuple[list[tuple[float, float]] | None, dict[str, Any]]:
+    """Bin (prob, outcome) pairs and fit an isotonic map for one market."""
     if len(rows) < _MIN_SAMPLES:
-        return {"status": "skipped", "reason": f"only {len(rows)} samples (need {_MIN_SAMPLES})"}
+        return None, {"status": "skipped", "reason": f"only {len(rows)} samples (need {_MIN_SAMPLES})"}
 
     buckets: dict[int, list[tuple[float, float]]] = {}
     for prob, outcome in rows:
@@ -160,20 +161,67 @@ def retrain() -> dict[str, Any]:
         binned_points.append((avg_prob, avg_outcome))
 
     if len(binned_points) < 3:
-        return {"status": "skipped", "reason": "not enough bins with sufficient data"}
+        return None, {"status": "skipped", "reason": "not enough bins with sufficient data"}
 
     calibration_map = _make_isotonic(binned_points)
-
-    _CALIBRATION_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CALIBRATION_MAP_PATH.write_text(json.dumps(calibration_map, indent=2))
-    _cached_map = calibration_map
-
-    return {
+    return calibration_map, {
         "status": "success",
         "samples": len(rows),
         "bins": len(binned_points),
         "map_points": len(calibration_map),
-        "path": str(_CALIBRATION_MAP_PATH),
+    }
+
+
+def retrain() -> dict[str, Any]:
+    """Rebuild per-market calibration maps from prediction outcomes."""
+    global _cached_maps
+
+    if not _OUTCOMES_PATH.exists():
+        return {"status": "error", "reason": "prediction_outcomes.csv not found"}
+
+    rows_by_market: dict[str, list[tuple[float, float]]] = {m: [] for m in _MARKETS}
+    with open(_OUTCOMES_PATH, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            market = row.get("market", "").strip().lower()
+            if market not in rows_by_market:
+                continue
+            result = row.get("result", "").strip().lower()
+            if result not in ("win", "loss"):
+                continue
+            prob = _extract_predicted_probability(row)
+            if prob is None:
+                continue
+            outcome = 1.0 if result == "win" else 0.0
+            rows_by_market[market].append((prob, outcome))
+
+    maps: dict[str, list[tuple[float, float]]] = {}
+    per_market: dict[str, Any] = {}
+    for market in _MARKETS:
+        calibration_map, info = _fit_market_map(rows_by_market[market])
+        per_market[market] = info
+        if calibration_map is not None:
+            maps[market] = calibration_map
+
+    if not maps:
+        return {"status": "skipped", "reason": "no market had enough samples", "markets": per_market}
+
+    _CALIBRATION_MAPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _CALIBRATION_MAPS_PATH.write_text(
+        json.dumps({m: [list(p) for p in pts] for m, pts in maps.items()}, indent=2)
+    )
+    # Keep the legacy moneyline-only file in sync for older readers.
+    if "moneyline" in maps:
+        _CALIBRATION_MAP_PATH.write_text(
+            json.dumps([list(p) for p in maps["moneyline"]], indent=2)
+        )
+    _cached_maps = maps
+
+    return {
+        "status": "success",
+        "markets": per_market,
+        "calibrated_markets": sorted(maps.keys()),
+        "path": str(_CALIBRATION_MAPS_PATH),
     }
 
 

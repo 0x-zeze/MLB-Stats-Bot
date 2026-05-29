@@ -284,7 +284,7 @@ function formatSigned(value, decimals = 0) {
   return `${parsed >= 0 ? '+' : ''}${parsed.toFixed(decimals)}`;
 }
 
-function americanImpliedProbability(value) {
+export function americanImpliedProbability(value) {
   const odds = Number(value);
   if (!Number.isFinite(odds) || odds === 0) return null;
   return odds > 0 ? 100 / (odds + 100) : Math.abs(odds) / (Math.abs(odds) + 100);
@@ -539,6 +539,28 @@ export async function captureClosingLines(games) {
   }
 
   return { captured };
+}
+
+export function resolveClosingLine(gamePk, side) {
+  if (!state.storage || !gamePk) return null;
+  const isTotal = side === 'total';
+  const markets = isTotal
+    ? ['closing_total', 'total']
+    : side === 'home'
+      ? ['closing_home', 'moneyline_home']
+      : ['closing_away', 'moneyline_away'];
+  const isPlausible = (value) =>
+    isTotal
+      ? value >= 4 && value <= 14
+      : Math.abs(value) >= 100 && Math.abs(value) <= 1000;
+  for (const market of markets) {
+    const snapshot = state.storage.getLineSnapshot(gamePk, market);
+    const value = snapshot ? Number(snapshot.value) : NaN;
+    if (Number.isFinite(value) && isPlausible(value)) {
+      return value;
+    }
+  }
+  return null;
 }
 
 export function startLineMonitor(games, chatId) {
