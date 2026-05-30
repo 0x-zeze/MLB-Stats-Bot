@@ -1,4 +1,5 @@
 .env
+.claude/settings.local.json
 node_modules/
 data/*.json
 !data/dashboard_mock.json

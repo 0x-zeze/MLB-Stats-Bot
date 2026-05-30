@@ -1,5 +1,5 @@
 {
-  "active_version": "weights-v1.1",
+  "active_version": "weights-v1.2",
   "versions": [
     {
       "date_created": "2026-04-30T08:50:46.827678+00:00",
@@ -51,7 +51,7 @@
         "verdict": "needs_review",
         "wins": 12
       },
-      "status": "active",
+      "status": "archived",
       "version": "weights-v1.1",
       "weights": {
         "moneyline": {
@@ -62,6 +62,76 @@
           "offense": 0.24,
           "recent_form": 0.1,
           "starting_pitcher": 0.19
+        },
+        "totals": {
+          "bullpen_fatigue": 0.13,
+          "data_quality": 0.03,
+          "lineup": 0.1,
+          "market_total": 0.05,
+          "offense_splits": 0.2,
+          "park_factor": 0.1,
+          "recent_form": 0.07,
+          "starting_pitcher_run_prevention": 0.22,
+          "weather": 0.1
+        }
+      }
+    },
+    {
+      "audit_adjustment_keys": [
+        "audit:weight:bullpen:needs_review",
+        "audit:weight:data_quality:needs_review",
+        "audit:weight:starting_pitcher:needs_review"
+      ],
+      "backtest_status": "audit_min_sample_gate",
+      "date_created": "2026-05-25T03:39:08.877096+00:00",
+      "previous_version": "weights-v1.1",
+      "production_update_allowed": true,
+      "promotion_status": "approved_conservative_weight_reduction",
+      "reason": "Audit found repeated signal misses for [bullpen, data_quality]; reduce weight by conservative delta and redistribute to stronger factors.",
+      "rollback_supported": true,
+      "source_reason_quality": [
+        {
+          "accuracy": 40.0,
+          "factor": "bullpen",
+          "loss_mentions": 0,
+          "losses": 3,
+          "sample_size": 5,
+          "verdict": "weak_signal",
+          "weighted_accuracy": 40.5,
+          "wins": 2
+        },
+        {
+          "accuracy": 52.8,
+          "factor": "starting_pitcher",
+          "loss_mentions": 333,
+          "losses": 67,
+          "sample_size": 142,
+          "verdict": "needs_review",
+          "weighted_accuracy": 52.7,
+          "wins": 75
+        },
+        {
+          "accuracy": 0.0,
+          "factor": "data_quality",
+          "loss_mentions": 32,
+          "losses": 0,
+          "sample_size": 0,
+          "verdict": "needs_review",
+          "weighted_accuracy": 0.0,
+          "wins": 0
+        }
+      ],
+      "status": "active",
+      "version": "weights-v1.2",
+      "weights": {
+        "moneyline": {
+          "bullpen": 0.1242,
+          "data_quality": 0.1,
+          "home_advantage": 0.0892,
+          "market_odds": 0.1292,
+          "offense": 0.2492,
+          "recent_form": 0.1092,
+          "starting_pitcher": 0.1992
         },
         "totals": {
           "bullpen_fatigue": 0.13,

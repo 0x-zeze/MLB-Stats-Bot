@@ -2,148 +2,223 @@
   "current_data_wins": true,
   "mistake_patterns": [
     {
+      "caution": "Cap confidence unless multiple independent signals agree.",
+      "count": 92,
+      "factor": "confidence_calibration",
+      "latest_summary": "The agent gave Medium confidence to a losing totals pick.",
+      "pattern_id": "loss-overconfidence",
+      "production_authority": "advisory_only",
+      "severity": "high",
+      "source_loss_ids": [
+        "loss-8a0dd7082d",
+        "loss-5f55ec68b5",
+        "loss-fd204987e6",
+        "loss-74771e7801",
+        "loss-68ed23abf3",
+        "loss-00b0446bfe",
+        "loss-2fb9854e85",
+        "loss-a2c3af6b73"
+      ],
+      "type": "overconfidence"
+    },
+    {
+      "caution": "Be cautious with calibration:overconfidence; recent evaluated record is 0-92.",
+      "count": 92,
+      "factor": "calibration:overconfidence",
+      "pattern_id": "segment-calibration-overconfidence",
+      "production_authority": "advisory_only",
+      "segment": {
+        "accuracy": 0.0,
+        "average_brier": 0.25,
+        "average_clv": null,
+        "decided": 92,
+        "loss_rate": 100.0,
+        "losses": 92,
+        "no_bet_quality": 0.0,
+        "no_bets": 0,
+        "pushes": 0,
+        "sample_size": 92,
+        "segment": "calibration:overconfidence",
+        "weighted_accuracy": 0.0,
+        "weighted_loss_rate": 100.0,
+        "wins": 0
+      },
+      "severity": "high",
+      "type": "weak_segment"
+    },
+    {
+      "caution": "Use this repeated miss pattern as caution context; current validated data still wins.",
+      "count": 71,
+      "factor": "confidence_calibration",
+      "latest_summary": "The agent had a winning pick but confidence was low.",
+      "pattern_id": "loss-underconfidence",
+      "production_authority": "advisory_only",
+      "severity": "high",
+      "source_loss_ids": [
+        "loss-3efc15a4bc",
+        "loss-b6789c49b6",
+        "loss-73558d1a17",
+        "loss-81229a3e1b",
+        "loss-6e775bdcd8",
+        "loss-adb1d413f6",
+        "loss-091e03f16e",
+        "loss-e1836f0cb2"
+      ],
+      "type": "underconfidence"
+    },
+    {
       "caution": "Prefer NO BET or LEAN ONLY when edge is marginal and no Tier 1 signal confirms the side.",
-      "count": 7,
+      "count": 61,
       "factor": "market_edge",
       "latest_summary": "The agent acted on a weak model edge.",
       "pattern_id": "loss-weak-edge",
       "production_authority": "advisory_only",
       "severity": "high",
       "source_loss_ids": [
-        "loss-0c691a2e8a",
-        "loss-8bae15d766",
-        "loss-22e93a6b1a",
-        "loss-734dd1a29e",
-        "loss-1d8fb191e8",
-        "loss-0bf797d367",
-        "loss-16a326f766"
+        "loss-3005615ca0",
+        "loss-b4ef8cd55c",
+        "loss-76f24443e1",
+        "loss-4a0e87526c",
+        "loss-7b6fa4c896",
+        "loss-feb266ad00",
+        "loss-ae12a2ea6e",
+        "loss-3614d76f49"
       ],
       "type": "weak_edge"
     },
     {
       "caution": "Do not let record, H2H, or recent form dominate weak game-specific matchup evidence.",
-      "count": 6,
+      "count": 9,
       "factor": "record_context",
       "latest_summary": "The moneyline pick leaned too much on record, form, H2H, or previous-series context instead of game-specific matchup signals.",
       "pattern_id": "loss-record-bias",
       "production_authority": "advisory_only",
       "severity": "high",
       "source_loss_ids": [
-        "loss-39f2892529",
         "loss-f6d9a54ccf",
         "loss-7d228f896c",
         "loss-d52b18f80d",
         "loss-8a56f2922d",
-        "loss-58d323e378"
+        "loss-58d323e378",
+        "loss-5b430faa53",
+        "loss-f0e7b2bd7c",
+        "loss-30a3535057"
       ],
       "type": "record_bias"
     },
     {
       "caution": "Do not let starting-pitcher edge dominate without offense, lineup, and bullpen confirmation.",
-      "count": 257,
+      "count": 377,
       "factor": "starting_pitcher",
       "pattern_id": "factor-starting-pitcher",
       "production_authority": "advisory_only",
       "reason_quality": {
-        "accuracy": 54.8,
+        "accuracy": 56.4,
         "factor": "starting_pitcher",
-        "loss_mentions": 257,
-        "losses": 47,
-        "sample_size": 104,
+        "loss_mentions": 377,
+        "losses": 88,
+        "sample_size": 202,
         "verdict": "needs_review",
-        "wins": 57
+        "weighted_accuracy": 56.7,
+        "wins": 114
       },
       "severity": "medium",
       "source_loss_ids": [],
       "type": "factor_needs_review"
     },
     {
-      "caution": "Be cautious with probability:60-65; recent evaluated record is 7-11.",
-      "count": 11,
-      "factor": "probability:60-65",
-      "pattern_id": "segment-probability-60-65",
+      "caution": "Use this repeated miss pattern as caution context; current validated data still wins.",
+      "count": 163,
+      "factor": "other",
+      "pattern_id": "factor-other",
       "production_authority": "advisory_only",
-      "segment": {
-        "accuracy": 38.9,
-        "average_brier": 0.2864,
-        "average_clv": null,
-        "decided": 18,
-        "loss_rate": 61.1,
-        "losses": 11,
-        "no_bet_quality": 0.0,
-        "no_bets": 0,
-        "pushes": 0,
-        "sample_size": 18,
-        "segment": "probability:60-65",
-        "wins": 7
+      "reason_quality": {
+        "accuracy": 0.0,
+        "factor": "other",
+        "loss_mentions": 163,
+        "losses": 0,
+        "sample_size": 0,
+        "verdict": "needs_review",
+        "weighted_accuracy": 0.0,
+        "wins": 0
       },
       "severity": "medium",
-      "type": "weak_segment"
-    },
-    {
-      "caution": "Be cautious with edge:weak <2; recent evaluated record is 7-9.",
-      "count": 9,
-      "factor": "edge:weak <2",
-      "pattern_id": "segment-edge-weak-2",
-      "production_authority": "advisory_only",
-      "segment": {
-        "accuracy": 43.8,
-        "average_brier": 0.2507,
-        "average_clv": null,
-        "decided": 16,
-        "loss_rate": 56.2,
-        "losses": 9,
-        "no_bet_quality": 0.0,
-        "no_bets": 0,
-        "pushes": 0,
-        "sample_size": 16,
-        "segment": "edge:weak <2",
-        "wins": 7
-      },
-      "severity": "medium",
-      "type": "weak_segment"
+      "source_loss_ids": [],
+      "type": "factor_needs_review"
     },
     {
       "caution": "Prefer NO BET or LEAN ONLY when edge is marginal and no Tier 1 signal confirms the side.",
-      "count": 7,
+      "count": 61,
       "factor": "market_edge",
       "pattern_id": "factor-market-edge",
       "production_authority": "advisory_only",
       "reason_quality": {
-        "accuracy": 50.0,
+        "accuracy": 53.6,
         "factor": "market_edge",
-        "loss_mentions": 7,
-        "losses": 17,
-        "sample_size": 34,
+        "loss_mentions": 61,
+        "losses": 32,
+        "sample_size": 69,
         "verdict": "needs_review",
-        "wins": 17
+        "weighted_accuracy": 53.6,
+        "wins": 37
       },
       "severity": "medium",
       "source_loss_ids": [
-        "loss-0c691a2e8a",
-        "loss-8bae15d766",
-        "loss-22e93a6b1a",
-        "loss-734dd1a29e",
-        "loss-1d8fb191e8",
-        "loss-0bf797d367",
-        "loss-16a326f766"
+        "loss-3005615ca0",
+        "loss-b4ef8cd55c",
+        "loss-76f24443e1",
+        "loss-4a0e87526c",
+        "loss-7b6fa4c896",
+        "loss-feb266ad00",
+        "loss-ae12a2ea6e",
+        "loss-3614d76f49"
       ],
       "type": "factor_needs_review"
     },
     {
       "caution": "Use this repeated miss pattern as caution context; current validated data still wins.",
-      "count": 6,
+      "count": 49,
+      "factor": "data_quality",
+      "pattern_id": "factor-data-quality",
+      "production_authority": "advisory_only",
+      "reason_quality": {
+        "accuracy": 0.0,
+        "factor": "data_quality",
+        "loss_mentions": 49,
+        "losses": 0,
+        "sample_size": 0,
+        "verdict": "needs_review",
+        "weighted_accuracy": 0.0,
+        "wins": 0
+      },
+      "severity": "medium",
+      "source_loss_ids": [
+        "loss-d4e1d89fdb",
+        "loss-d07b18ca5a",
+        "loss-1200b4f9f9",
+        "loss-33e6f486f7",
+        "loss-dc3f48f611",
+        "loss-68cb3a0739",
+        "loss-53f50388f6",
+        "loss-59fc45d5fd"
+      ],
+      "type": "factor_needs_review"
+    },
+    {
+      "caution": "Use this repeated miss pattern as caution context; current validated data still wins.",
+      "count": 9,
       "factor": "record_recent_form",
       "pattern_id": "factor-record-recent-form",
       "production_authority": "advisory_only",
       "reason_quality": {
-        "accuracy": 48.9,
+        "accuracy": 51.4,
         "factor": "record_recent_form",
-        "loss_mentions": 6,
-        "losses": 24,
-        "sample_size": 47,
+        "loss_mentions": 9,
+        "losses": 103,
+        "sample_size": 212,
         "verdict": "needs_review",
-        "wins": 23
+        "weighted_accuracy": 51.6,
+        "wins": 109
       },
       "severity": "medium",
       "source_loss_ids": [],
@@ -152,16 +227,17 @@
     {
       "caution": "Use this repeated miss pattern as caution context; current validated data still wins.",
       "count": 3,
-      "factor": "lineup",
-      "pattern_id": "factor-lineup",
+      "factor": "bullpen",
+      "pattern_id": "factor-bullpen",
       "production_authority": "advisory_only",
       "reason_quality": {
         "accuracy": 40.0,
-        "factor": "lineup",
+        "factor": "bullpen",
         "loss_mentions": 0,
         "losses": 3,
         "sample_size": 5,
         "verdict": "weak_signal",
+        "weighted_accuracy": 40.5,
         "wins": 2
       },
       "severity": "medium",
@@ -170,21 +246,21 @@
     }
   ],
   "next_game_cautions": [
+    "Cap confidence unless multiple independent signals agree.",
+    "Be cautious with calibration:overconfidence; recent evaluated record is 0-92.",
+    "Use this repeated miss pattern as caution context; current validated data still wins.",
     "Prefer NO BET or LEAN ONLY when edge is marginal and no Tier 1 signal confirms the side.",
     "Do not let record, H2H, or recent form dominate weak game-specific matchup evidence.",
-    "Do not let starting-pitcher edge dominate without offense, lineup, and bullpen confirmation.",
-    "Be cautious with probability:60-65; recent evaluated record is 7-11.",
-    "Be cautious with edge:weak <2; recent evaluated record is 7-9.",
-    "Use this repeated miss pattern as caution context; current validated data still wins."
+    "Do not let starting-pitcher edge dominate without offense, lineup, and bullpen confirmation."
   ],
   "production_authority": "advisory_memory_only",
   "rollback_supported": true,
   "sample": {
-    "evaluated": 270,
-    "language_losses": 270,
-    "lessons": 270,
-    "wrong_predictions": 125
+    "evaluated": 659,
+    "language_losses": 659,
+    "lessons": 659,
+    "wrong_predictions": 310
   },
-  "updated_at": "2026-05-22T05:57:23.867341+00:00",
+  "updated_at": "2026-05-30T05:36:53.025920+00:00",
   "version": "audit-memory-v1.0"
 }

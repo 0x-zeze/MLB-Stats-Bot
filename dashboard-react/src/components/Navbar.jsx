@@ -3,7 +3,6 @@ import { Activity, Calendar, RefreshCw, Send, Zap } from 'lucide-react';
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'games', label: 'Games' },
-  { id: 'predictions', label: 'Predictions' },
   { id: 'moneyline', label: 'Moneyline' },
   { id: 'totals', label: 'Totals' },
   { id: 'yrfi', label: 'YRFI / NRFI' },

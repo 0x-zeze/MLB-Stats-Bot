@@ -37,23 +37,113 @@ function EmptyRow({ colSpan = 6 }) {
   );
 }
 
-function Details({ payload }) {
-  const [open, setOpen] = useState(false);
+function asList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean).map((item) => typeof item === 'string' ? item : text(item.description || item.text || item.reason || JSON.stringify(item)));
+  if (typeof value === 'object') return Object.entries(value).map(([key, item]) => `${key}: ${text(item)}`);
+  return [String(value)];
+}
+
+function compactObjectRows(value, keys) {
+  if (!value || typeof value !== 'object') return [];
+  return keys.map(([label, key]) => [label, value[key]]).filter(([, item]) => item !== undefined && item !== null && item !== '');
+}
+
+function DetailBlock({ title, children }) {
   return (
-    <div className="text-xs">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1 font-semibold text-accent-blue hover:text-accent-blue/80 transition-colors cursor-pointer"
-      >
-        {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-        {open ? 'Hide' : 'Details'}
-      </button>
-      {open && (
-        <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-paper p-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words">
-          {JSON.stringify(payload, null, 2)}
-        </pre>
-      )}
+    <div className="rounded-md border-2 border-ink bg-paper p-3 shadow-neo-sm">
+      <p className="text-[10px] font-black uppercase text-ink/50">{title}</p>
+      <div className="mt-2">{children}</div>
+    </div>
+  );
+}
+
+function KeyValueGrid({ rows, empty = 'No detail stored.' }) {
+  const cleanRows = rows.filter(([, value]) => value !== undefined && value !== null && value !== '');
+  if (!cleanRows.length) return <p className="text-xs font-semibold text-ink/50">{empty}</p>;
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {cleanRows.map(([label, value]) => (
+        <div key={label} className="rounded border-2 border-ink bg-cream px-2 py-1.5">
+          <p className="text-[10px] font-black uppercase text-ink/50">{label}</p>
+          <p className="text-xs font-black text-ink">{text(value)}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DetailList({ items, empty = 'Nothing flagged.' }) {
+  const list = asList(items);
+  if (!list.length) return <p className="text-xs font-semibold text-ink/50">{empty}</p>;
+  return (
+    <ul className="space-y-1 text-xs font-semibold text-ink/70">
+      {list.slice(0, 8).map((item, index) => <li key={`${item}-${index}`}>• {item}</li>)}
+    </ul>
+  );
+}
+
+function TrajectoryDetails({ row }) {
+  const prediction = row.prediction || {};
+  const input = row.input_snapshot || row.input_data_snapshot || {};
+  const dataQuality = input.data_quality || row.data_quality || {};
+  const moneyline = prediction.moneyline || row.moneyline || {};
+  const totals = prediction.totals || row.totals || {};
+  const yrfi = prediction.yrfi || prediction.first_inning || row.first_inning || {};
+  const modelBreakdown = row.model_breakdown || prediction.model_breakdown;
+  const betDecision = row.bet_decision || prediction.bet_decision;
+  const valuePick = row.value_pick || prediction.value_pick;
+  const marketRows = [
+    ...compactObjectRows(moneyline, [['ML Model Prob', 'model_probability'], ['Home Prob', 'home_probability'], ['Away Prob', 'away_probability'], ['Edge', 'edge'], ['Odds', 'current_odds']]),
+    ...compactObjectRows(totals, [['Projected Total', 'projected_total'], ['Market Total', 'market_total'], ['Lean', 'lean'], ['Over Prob', 'over_probability'], ['Under Prob', 'under_probability'], ['Edge', 'edge']]),
+    ...compactObjectRows(yrfi, [['Pick', 'pick'], ['Probability', 'probability'], ['YRFI Prob', 'yrfi_probability'], ['Edge', 'edge']]),
+  ];
+  const qualityRows = typeof dataQuality === 'object'
+    ? compactObjectRows(dataQuality, [['Score', 'score'], ['Tier', 'tier'], ['Pitchers', 'probable_pitchers'], ['Lineup', 'lineup'], ['Weather', 'weather'], ['Odds', 'odds'], ['Bullpen', 'bullpen_usage'], ['Park', 'park_factor']])
+    : [['Data Quality', dataQuality]];
+  return (
+    <div className="mt-2 grid gap-3 lg:grid-cols-2">
+      <DetailBlock title="Prediction Snapshot">
+        <KeyValueGrid rows={[
+          ['Matchup', row.matchup],
+          ['Date', row.date || row.timestamp],
+          ['Market', row.market],
+          ['Final Lean', prediction.final_lean || prediction.lean || row.final_lean],
+          ['Confidence', prediction.confidence || row.confidence],
+          ['No Bet', row.no_bet_reason || prediction.no_bet_reason],
+        ]} />
+      </DetailBlock>
+      <DetailBlock title="Market / Model Detail">
+        <KeyValueGrid rows={marketRows} empty="No market detail stored for this trajectory." />
+      </DetailBlock>
+      <DetailBlock title="Why">
+        <DetailList items={row.main_factors || prediction.main_factors || modelBreakdown || valuePick || betDecision} empty="No factor explanation stored." />
+      </DetailBlock>
+      <DetailBlock title="Risks / No Bet">
+        <DetailList items={row.risk_factors || prediction.risk_factors || row.no_bet_reason || prediction.no_bet_reason} empty="No risk note stored." />
+      </DetailBlock>
+      <DetailBlock title="Data Quality">
+        <KeyValueGrid rows={[
+          ...qualityRows,
+          ['Lineup Status', input.lineup_status],
+          ['Weather Status', input.weather_status],
+          ['Odds Status', input.odds_status],
+          ['Pitcher Status', input.probable_pitcher_status],
+        ]} />
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <DetailList items={dataQuality.missing_fields} empty="No missing fields listed." />
+          <DetailList items={dataQuality.stale_fields} empty="No stale fields listed." />
+        </div>
+      </DetailBlock>
+      <DetailBlock title="Tools & Versions">
+        <KeyValueGrid rows={[
+          ['Tools', asList(row.tool_usage).join(', ')],
+          ['Prompt', row.prompt_version],
+          ['Rules', row.rule_version],
+          ['Weights', row.weight_version],
+          ['Model', row.model_version],
+        ]} />
+      </DetailBlock>
     </div>
   );
 }
@@ -79,7 +169,6 @@ function Trajectories({ rows }) {
             {rows?.length ? rows.map((row) => {
               const rowKey = `${row.game_id}-${row.timestamp}`;
               const isExpanded = expandedRow === rowKey;
-              const payload = { tools: row.tool_usage, data_quality: row.input_snapshot?.data_quality, risk_factors: row.risk_factors };
               return (
                 <tr key={rowKey} className={isExpanded ? 'bg-cream' : ''}>
                   <td className="px-3 py-3 font-semibold text-ink">{text(row.matchup)}</td>
@@ -105,13 +194,10 @@ function Trajectories({ rows }) {
         {expandedRow && rows?.length > 0 && (() => {
           const row = rows.find((r) => `${r.game_id}-${r.timestamp}` === expandedRow);
           if (!row) return null;
-          const payload = { tools: row.tool_usage, data_quality: row.input_snapshot?.data_quality, risk_factors: row.risk_factors };
           return (
-            <div className="mt-2 rounded-md border border-ink bg-paper p-4">
-              <p className="text-xs font-semibold text-ink/70 mb-2">Trajectory Details — {text(row.matchup)}</p>
-              <pre className="max-h-64 overflow-auto text-[11px] leading-relaxed text-ink/80 whitespace-pre-wrap break-words">
-                {JSON.stringify(payload, null, 2)}
-              </pre>
+            <div className="mt-2 rounded-md border-2 border-ink bg-cream p-4 shadow-neo-sm">
+              <p className="mb-2 text-xs font-black uppercase text-ink/70">Trajectory Details — {text(row.matchup)}</p>
+              <TrajectoryDetails row={row} />
             </div>
           );
         })()}

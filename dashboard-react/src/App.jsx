@@ -9,7 +9,6 @@ import TotalsSection from './components/TotalsSection.jsx';
 import YrfiSection from './components/YrfiSection.jsx';
 import TeamAnalytics from './components/TeamAnalytics.jsx';
 import DataQualitySection from './components/DataQualitySection.jsx';
-import AnalystAgent from './components/AnalystAgent.jsx';
 import MemorySection from './components/MemorySection.jsx';
 import EvolutionView from './components/EvolutionView.jsx';
 import HistorySection from './components/HistorySection.jsx';
@@ -158,15 +157,6 @@ export default function App() {
           <TodaySlate games={games} loading={loading} error={error} onSelectGame={setSelectedGame} />
           {selectedGame && <PredictionDetail game={selectedGame} onClose={() => setSelectedGame(null)} />}
           <TeamAnalytics game={selectedGame} />
-        </div>
-      )}
-
-      {activeTab === 'predictions' && (
-        <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Predictions</h2>
-          <TodaySlate games={games} loading={loading} error={error} onSelectGame={setSelectedGame} />
-          {selectedGame && <PredictionDetail game={selectedGame} onClose={() => setSelectedGame(null)} />}
-          <AnalystAgent game={selectedGame} />
         </div>
       )}
 
