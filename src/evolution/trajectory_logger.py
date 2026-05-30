@@ -81,6 +81,7 @@ def build_prediction_trajectory(game_context: dict[str, Any], prediction_output:
     data_quality = context.get("data_quality") or {}
     totals = prediction_source.get("totals") or context.get("totals") or {}
     moneyline = prediction_source.get("moneyline") or context.get("moneyline") or {}
+    yrfi = prediction_source.get("yrfi") or context.get("yrfi") or {}
     market = _infer_market(context, prediction_source)
     final_lean = prediction_source.get("final_lean") or totals.get("lean") or prediction_source.get("lean") or "NO BET"
     confidence = (
@@ -118,6 +119,7 @@ def build_prediction_trajectory(game_context: dict[str, Any], prediction_output:
             "market_total": totals.get("market_total"),
             "over_probability": totals.get("over_probability"),
             "under_probability": totals.get("under_probability"),
+            "yrfi_probability": yrfi.get("probability"),
             "market_odds": moneyline.get("current_odds") or {"over": totals.get("over_odds"), "under": totals.get("under_odds")},
             "model_edge": moneyline.get("edge") if market == "moneyline" else totals.get("edge"),
             "lean": final_lean,

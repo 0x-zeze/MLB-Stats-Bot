@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..evaluate import load_prediction_log
+from ..totals import poisson_total_probability
 from ..utils import DATA_DIR, safe_float
 from .calibration_auto_adjust import find_miscalibrated_buckets
 from .language_gradient import generate_language_gradient
@@ -305,6 +306,21 @@ def _build_totals_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | Non
         confidence = "Low"
     model_edge = safe_float(total_runs.get("modelEdge"), 0.0)
 
+    # over/underMarketProbability are only populated when live odds were attached
+    # (storage.js compaction). When absent, derive them from the projected total
+    # so totals predictions carry a real probability instead of a flat 50%.
+    over_prob = total_runs.get("overMarketProbability")
+    under_prob = total_runs.get("underMarketProbability")
+    if over_prob in (None, "") or under_prob in (None, ""):
+        if projected > 0 and market_line > 0:
+            over_prob = round(poisson_total_probability(projected, market_line, "over") * 100.0, 2)
+            under_prob = round(100.0 - over_prob, 2)
+        else:
+            over_prob = under_prob = 50.0
+    else:
+        over_prob = safe_float(over_prob, 50.0)
+        under_prob = safe_float(under_prob, 50.0)
+
     context = {
         "game_id": prediction.get("gamePk"),
         "date": prediction.get("dateYmd"),
@@ -327,8 +343,8 @@ def _build_totals_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | Non
             "best_lean": best_lean,
             "confidence": confidence,
             "model_edge": model_edge,
-            "over_probability": safe_float(total_runs.get("overMarketProbability"), 50.0),
-            "under_probability": safe_float(total_runs.get("underMarketProbability"), 50.0),
+            "over_probability": over_prob,
+            "under_probability": under_prob,
         },
         "main_factors": total_runs.get("factors") or [],
         "risk_factors": [],

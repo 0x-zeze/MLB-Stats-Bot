@@ -2,7 +2,14 @@ import unittest
 import json
 
 from evolution_helpers import final_result, isolated_evolution_store, sample_trajectory
-from src.evolution.evolution_engine import evaluate_completed_prediction, ingest_bot_history, run_evolution_cycle
+from src.evolution.evolution_engine import (
+    _build_totals_trajectory,
+    _build_yrfi_trajectory,
+    evaluate_completed_prediction,
+    ingest_bot_history,
+    run_evolution_cycle,
+)
+from src.evolution.prediction_evaluator import _predicted_probability
 from src.evolution.memory_store import read_json, read_jsonl, read_prediction_outcomes
 
 
@@ -73,6 +80,46 @@ class EvolutionEngineTests(unittest.TestCase):
         self.assertEqual(cycle["ingest"]["evaluated"], 0)
         self.assertEqual(len(outcomes), 1)
         self.assertEqual(len(lessons), 1)
+
+    def test_totals_probability_derived_from_projection_when_market_odds_missing(self):
+        # Stored picks frequently lack over/underMarketProbability (live odds were
+        # never attached). The builder must derive a real probability from the
+        # projected total instead of defaulting to a flat 50%.
+        prediction = {
+            "gamePk": 555,
+            "dateYmd": "2026-05-01",
+            "away": {"name": "Alpha Aces"},
+            "home": {"name": "Beta Bats"},
+            "totalRuns": {
+                "projectedTotal": 7.2,
+                "marketLine": 8.5,
+                "bestLean": "Under 8.5",
+                "confidence": "medium",
+                "modelEdge": 3.0,
+            },
+        }
+        trajectory = _build_totals_trajectory(prediction)
+        self.assertIsNotNone(trajectory)
+        pred = trajectory["prediction"]
+        self.assertNotEqual(pred["under_probability"], 50.0)
+        self.assertAlmostEqual(pred["over_probability"] + pred["under_probability"], 100.0, places=1)
+        # A low projected total favors the under, so under prob must exceed 0.5.
+        self.assertGreater(_predicted_probability(trajectory, "totals", "Under 8.5"), 0.5)
+
+    def test_yrfi_probability_flows_through_and_inverts_for_no(self):
+        prediction = {
+            "gamePk": 777,
+            "dateYmd": "2026-05-01",
+            "away": {"name": "Alpha Aces"},
+            "home": {"name": "Beta Bats"},
+            "firstInning": {"pick": "NO", "probability": 37, "confidence": "medium"},
+        }
+        trajectory = _build_yrfi_trajectory(prediction)
+        self.assertIsNotNone(trajectory)
+        self.assertEqual(trajectory["prediction"]["yrfi_probability"], 37)
+        # YES probability 37% means a NO pick wins ~63% of the time.
+        self.assertAlmostEqual(_predicted_probability(trajectory, "yrfi", "NO"), 0.63, places=2)
+        self.assertAlmostEqual(_predicted_probability(trajectory, "yrfi", "YES"), 0.37, places=2)
 
 
 if __name__ == "__main__":

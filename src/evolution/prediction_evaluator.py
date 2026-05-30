@@ -137,6 +137,11 @@ def _predicted_probability(trajectory: dict[str, Any], market: str, lean: str) -
         if lean.lower().startswith("under"):
             return probability(prediction.get("under_probability"), 0.5)
         return probability(prediction.get("over_probability"), 0.5)
+    if market == "yrfi":
+        # stored yrfi_probability is the YES (run in 1st inning) probability;
+        # a NO pick wins when no run scores, so invert.
+        yes_prob = probability(prediction.get("yrfi_probability"), 0.5)
+        return 1.0 - yes_prob if lean.strip().upper() == "NO" else yes_prob
     return probability(prediction.get("moneyline_probability"), 0.5)
 
 
