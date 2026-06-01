@@ -98,8 +98,16 @@ def _extract_predicted_probability(row: dict[str, Any]) -> float | None:
     if eval_json:
         try:
             data = json.loads(eval_json)
+            # The evaluator stores the authoritative per-market win probability
+            # for the picked side here (moneyline, totals, and yrfi alike). Prefer
+            # it so every market calibrates, not just moneyline.
+            predicted = safe_float(data.get("predicted_probability"), None)
+            if predicted is not None:
+                val = predicted / 100.0 if predicted > 1.0 else predicted
+                if abs(val - 0.5) > 1e-9:
+                    return clamp(val, 0.05, 0.95)
             edge = safe_float(data.get("edge"), None)
-            if edge is not None:
+            if edge is not None and abs(edge) > 1e-9:
                 return clamp((50.0 + edge) / 100.0, 0.05, 0.95)
             prob = data.get("model_probability") or data.get("home_win_probability")
             if prob is not None:

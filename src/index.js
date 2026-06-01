@@ -45,95 +45,13 @@ let autoUpdateCheckRunning = false;
 const predictionCache = new Map();
 const PREDICT_CALLBACK_PREFIX = 'predict_live:';
 const LEGACY_PREDICT_CALLBACK_PREFIX = 'predict:';
-const EVOLVE_CALLBACK_PREFIX = 'evolve:';
 const TOTAL_MARKET_BUTTONS = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
-const EVOLUTION_COMMANDS = {
-  run: {
-    module: 'src.evolution.evolution_engine',
-    args: ['--run-cycle'],
-    label: 'Evolution cycle'
-  },
-  summary: {
-    module: 'src.evolution.evolution_report',
-    args: ['--summary'],
-    label: 'Evolution summary'
-  },
-  logtoday: {
-    module: 'src.evolution.trajectory_logger',
-    args: ['--log-today'],
-    label: 'Log trajectory hari ini'
-  },
-  evaluate: {
-    module: 'src.evolution.evolution_engine',
-    args: ['--evaluate-yesterday'],
-    label: 'Evaluate yesterday'
-  },
-  lessons: {
-    module: 'src.evolution.evolution_engine',
-    args: ['--generate-lessons'],
-    label: 'Generate lessons'
-  },
-  loss: {
-    module: 'src.evolution.language_loss',
-    args: ['--generate'],
-    label: 'Generate language loss'
-  },
-  gradient: {
-    module: 'src.evolution.language_gradient',
-    args: ['--generate'],
-    label: 'Generate language gradients'
-  },
-  propose: {
-    module: 'src.evolution.symbolic_optimizer',
-    args: ['--propose-updates'],
-    label: 'Propose symbolic updates'
-  },
-  rules: {
-    module: 'src.evolution.evolution_engine',
-    args: ['--propose-rules'],
-    label: 'Propose rule candidates'
-  },
-  backtest: {
-    module: 'src.evolution.evolution_engine',
-    args: ['--backtest-candidates'],
-    label: 'Backtest candidates'
-  },
-  promote: {
-    module: 'src.evolution.evolution_engine',
-    args: ['--promote-approved'],
-    label: 'Promotion status'
-  }
-};
-const EVOLUTION_ALIASES = {
-  start: 'run',
-  learn: 'run',
-  belajar: 'run',
-  cycle: 'run',
-  status: 'status',
-  eval: 'evaluate',
-  yesterday: 'evaluate',
-  lesson: 'lessons',
-  losses: 'loss',
-  gradients: 'gradient',
-  candidate: 'propose',
-  candidates: 'propose',
-  update: 'propose',
-  updates: 'propose',
-  rule: 'rules',
-  approve: 'promote',
-  promotion: 'promote',
-  log: 'logtoday',
-  logtoday: 'logtoday'
-};
+// Legacy inline buttons from older /evolve messages still carry this prefix.
+const EVOLVE_CALLBACK_PREFIX = 'evolve:';
 const AUDIT_COMMAND = {
   module: 'src.evolution.evolution_audit',
   args: ['--summary', '--apply-safe', '--update-memory'],
   label: 'Evolution audit + learning memory'
-};
-const AUDIT_LEARN_COMMAND = {
-  module: 'src.evolution.evolution_engine',
-  args: ['--ingest-bot-history'],
-  label: 'Post-game learning ingest'
 };
 
 function helpText() {
@@ -152,7 +70,7 @@ function helpText() {
     uiCommand('/deep', 'semua game dengan statistik lengkap'),
     uiCommand('/game TEAM', 'cek tim tertentu hari ini'),
     uiCommand('/ask pertanyaan', 'tanya Analyst Agent bebas'),
-    uiCommand('/audit', 'belajar dari hasil final + update guardrail'),
+    uiCommand('/evolve', 'belajar dari semua hasil final + tingkatkan edge (1 command, full otomatis)'),
     uiCommand('/linealerts on|off|status', 'atur notifikasi line movement'),
     '',
     uiBullet('💬', 'Pertanyaan biasa tanpa slash tetap masuk ke Analyst Agent.'),
@@ -169,7 +87,7 @@ function botCommandList() {
     { command: 'news', description: 'Risk/news context dari data bot' },
     { command: 'game', description: 'Cek tim tertentu hari ini' },
     { command: 'ask', description: 'Tanya Analyst Agent' },
-    { command: 'audit', description: 'Audit + learning memory' },
+    { command: 'evolve', description: 'Belajar dari hasil final + tingkatkan edge' },
     { command: 'linealerts', description: 'Atur line movement alerts' }
   ];
 }
@@ -546,28 +464,6 @@ function runPythonModule(moduleName, args = [], options = {}) {
   });
 }
 
-function evolutionHelpText() {
-  return [
-    uiTitle('🧠', 'MLB Agent Evolution | help'),
-    '',
-    uiSection('📋', 'Telegram command'),
-    uiCommand('/evolve', 'jalankan evolution cycle dari history/post-game'),
-    uiCommand('/evolve run', 'sama seperti /evolve'),
-    uiCommand('/evolve summary', 'ringkasan evolution'),
-    uiCommand('/evolve logtoday', 'simpan trajectory pre-game hari ini'),
-    uiCommand('/evolve evaluate', 'evaluasi game kemarin'),
-    uiCommand('/evolve lessons', 'cek lesson tersimpan'),
-    uiCommand('/evolve loss', 'generate language loss'),
-    uiCommand('/evolve gradient', 'generate language gradient'),
-    uiCommand('/evolve propose', 'propose symbolic update'),
-    uiCommand('/evolve rules', 'propose rule candidate'),
-    uiCommand('/evolve backtest', 'cek candidate yang perlu backtest'),
-    uiCommand('/evolve promote', 'cek status promotion gate'),
-    '',
-    uiBullet('🛡️', 'Tidak auto-ubah production. Semua candidate tetap butuh backtest dan promotion gate.')
-  ].join('\n');
-}
-
 function parseJsonOutput(output) {
   try {
     return JSON.parse(output || '{}');
@@ -576,372 +472,55 @@ function parseJsonOutput(output) {
   }
 }
 
-function formatEvolutionSummary(payload) {
-  const summary = payload.summary || {};
-  const pending = storage.listPendingPredictionDates();
-  const pendingCount = pending.length;
-
-  const nextSteps = [];
-  if (pendingCount > 0) nextSteps.push(`/evolve run — ${pendingCount} tanggal belum dievaluasi`);
-  if ((summary.candidates_proposed || 0) > (summary.candidates_approved || 0)) nextSteps.push('/evolve rules — ada candidate pending untuk review');
-  if ((summary.lessons_generated || 0) > 0) nextSteps.push('/audit — apply guardrails dari lesson yang ada');
-  if (nextSteps.length === 0) nextSteps.push('System idle — menunggu game final baru.');
+function formatEvolveResult(payload) {
+  const postgame = payload.postgame || {};
+  const cycle = payload.cycle || {};
+  const backfill = cycle.backfill || {};
+  const ingest = cycle.ingest || {};
+  const summary = cycle.summary || {};
+  const calibration = cycle.calibration || {};
+  const audit = payload.audit || {};
+  const auditSummary = audit.summary || {};
+  const applied = audit.applied_updates || {};
+  const calibratedMarkets = Array.isArray(calibration.calibrated_markets)
+    ? calibration.calibrated_markets
+    : [];
 
   return [
-    uiTitle('🧠', 'MLB Agent Evolution | summary'),
+    uiTitle('🧠', 'MLB Agent Evolution | selesai'),
     '',
+    uiSection('🏁', 'Post-game'),
+    uiKV('📅', 'Tanggal dicek', postgame.dates_checked || 0),
+    uiKV('🧠', 'Game baru dipelajari', postgame.learned_games || 0),
+    '',
+    uiSection('🩹', 'Backfill data flat'),
+    uiKV('🔧', 'Baris diperbaiki', backfill.updated || 0),
+    uiKV('📈', 'Totals/YRFI', `${backfill.totals_fixed || 0}/${backfill.yrfi_fixed || 0}`),
+    '',
+    uiSection('📥', 'Ingest'),
+    uiKV('📊', 'Evaluasi baru', ingest.evaluated || 0),
+    uiKV('♻️', 'Duplikat dilewati', ingest.skipped_duplicates || 0),
+    '',
+    uiSection('🎚️', 'Kalibrasi'),
+    uiKV('✅', 'Market terkalibrasi', calibratedMarkets.length ? calibratedMarkets.join(', ') : 'belum cukup sample'),
+    '',
+    uiSection('🔄', 'Cycle'),
+    uiKV('🧪', 'Symbolic candidates', cycle.symbolic_candidates || 0),
+    uiKV('📏', 'Rule candidates', cycle.rule_candidates || 0),
+    '',
+    uiSection('🔎', 'Audit'),
+    uiKV('📊', 'Evaluated', auditSummary.evaluated || 0),
+    uiKV('📈', 'Accuracy', `${auditSummary.accuracy || 0}%`),
+    uiKV('🔧', 'Rules applied', (applied.rules_added || []).length),
+    uiKV('⚖️', 'Weight updates', (applied.weight_versions_added || []).length),
+    '',
+    uiSection('📌', 'Total tersimpan'),
     uiKV('📊', 'Evaluated', summary.total_predictions_evaluated || 0),
     uiKV('📚', 'Lessons', summary.lessons_generated || 0),
-    uiKV('⚠️', 'Language loss', summary.language_losses_generated || 0),
-    uiKV('🧭', 'Language gradient', summary.language_gradients_generated || 0),
-    uiKV('🧪', 'Candidates', summary.candidates_proposed || 0),
-    uiKV('✅', 'Approved', summary.candidates_approved || 0),
-    uiKV('❌', 'Rejected', summary.candidates_rejected || 0),
-    '',
-    uiSection('🏷️', 'Active versions'),
-    uiKV('💬', 'Prompt', summary.current_prompt_version || '-'),
-    uiKV('📏', 'Rules', summary.current_rule_version || '-'),
-    uiKV('⚖️', 'Weights', summary.current_weight_version || '-'),
-    '',
-    uiSection('💡', 'Next steps'),
-    ...nextSteps.map((step) => uiBullet('👉', step)),
-    '',
-    uiBullet('📌', 'Lihat detail di dashboard tab Evolution.')
-  ].join('\n');
-}
-
-function formatEvolutionCycleResult(payload) {
-  const postgame = payload.postgame || {};
-  const ingest = payload.ingest || {};
-  const summary = payload.summary || {};
-  return [
-    uiTitle('🧠', 'MLB Agent Evolution | run'),
-    '',
-    uiKV('🏁', 'Post-game dates checked', postgame.dates_checked || 0),
-    uiKV('🧠', 'New games learned', postgame.learned_games || 0),
-    uiKV('📚', 'History rows found', ingest.history_rows || 0),
-    uiKV('📊', 'Evaluations added', ingest.evaluated || 0),
-    uiKV('♻️', 'Duplicates skipped', ingest.skipped_duplicates || 0),
-    uiKV('📘', 'Lessons added', ingest.lessons || 0),
-    uiKV('⚠️', 'Language losses added', ingest.language_losses || 0),
-    uiKV('🧭', 'Language gradients added', ingest.language_gradients || 0),
-    uiKV('🧪', 'Symbolic candidates added', payload.symbolic_candidates || 0),
-    uiKV('📏', 'Rule candidates added', payload.rule_candidates || 0),
-    '',
-    uiSection('📌', 'Current totals'),
-    uiKV('📊', 'Evaluated', summary.total_predictions_evaluated || 0),
-    uiKV('📚', 'Lessons', summary.lessons_generated || 0),
-    uiKV('🧭', 'Gradients', summary.language_gradients_generated || 0),
     uiKV('🧪', 'Candidates', summary.candidates_proposed || 0),
     '',
-    uiBullet('🛡️', 'Candidate tidak auto-promote. Rules/prompt/weights production tetap menunggu backtest dan promotion gate.')
+    uiBullet('🛡️', 'Guardrail aman diterapkan otomatis. Rules/prompt/weights production tetap lewat promotion gate.')
   ].join('\n');
-}
-
-function formatAuditSegment(segment) {
-  const record = segment.decided
-    ? `${segment.wins || 0}-${segment.losses || 0}`
-    : `${segment.no_bets || 0} no-bet`;
-  const rate = segment.decided ? `${segment.accuracy || 0}%` : `NB quality ${segment.no_bet_quality || 0}%`;
-  return uiBullet('•', `${segment.segment} | ${record} | ${rate} | ${segment.sample_size || 0} sample`);
-}
-
-function formatAuditCalibration(bucket) {
-  return uiBullet(
-    '•',
-    `${bucket.bucket} | ${bucket.wins || 0}-${bucket.losses || 0} | pred ${bucket.avg_predicted_probability || 0}% | actual ${bucket.observed_win_rate || 0}% | ${bucket.verdict || 'unknown'}`
-  );
-}
-
-function formatReasonQuality(item) {
-  const sample = item.sample_size || 0;
-  const record = sample ? `${item.wins || 0}-${item.losses || 0}` : `${item.loss_mentions || 0} loss mentions`;
-  return uiBullet('•', `${item.factor} | ${record} | ${item.accuracy || 0}% | ${item.verdict || 'neutral'}`);
-}
-
-function formatConfidenceCapCandidate(item) {
-  return uiBullet('•', `${item.target || item.type} | ${item.update || item.reason}`);
-}
-
-function formatAppliedAuditUpdate(item) {
-  return uiBullet('•', `${item.type || 'weight'} | ${item.rule || item.reason || item.version}`);
-}
-
-function formatAuditMemoryPattern(item) {
-  return uiBullet('•', `${item.type || 'pattern'} | ${item.factor || 'general'} | ${item.count || 0}x`);
-}
-
-function formatEvolutionAudit(payload) {
-  const summary = payload.summary || {};
-  const postgame = payload.postgame || {};
-  const learning = payload.learning_ingest || {};
-  const weakest = payload.weakest_segments || [];
-  const causes = payload.root_causes || [];
-  const recommendations = payload.priority_recommendations || [];
-  const candidates = payload.candidate_priorities || [];
-  const calibration = payload.calibration_buckets || [];
-  const clv = payload.clv_report || {};
-  const reasonQuality = payload.reason_quality || [];
-  const confidenceCaps = payload.confidence_cap_candidates || [];
-  const applied = payload.applied_updates || {};
-  const appliedRules = applied.rules_added || [];
-  const appliedWeights = applied.weight_versions_added || [];
-  const memoryUpdate = payload.memory_update || {};
-  const memoryPatterns = memoryUpdate.top_patterns || [];
-
-  return [
-    uiTitle('🔎', 'MLB Agent Evolution | audit'),
-    '',
-    uiKV('📊', 'Evaluated', summary.evaluated || 0),
-    uiKV('🎯', 'Decided', summary.decided || 0),
-    uiKV('🏁', 'Record', `${summary.wins || 0}-${summary.losses || 0}`),
-    uiKV('📈', 'Accuracy', `${summary.accuracy || 0}%`),
-    uiKV('🛑', 'No Bet', summary.no_bets || 0),
-    summary.average_clv !== null && summary.average_clv !== undefined ? uiKV('📉', 'Avg CLV', summary.average_clv) : null,
-    uiKV('📈', 'CLV sample', `${clv.sample_size || 0} | avg ${clv.average_clv ?? '-'} | positive ${clv.positive_rate || 0}%`),
-    '',
-    uiSection('🧠', 'Learning run'),
-    uiKV('🏁', 'Post-game checked', postgame.dates_checked || 0),
-    uiKV('📥', 'New final games learned', postgame.learned_games || 0),
-    uiKV('📚', 'Evolution lessons added', learning.lessons || 0),
-    uiKV('⚠️', 'Language losses added', learning.language_losses || 0),
-    uiKV('🧭', 'Language gradients added', learning.language_gradients || 0),
-    '',
-    uiSection('🎚️', 'Calibration buckets'),
-    ...(calibration.length ? calibration.slice(0, 5).map(formatAuditCalibration) : [uiBullet('•', 'Belum ada sample calibration.')]),
-    '',
-    uiSection('🧾', 'Reason quality'),
-    ...(reasonQuality.length ? reasonQuality.slice(0, 5).map(formatReasonQuality) : [uiBullet('•', 'Belum ada reason quality sample.')]),
-    '',
-    uiSection('🧯', 'Confidence cap candidates'),
-    ...(confidenceCaps.length ? confidenceCaps.slice(0, 4).map(formatConfidenceCapCandidate) : [uiBullet('•', 'Belum ada confidence cap candidate dari audit.')]),
-    '',
-    uiSection('⚠️', 'Weakest segments'),
-    ...(weakest.length ? weakest.slice(0, 4).map(formatAuditSegment) : [uiBullet('•', 'Belum cukup sample segment.')]),
-    '',
-    uiSection('🧩', 'Root causes'),
-    ...(causes.length
-      ? causes.slice(0, 5).map((cause) => uiBullet('•', `${cause.loss_type} | ${cause.count}x | ${cause.primary_factor}`))
-      : [uiBullet('•', 'Belum ada language loss.')]),
-    '',
-    uiSection('🛠️', 'Top fixes'),
-    ...(recommendations.length
-      ? recommendations.slice(0, 4).map((item, index) => `${index + 1}. ${item.recommendation}`)
-      : ['1. Jalankan /audit setelah beberapa game final agar weakness/lesson terlihat.']),
-    '',
-    uiSection('🧪', 'Candidate priority'),
-    ...(candidates.length
-      ? candidates.slice(0, 3).map((item) => uiBullet('•', `${item.type} | score ${item.priority_score} | backtest ${item.backtest_status}`))
-      : [uiBullet('•', 'Belum ada candidate prioritas.')]),
-    '',
-    uiSection('🔧', 'Applied safe updates'),
-    ...(appliedRules.length || appliedWeights.length
-      ? [
-          ...appliedRules.map(formatAppliedAuditUpdate),
-          ...appliedWeights.map((item) => uiBullet('•', `weight_version | ${item.version} | SP weight adjusted safely`))
-        ]
-      : [uiBullet('•', 'Tidak ada update baru. Guardrail aktif yang sama tidak ditulis ulang.')]),
-    '',
-    uiSection('🧠', 'Learning memory'),
-    uiKV('📝', 'Wrong picks remembered', memoryUpdate.wrong_predictions || 0),
-    uiKV('📌', 'Patterns stored', memoryUpdate.patterns_written || 0),
-    ...(memoryPatterns.length ? memoryPatterns.map(formatAuditMemoryPattern) : [uiBullet('•', 'Belum ada pola kesalahan berulang yang disimpan.')]),
-    '',
-    uiBullet('🛡️', 'Memory dipakai sebagai caution/guardrail. Current data tetap menang dan NO BET protection tidak dihapus.')
-  ]
-    .filter((line) => line !== null && line !== undefined)
-    .join('\n');
-}
-
-function formatKeyValuePayload(title, payload) {
-  if (payload.raw) {
-    return [uiTitle('📦', title), '', payload.raw].join('\n');
-  }
-
-  const lines = Object.entries(payload).map(([key, value]) => {
-    const label = key.replace(/_/g, ' ');
-    if (Array.isArray(value)) return uiKV('•', label, value.length);
-    if (value && typeof value === 'object') return uiKV('•', label, JSON.stringify(value));
-    return uiKV('•', label, value);
-  });
-
-  return [uiTitle('📦', title), '', ...(lines.length ? lines : [uiBullet('•', 'Tidak ada perubahan.')])].join('\n');
-}
-
-function formatEvolutionLessons(payload) {
-  const lessons = Array.isArray(payload.recent_lessons) ? payload.recent_lessons : Array.isArray(payload.lessons) ? payload.lessons : [];
-  const total = payload.total_lessons ?? payload.lessons_count ?? lessons.length;
-  const lines = [
-    uiTitle('📚', 'Evolution Lessons'),
-    uiKV('📊', 'Total lessons', total),
-    ''
-  ];
-
-  if (lessons.length === 0) {
-    lines.push(uiBullet('•', 'Belum ada lesson tersimpan. Jalankan /evolve run setelah ada game final.'));
-    return lines.join('\n');
-  }
-
-  for (const lesson of lessons.slice(0, 5)) {
-    const type = lesson.lesson_type || lesson.type || 'unknown';
-    const game = lesson.game_id || lesson.gamePk || '-';
-    const summary = lesson.summary || lesson.loss_summary || '-';
-    const adjustment = lesson.suggested_adjustment || '';
-    lines.push(uiKV('📝', type, `game ${game}`));
-    lines.push(uiBullet('•', summary.slice(0, 140)));
-    if (adjustment) lines.push(uiBullet('💡', adjustment.slice(0, 120)));
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-function formatEvolutionLoss(payload) {
-  const losses = Array.isArray(payload.top_losses) ? payload.top_losses : Array.isArray(payload.losses) ? payload.losses : [];
-  const total = payload.total_losses ?? payload.language_losses ?? losses.length;
-  const lines = [
-    uiTitle('⚠️', 'Language Losses'),
-    uiKV('📊', 'Total losses', total),
-    ''
-  ];
-
-  if (losses.length === 0) {
-    lines.push(uiBullet('•', 'Belum ada language loss. Jalankan /evolve run setelah ada game final.'));
-    return lines.join('\n');
-  }
-
-  for (const loss of losses.slice(0, 5)) {
-    const type = loss.loss_type || loss.type || 'unknown';
-    const factor = loss.affected_factor || loss.factor || '-';
-    const severity = loss.severity || 'medium';
-    const summary = loss.loss_summary || loss.summary || '';
-    lines.push(uiKV('🔴', type, `${factor} | severity: ${severity}`));
-    if (summary) lines.push(uiBullet('•', summary.slice(0, 140)));
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-function formatEvolutionGradient(payload) {
-  const gradients = Array.isArray(payload.top_gradients) ? payload.top_gradients : Array.isArray(payload.gradients) ? payload.gradients : [];
-  const total = payload.total_gradients ?? payload.language_gradients ?? gradients.length;
-  const lines = [
-    uiTitle('🧭', 'Language Gradients'),
-    uiKV('📊', 'Total gradients', total),
-    ''
-  ];
-
-  if (gradients.length === 0) {
-    lines.push(uiBullet('•', 'Belum ada gradient. Jalankan /evolve run setelah ada game final.'));
-    return lines.join('\n');
-  }
-
-  for (const grad of gradients.slice(0, 5)) {
-    const direction = grad.direction || grad.gradient_direction || 'unknown';
-    const factor = grad.target_factor || grad.affected_factor || '-';
-    const change = grad.suggested_change || grad.update || '';
-    lines.push(uiKV('🧭', direction, factor));
-    if (change) lines.push(uiBullet('💡', change.slice(0, 140)));
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-function formatEvolutionPropose(payload) {
-  const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
-  const total = payload.total_candidates ?? payload.candidates_count ?? candidates.length;
-  const lines = [
-    uiTitle('🧪', 'Symbolic Update Candidates'),
-    uiKV('📊', 'Total candidates', total),
-    ''
-  ];
-
-  if (candidates.length === 0) {
-    lines.push(uiBullet('•', 'Belum ada candidate. Butuh lebih banyak lesson dan gradient.'));
-    return lines.join('\n');
-  }
-
-  for (const c of candidates.slice(0, 5)) {
-    const type = c.type || 'symbolic_update';
-    const rule = c.rule || c.update || c.reason || '-';
-    const score = c.priority_score || c.source_count || 0;
-    lines.push(uiKV('🧪', type, `score ${score}`));
-    lines.push(uiBullet('•', rule.slice(0, 140)));
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-function formatEvolutionRules(payload) {
-  const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
-  const total = payload.total_candidates ?? candidates.length;
-  const lines = [
-    uiTitle('📏', 'Rule Candidates'),
-    uiKV('📊', 'Total candidates', total),
-    ''
-  ];
-
-  if (candidates.length === 0) {
-    lines.push(uiBullet('•', 'Belum ada rule candidate. Butuh minimal 5 lesson berulang.'));
-    return lines.join('\n');
-  }
-
-  for (const c of candidates.slice(0, 5)) {
-    const type = c.type || 'rule';
-    const rule = c.rule || c.update || '-';
-    const backtest = c.backtest_status || 'pending';
-    const promotion = c.promotion_status || 'pending';
-    lines.push(uiKV('📏', type, `backtest: ${backtest} | promotion: ${promotion}`));
-    lines.push(uiBullet('•', rule.slice(0, 140)));
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-function formatEvolutionBacktest(payload) {
-  const pending = payload.pending_candidates ?? 0;
-  const status = payload.backtest_status || 'requires_metrics';
-  const lines = [
-    uiTitle('🧪', 'Backtest Status'),
-    uiKV('📊', 'Pending candidates', pending),
-    uiKV('🔄', 'Status', status),
-    '',
-    uiBullet('📌', 'Candidates membutuhkan before/after metrics sebelum bisa dipromosikan.'),
-    uiBullet('💡', 'Jalankan backtest manual via dashboard atau /evolve promote setelah validasi.')
-  ];
-
-  return lines.join('\n');
-}
-
-function formatEvolutionPromote(payload) {
-  const message = payload.message || 'Gunakan promotion_gate dengan validated metrics.';
-  const lines = [
-    uiTitle('✅', 'Promotion Gate'),
-    '',
-    uiBullet('📌', message),
-    '',
-    uiBullet('🛡️', 'Promotion hanya terjadi setelah backtest menunjukkan improvement.'),
-    uiBullet('💡', 'Jalankan /audit untuk apply conservative guardrails tanpa promotion.')
-  ];
-
-  return lines.join('\n');
-}
-
-function formatEvolutionResult(action, payload) {
-  if (action === 'run') return formatEvolutionCycleResult(payload);
-  if (action === 'summary') return formatEvolutionSummary(payload);
-  if (action === 'lessons') return formatEvolutionLessons(payload);
-  if (action === 'loss') return formatEvolutionLoss(payload);
-  if (action === 'gradient') return formatEvolutionGradient(payload);
-  if (action === 'propose') return formatEvolutionPropose(payload);
-  if (action === 'rules') return formatEvolutionRules(payload);
-  if (action === 'backtest') return formatEvolutionBacktest(payload);
-  if (action === 'promote') return formatEvolutionPromote(payload);
-  return formatKeyValuePayload(EVOLUTION_COMMANDS[action]?.label || 'Evolution command', payload);
 }
 
 async function processStoredPostGamesForEvolution() {
@@ -970,196 +549,27 @@ async function processStoredPostGamesForEvolution() {
   return result;
 }
 
-function evolutionKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        { text: 'Run Cycle', callback_data: `${EVOLVE_CALLBACK_PREFIX}run` },
-        { text: 'Summary', callback_data: `${EVOLVE_CALLBACK_PREFIX}summary` },
-        { text: 'Lessons', callback_data: `${EVOLVE_CALLBACK_PREFIX}lessons` }
-      ],
-      [
-        { text: 'Audit', callback_data: `${EVOLVE_CALLBACK_PREFIX}audit` },
-        { text: 'Rules', callback_data: `${EVOLVE_CALLBACK_PREFIX}rules` },
-        { text: 'Full Pipeline', callback_data: `${EVOLVE_CALLBACK_PREFIX}full` }
-      ]
-    ]
-  };
-}
+async function handleEvolve(bot, chatId) {
+  await bot.sendMessage(chatId, uiKV('⏳', 'Menjalankan', 'Evolution penuh — belajar + tingkatkan edge'));
 
-function formatEvolutionStatus(payload) {
-  const summary = payload.summary || {};
-  const pending = storage.listPendingPredictionDates();
-  const pendingCount = pending.length;
-  const memorySummary = storage.getMemorySummary();
-
-  const nextAction = pendingCount > 0
-    ? `Ada ${pendingCount} tanggal dengan game belum dievaluasi. Jalankan /evolve run atau tap Run Cycle.`
-    : summary.candidates_proposed > 0
-      ? 'Ada candidate pending. Jalankan /audit untuk apply guardrails.'
-      : 'System idle — menunggu game final baru.';
-
-  return [
-    uiTitle('🧠', 'Evolution Status'),
-    '',
-    uiKV('📊', 'Evaluated', summary.total_predictions_evaluated || 0),
-    uiKV('📈', 'Bot accuracy', `${memorySummary.accuracy}% (${memorySummary.totalPicks} picks)`),
-    uiKV('📚', 'Lessons', summary.lessons_generated || 0),
-    uiKV('🧪', 'Candidates', summary.candidates_proposed || 0),
-    uiKV('✅', 'Approved', summary.candidates_approved || 0),
-    '',
-    uiSection('🏷️', 'Active versions'),
-    uiKV('📏', 'Rules', summary.current_rule_version || '-'),
-    uiKV('⚖️', 'Weights', summary.current_weight_version || '-'),
-    uiKV('💬', 'Prompt', summary.current_prompt_version || '-'),
-    '',
-    uiSection('📋', 'Pending'),
-    uiKV('📅', 'Dates to evaluate', pendingCount),
-    '',
-    uiSection('💡', 'Next step'),
-    uiBullet('👉', nextAction)
-  ].join('\n');
-}
-
-async function handleEvolutionFull(bot, chatId) {
-  await bot.sendMessage(chatId, uiKV('⏳', 'Menjalankan', 'Full evolution pipeline'));
-
+  // 1. Settle any pending final games into the bot's learning log.
   const postgame = await processStoredPostGamesForEvolution();
-  const learnOutput = await runPythonModule(AUDIT_LEARN_COMMAND.module, AUDIT_LEARN_COMMAND.args, {
-    timeoutMessage: 'Learning ingest timeout.',
-    timeoutMs: 90_000
-  }).catch((error) => JSON.stringify({ error: error.message }));
-  const learningIngest = parseJsonOutput(learnOutput);
 
+  // 2. Full cycle: backfill flat history, ingest, rebuild calibration, propose candidates.
   const cycleOutput = await runPythonModule('src.evolution.evolution_engine', ['--run-cycle'], {
-    timeoutMessage: 'Evolution cycle timeout.',
-    timeoutMs: 90_000
-  });
-  const cycleResult = parseJsonOutput(cycleOutput);
-
-  const auditOutput = await runPythonModule(AUDIT_COMMAND.module, AUDIT_COMMAND.args, {
-    timeoutMessage: 'Audit timeout.',
-    timeoutMs: 90_000
-  });
-  const auditResult = parseJsonOutput(auditOutput);
-
-  const lines = [
-    uiTitle('🧠', 'Full Evolution Pipeline | complete'),
-    '',
-    uiSection('🏁', 'Post-game'),
-    uiKV('📅', 'Dates checked', postgame.dates_checked || 0),
-    uiKV('🧠', 'Games learned', postgame.learned_games || 0),
-    '',
-    uiSection('📥', 'Ingest'),
-    uiKV('📊', 'Evaluated', learningIngest.evaluated || 0),
-    uiKV('♻️', 'Skipped', learningIngest.skipped_duplicates || 0),
-    '',
-    uiSection('🔄', 'Cycle'),
-    uiKV('🧪', 'Symbolic candidates', cycleResult.symbolic_candidates || 0),
-    uiKV('📏', 'Rule candidates', cycleResult.rule_candidates || 0),
-    '',
-    uiSection('🔎', 'Audit'),
-    uiKV('📊', 'Evaluated', auditResult.summary?.evaluated || 0),
-    uiKV('📈', 'Accuracy', `${auditResult.summary?.accuracy || 0}%`),
-    uiKV('🔧', 'Rules applied', (auditResult.applied_updates?.rules_added || []).length),
-    uiKV('⚖️', 'Weight updates', (auditResult.applied_updates?.weight_versions_added || []).length),
-    '',
-    uiBullet('🛡️', 'Pipeline selesai. Guardrails diterapkan jika memenuhi threshold.')
-  ];
-
-  await bot.sendMessage(chatId, lines.join('\n'));
-}
-
-async function handleEvolutionCommand(bot, chatId, args) {
-  const requested = String(args[0] || 'status').toLowerCase();
-  if (requested === 'help' || requested === 'menu') {
-    await bot.sendMessage(chatId, evolutionHelpText());
-    return;
-  }
-
-  if (requested === 'full' || requested === 'pipeline') {
-    await handleEvolutionFull(bot, chatId);
-    return;
-  }
-
-  if (requested === 'auto') {
-    const toggle = String(args[1] || 'status').toLowerCase();
-    const current = storage.getAutoEvolution?.() ?? false;
-    if (toggle === 'on') {
-      storage.setMeta('evolutionAuto', '1');
-      await bot.sendMessage(chatId, uiKV('🟢', 'Evolution auto', 'aktif — cycle otomatis setelah post-game learning'));
-    } else if (toggle === 'off') {
-      storage.setMeta('evolutionAuto', '0');
-      await bot.sendMessage(chatId, uiKV('🔴', 'Evolution auto', 'mati'));
-    } else {
-      const enabled = storage.getMeta('evolutionAuto', '0') === '1';
-      await bot.sendMessage(chatId, [
-        uiTitle('🔄', 'Evolution Auto'),
-        uiKV('🟢', 'Status', enabled ? 'aktif' : 'mati'),
-        '',
-        uiCommand('/evolve auto on', 'aktifkan auto-evolution setelah post-game'),
-        uiCommand('/evolve auto off', 'matikan auto-evolution')
-      ].join('\n'));
-    }
-    return;
-  }
-
-  const action = EVOLUTION_COMMANDS[requested] ? requested : EVOLUTION_ALIASES[requested];
-
-  if (action === 'status' || (!action && !requested)) {
-    await bot.sendMessage(chatId, uiKV('⏳', 'Mengambil', 'Evolution status'));
-    const output = await runPythonModule('src.evolution.evolution_report', ['--summary'], {
-      timeoutMessage: 'Evolution status timeout.',
-      timeoutMs: 30_000
-    }).catch(() => '{}');
-    const payload = parseJsonOutput(output);
-    await bot.sendMessage(chatId, formatEvolutionStatus(payload), {
-      reply_markup: evolutionKeyboard()
-    });
-    return;
-  }
-
-  if (!action || !EVOLUTION_COMMANDS[action]) {
-    await bot.sendMessage(chatId, evolutionHelpText());
-    return;
-  }
-
-  const commandConfig = EVOLUTION_COMMANDS[action];
-  const commandArgs = [...commandConfig.args];
-  if (action === 'logtoday') {
-    const source = String(args[1] || 'live').toLowerCase();
-    if (['live', 'sample', 'mock'].includes(source)) {
-      commandArgs.push('--source', source);
-    }
-  }
-
-  await bot.sendMessage(chatId, uiKV('⏳', 'Menjalankan', commandConfig.label));
-  const postgame = action === 'run' ? await processStoredPostGamesForEvolution() : null;
-  const output = await runPythonModule(commandConfig.module, commandArgs, {
-    timeoutMessage: 'Evolution command timeout. Coba lagi sebentar.',
-    timeoutMs: 90_000
-  });
-  const payload = parseJsonOutput(output);
-  if (postgame) payload.postgame = postgame;
-  await bot.sendMessage(chatId, formatEvolutionResult(action, payload));
-}
-
-async function handleAuditCommand(bot, chatId) {
-  await bot.sendMessage(chatId, uiKV('⏳', 'Menjalankan', 'Audit + learning memory'));
-  const postgame = await processStoredPostGamesForEvolution();
-  const learnOutput = await runPythonModule(AUDIT_LEARN_COMMAND.module, AUDIT_LEARN_COMMAND.args, {
-    timeoutMessage: 'Learning ingest timeout. Audit tetap dilanjutkan.',
-    timeoutMs: 90_000
+    timeoutMessage: 'Evolution cycle timeout. Coba lagi sebentar.',
+    timeoutMs: 120_000
   }).catch((error) => JSON.stringify({ error: error.message }));
-  const learningIngest = parseJsonOutput(learnOutput);
-  const output = await runPythonModule(AUDIT_COMMAND.module, AUDIT_COMMAND.args, {
-    timeoutMessage: 'Audit command timeout. Coba lagi sebentar.',
-    timeoutMs: 90_000
-  });
-  const payload = parseJsonOutput(output);
-  payload.postgame = postgame;
-  payload.learning_ingest = learningIngest;
-  await bot.sendMessage(chatId, formatEvolutionAudit(payload));
+  const cycle = parseJsonOutput(cycleOutput);
+
+  // 3. Audit: apply safe guardrails + refresh learning memory.
+  const auditOutput = await runPythonModule(AUDIT_COMMAND.module, AUDIT_COMMAND.args, {
+    timeoutMessage: 'Audit timeout. Coba lagi sebentar.',
+    timeoutMs: 120_000
+  }).catch((error) => JSON.stringify({ error: error.message }));
+  const audit = parseJsonOutput(auditOutput);
+
+  await bot.sendMessage(chatId, formatEvolveResult({ postgame, cycle, audit }));
 }
 
 async function sendKnowledgeAnswer(bot, chatId, query) {
@@ -1846,6 +1256,17 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
   return evaluations;
 }
 
+function rollingWinRate(days = 3) {
+  const log = storage.readMemory().learningLog || [];
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  const recent = log.filter(
+    (entry) => entry.at && typeof entry.correct === 'boolean' && new Date(entry.at).getTime() >= cutoff
+  );
+  if (recent.length === 0) return null;
+  const correct = recent.filter((entry) => entry.correct).length;
+  return { correct, total: recent.length, rate: Math.round((correct / recent.length) * 100), days };
+}
+
 function formatPostGameRecap(dateYmd, evaluations) {
   if (evaluations.length === 0) {
     return [
@@ -1858,14 +1279,37 @@ function formatPostGameRecap(dateYmd, evaluations) {
   }
 
   const correctCount = evaluations.filter((item) => item.correct).length;
+  const slateRate = Math.round((correctCount / evaluations.length) * 100);
+  const memory = storage.getMemorySummary();
+  const firstInning = memory.firstInning || {};
+  const rolling = rollingWinRate(3);
   const separator = UI_LINE;
+
+  // Trend arrow: how the recent 3-day form compares to the all-time baseline.
+  let trend = '';
+  if (rolling && memory.totalPicks > 0) {
+    const delta = rolling.rate - memory.accuracy;
+    if (delta >= 5) trend = ` ⬆️ +${delta}%`;
+    else if (delta <= -5) trend = ` ⬇️ ${delta}%`;
+    else trend = ' ➡️ stabil';
+  }
+
   const lines = [
     uiTitle('🏁', 'MLB Post-game Recap'),
     uiKV('📅', 'Tanggal', dateYmd),
-    uiKV('🎯', 'Akurasi pick', `${correctCount}/${evaluations.length}`),
+    '',
+    uiSection('📊', 'Performa'),
+    uiKV('🎯', 'Slate hari ini', `${correctCount}/${evaluations.length} (${slateRate}%)`),
+    rolling
+      ? uiKV('🔥', '3 hari terakhir', `${rolling.rate}% (${rolling.correct}/${rolling.total})${trend}`)
+      : null,
+    uiKV('📈', 'Keseluruhan', `${memory.accuracy}% (${memory.correctPicks}/${memory.totalPicks} pick)`),
+    firstInning.totalPicks
+      ? uiKV('🥇', '1st inning', `${firstInning.accuracy}% (${firstInning.correctPicks}/${firstInning.totalPicks})`)
+      : null,
     '',
     separator
-  ];
+  ].filter(Boolean);
 
   for (const item of evaluations) {
     const { prediction, result, correct, learned } = item;
@@ -2080,13 +1524,8 @@ async function handleMessage(bot, message) {
     return;
   }
 
-  if (command === '/evolve' || command === '/evolution') {
-    await handleEvolutionCommand(bot, chatId, args);
-    return;
-  }
-
-  if (command === '/audit') {
-    await handleAuditCommand(bot, chatId);
+  if (command === '/evolve' || command === '/evolution' || command === '/audit') {
+    await handleEvolve(bot, chatId);
     return;
   }
 
@@ -2133,23 +1572,10 @@ async function handleMessage(bot, message) {
 
 async function handleEvolveCallback(bot, callbackQuery) {
   const chatId = callbackQuery.message?.chat?.id;
-  const data = callbackQuery.data || '';
-  const action = data.slice(EVOLVE_CALLBACK_PREFIX.length);
-
   await bot.answerCallbackQuery(callbackQuery.id, { text: 'Processing...' }).catch(() => {});
   if (!chatId) return;
-
-  if (action === 'audit') {
-    await handleAuditCommand(bot, chatId);
-    return;
-  }
-
-  if (action === 'full') {
-    await handleEvolutionFull(bot, chatId);
-    return;
-  }
-
-  await handleEvolutionCommand(bot, chatId, [action]);
+  // /evolve is now a single all-in-one pipeline; any legacy button runs it.
+  await handleEvolve(bot, chatId);
 }
 
 async function handleCallbackQuery(bot, callbackQuery) {
@@ -2312,43 +1738,21 @@ async function processPendingPostGames(bot) {
 
     if (newGamesLearned > 0) {
       try {
-        console.log(`Post-game: ${newGamesLearned} new game(s) learned. Running evolution ingest...`);
-        const ingestOutput = await runPythonModule('src.evolution.evolution_engine', ['--ingest-bot-history'], {
-          timeoutMessage: 'Evolution ingest timeout (post-game). Skipped.',
-          timeoutMs: 90_000
+        // Auto-evolution is always on: a full cycle (backfill + ingest +
+        // calibration + candidates) followed by a safe-apply audit runs after
+        // every post-game learning pass so the edge improves automatically.
+        console.log(`Post-game: ${newGamesLearned} new game(s) learned. Running full evolution cycle...`);
+        await runPythonModule('src.evolution.evolution_engine', ['--run-cycle'], {
+          timeoutMessage: 'Auto evolution cycle timeout. Skipped.',
+          timeoutMs: 120_000
         });
-        const ingestResult = parseJsonOutput(ingestOutput);
-        if (ingestResult.evaluated > 0) {
-          console.log(`Evolution ingest: ${ingestResult.evaluated} prediction(s) evaluated, ${ingestResult.language_losses || 0} loss(es) generated.`);
-          try {
-            await runPythonModule('src.evolution.evolution_audit', ['--update-memory'], {
-              timeoutMessage: 'Audit memory update timeout (post-game). Skipped.',
-              timeoutMs: 60_000
-            });
-            console.log('Audit memory updated after post-game learning.');
-          } catch (auditError) {
-            console.error('Audit memory update after post-game failed:', auditError.message);
-          }
-
-          if (storage.getMeta('evolutionAuto', '0') === '1') {
-            try {
-              console.log('Evolution auto enabled. Running full cycle...');
-              await runPythonModule('src.evolution.evolution_engine', ['--run-cycle'], {
-                timeoutMessage: 'Auto evolution cycle timeout. Skipped.',
-                timeoutMs: 90_000
-              });
-              await runPythonModule('src.evolution.evolution_audit', ['--summary', '--apply-safe', '--update-memory'], {
-                timeoutMessage: 'Auto audit timeout. Skipped.',
-                timeoutMs: 90_000
-              });
-              console.log('Auto evolution cycle + audit completed.');
-            } catch (autoError) {
-              console.error('Auto evolution cycle failed:', autoError.message);
-            }
-          }
-        }
+        await runPythonModule('src.evolution.evolution_audit', ['--summary', '--apply-safe', '--update-memory'], {
+          timeoutMessage: 'Auto audit timeout. Skipped.',
+          timeoutMs: 120_000
+        });
+        console.log('Auto evolution cycle + audit completed.');
       } catch (error) {
-        console.error('Evolution ingest after post-game failed:', error.message);
+        console.error('Auto evolution cycle after post-game failed:', error.message);
       }
     }
   } finally {

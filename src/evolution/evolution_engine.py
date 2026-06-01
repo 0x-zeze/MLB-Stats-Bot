@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..evaluate import load_prediction_log
+from ..probability_calibrator import retrain as retrain_calibration
 from ..totals import poisson_total_probability
 from ..utils import DATA_DIR, safe_float
 from .calibration_auto_adjust import find_miscalibrated_buckets
@@ -25,12 +26,13 @@ from .memory_store import (
     read_jsonl,
     read_prediction_outcomes,
     record_evolution_event,
+    rewrite_prediction_outcomes,
     write_json,
 )
 from .evolution_report import build_evolution_summary
 from .time_decay import apply_time_decay_to_lessons
 from .trajectory_logger import build_prediction_trajectory
-from .prediction_evaluator import evaluate_prediction
+from .prediction_evaluator import _predicted_probability, evaluate_prediction
 from .promotion_gate import run_promotion_gate
 from .rule_candidate_generator import generate_rule_candidates
 from .symbolic_optimizer import propose_symbolic_updates
@@ -507,6 +509,9 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
 
 
 def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
+    # Repair legacy flat-50% totals/yrfi rows before anything reads outcomes,
+    # so calibration and metrics train on real signal instead of coinflip noise.
+    backfill = backfill_flat_outcomes(state_path)
     ingest = ingest_bot_history(state_path)
     symbolic_candidates = propose_symbolic_updates(read_jsonl("language_gradients"))
 
@@ -520,28 +525,111 @@ def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
     miscalibrated = find_miscalibrated_buckets(calibration_history)
 
     backtest = backtest_candidates()
+
+    # Rebuild per-market calibration maps now that outcomes are clean + enriched.
+    try:
+        calibration = retrain_calibration()
+    except Exception as error:  # calibration is best-effort, never block the cycle
+        calibration = {"status": "error", "reason": str(error)}
+
     summary = build_evolution_summary(limit=10)
     record_evolution_event(
         "evolution_cycle_completed",
         {
+            "backfill": backfill,
             "ingest": ingest,
             "symbolic_candidates": len(symbolic_candidates),
             "rule_candidates": len(rule_candidates),
             "backtest": backtest,
+            "calibration": calibration.get("status"),
             "miscalibrated_buckets": len(miscalibrated),
             "lessons_after_decay": len(decayed_lessons),
             "lessons_before_decay": len(raw_lessons),
         },
     )
     return {
+        "backfill": backfill,
         "ingest": ingest,
         "symbolic_candidates": len(symbolic_candidates),
         "rule_candidates": len(rule_candidates),
         "backtest": backtest,
+        "calibration": calibration,
         "summary": summary.get("summary", {}),
         "miscalibrated_buckets": miscalibrated,
         "lessons_decayed": len(raw_lessons) - len(decayed_lessons),
         "safety": "Candidates are pending only. Production rules, prompts, and weights were not auto-promoted.",
+    }
+
+
+def backfill_flat_outcomes(state_path: str | Path | None = None) -> dict[str, Any]:
+    """Recompute real probability + Brier for legacy flat-50% totals/yrfi rows.
+
+    Rows ingested before the 2026-05-30 probability fix stored a flat
+    predicted_probability of 50 (Brier 0.2500) — pure coinflip noise that
+    dilutes every calibration/edge metric. The normal ingest path is
+    append-only and deduped by game/market, so it can never correct them. This
+    rebuilds the trajectory from the still-stored bot prediction (picks payload)
+    and recomputes probability + Brier in place, leaving win/loss/profit
+    untouched. Idempotent: once a row carries real signal it is no longer flat
+    and is skipped on the next run.
+    """
+    predictions, _learning_log, source = _read_bot_history(state_path)
+    rows = read_prediction_outcomes()
+    updated = 0
+    skipped_no_source = 0
+    skipped_still_flat = 0
+    by_market = {"totals": 0, "yrfi": 0}
+
+    for row in rows:
+        market = str(row.get("market") or "").lower()
+        if market not in ("totals", "yrfi") or row.get("result") not in ("win", "loss"):
+            continue
+        brier = safe_float(row.get("brier_score"), None)
+        if brier is None or abs(brier - 0.25) > 1e-9:
+            continue  # only touch the flat coinflip rows
+
+        prediction = predictions.get(str(row.get("game_id")))
+        if not prediction:
+            skipped_no_source += 1
+            continue
+        trajectory = (
+            _build_totals_trajectory(prediction)
+            if market == "totals"
+            else _build_yrfi_trajectory(prediction)
+        )
+        if not trajectory:
+            skipped_no_source += 1
+            continue
+
+        prob = _predicted_probability(trajectory, market, str(row.get("prediction") or ""))
+        if abs(prob - 0.5) < 1e-9:
+            skipped_still_flat += 1  # projected == market line; genuinely no signal
+            continue
+
+        outcome = 1.0 if row.get("result") == "win" else 0.0
+        new_brier = round((prob - outcome) ** 2, 6)
+        evaluation = _safe_json(row.get("evaluation_json"), {})
+        evaluation["predicted_probability"] = round(prob * 100.0, 3)
+        evaluation["brier_score"] = new_brier
+        row["brier_score"] = new_brier
+        row["evaluation_json"] = json.dumps(evaluation, sort_keys=True, default=str)
+        updated += 1
+        by_market[market] += 1
+
+    if updated:
+        rewrite_prediction_outcomes(rows)
+        record_evolution_event(
+            "flat_outcomes_backfilled",
+            {"source": source, "updated": updated, "by_market": by_market},
+        )
+
+    return {
+        "source": source or "not_found",
+        "updated": updated,
+        "totals_fixed": by_market["totals"],
+        "yrfi_fixed": by_market["yrfi"],
+        "skipped_no_source": skipped_no_source,
+        "skipped_still_flat": skipped_still_flat,
     }
 
 
@@ -789,6 +877,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="MLB Agent Evolution Engine.")
     parser.add_argument("--run-cycle", action="store_true")
     parser.add_argument("--ingest-bot-history", action="store_true")
+    parser.add_argument("--backfill-flat", action="store_true")
     parser.add_argument("--state-path", default="")
     parser.add_argument("--evaluate-yesterday", action="store_true")
     parser.add_argument("--generate-lessons", action="store_true")
@@ -805,6 +894,8 @@ def main() -> None:
         print(json.dumps(run_evolution_cycle(state_path), indent=2))
     elif args.ingest_bot_history:
         print(json.dumps(ingest_bot_history(state_path), indent=2))
+    elif args.backfill_flat:
+        print(json.dumps(backfill_flat_outcomes(state_path), indent=2))
     elif args.evaluate_yesterday:
         print(json.dumps(evaluate_yesterday(), indent=2))
     elif args.generate_lessons:

@@ -5,12 +5,18 @@ from evolution_helpers import final_result, isolated_evolution_store, sample_tra
 from src.evolution.evolution_engine import (
     _build_totals_trajectory,
     _build_yrfi_trajectory,
+    backfill_flat_outcomes,
     evaluate_completed_prediction,
     ingest_bot_history,
     run_evolution_cycle,
 )
 from src.evolution.prediction_evaluator import _predicted_probability
-from src.evolution.memory_store import read_json, read_jsonl, read_prediction_outcomes
+from src.evolution.memory_store import (
+    append_prediction_outcome,
+    read_json,
+    read_jsonl,
+    read_prediction_outcomes,
+)
 
 
 class EvolutionEngineTests(unittest.TestCase):
@@ -120,6 +126,64 @@ class EvolutionEngineTests(unittest.TestCase):
         # YES probability 37% means a NO pick wins ~63% of the time.
         self.assertAlmostEqual(_predicted_probability(trajectory, "yrfi", "NO"), 0.63, places=2)
         self.assertAlmostEqual(_predicted_probability(trajectory, "yrfi", "YES"), 0.37, places=2)
+
+
+    def test_backfill_flat_outcomes_recovers_real_probability(self):
+        # A legacy flat-50% totals row (Brier 0.25) must be repaired in place
+        # from the still-stored bot prediction, and the repair must be idempotent.
+        with isolated_evolution_store() as root:
+            state_path = root / "state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "predictions": {
+                            "999": {
+                                "gamePk": 999,
+                                "dateYmd": "2026-05-01",
+                                "away": {"name": "Alpha Aces"},
+                                "home": {"name": "Beta Bats"},
+                                "totalRuns": {
+                                    "projectedTotal": 7.2,
+                                    "marketLine": 8.5,
+                                    "bestLean": "Under 8.5",
+                                    "confidence": "medium",
+                                    "modelEdge": 3.0,
+                                },
+                            }
+                        },
+                        "memory": {"learningLog": []},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            append_prediction_outcome(
+                {
+                    "game_id": "999",
+                    "date": "2026-05-01",
+                    "market": "totals",
+                    "prediction": "Under 8.5",
+                    "confidence": "medium",
+                    "result": "win",
+                    "brier_score": 0.25,
+                    "predicted_probability": 50.0,
+                    "evaluation_json": json.dumps(
+                        {"predicted_probability": 50.0, "brier_score": 0.25, "edge": 0.0}
+                    ),
+                }
+            )
+
+            first = backfill_flat_outcomes(state_path)
+            row = read_prediction_outcomes()[0]
+            brier_after = float(row["brier_score"])
+            second = backfill_flat_outcomes(state_path)
+
+        self.assertEqual(first["updated"], 1)
+        self.assertEqual(first["totals_fixed"], 1)
+        # A low projected total favors the under and this row WON, so the new
+        # Brier must improve on the 0.25 coinflip baseline.
+        self.assertNotAlmostEqual(brier_after, 0.25, places=4)
+        self.assertLess(brier_after, 0.25)
+        self.assertEqual(second["updated"], 0)  # idempotent
 
 
 if __name__ == "__main__":

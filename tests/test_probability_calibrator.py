@@ -65,5 +65,32 @@ class PerMarketCalibratorTests(unittest.TestCase):
             self.assertTrue(legacy_path.exists())
 
 
+    def test_retrain_calibrates_totals_from_predicted_probability(self):
+        # Totals/yrfi rows store edge=0; calibration must read the authoritative
+        # predicted_probability instead, otherwise every row collapses to 0.50
+        # and the market is silently skipped (the pre-2026-06 bug).
+        with TemporaryDirectory() as tmp:
+            outcomes = Path(tmp) / "prediction_outcomes.csv"
+            rows = ["game_id,market,result,brier_score,evaluation_json"]
+            for i in range(60):
+                prob = 0.40 + (i % 6) * 0.04
+                won = 1 if (i % 10) < int(prob * 10) else 0
+                ej = json.dumps({"predicted_probability": round(prob * 100, 1), "edge": 0.0})
+                rows.append(f"t{i},totals,{'win' if won else 'loss'},0.2,\"{ej.replace(chr(34), chr(34)*2)}\"")
+            outcomes.write_text("\n".join(rows))
+
+            maps_path = Path(tmp) / "calibration_maps.json"
+            legacy_path = Path(tmp) / "calibration_map.json"
+            with patch.object(pc, "_OUTCOMES_PATH", outcomes), \
+                 patch.object(pc, "_CALIBRATION_MAPS_PATH", maps_path), \
+                 patch.object(pc, "_CALIBRATION_MAP_PATH", legacy_path):
+                pc._cached_maps = None
+                result = pc.retrain()
+
+            self.assertEqual(result["status"], "success")
+            self.assertIn("totals", result["calibrated_markets"])
+            self.assertEqual(result["markets"]["totals"]["status"], "success")
+
+
 if __name__ == "__main__":
     unittest.main()

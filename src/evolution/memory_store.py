@@ -217,6 +217,27 @@ def read_prediction_outcomes() -> list[dict[str, Any]]:
         return list(csv.DictReader(handle))
 
 
+def rewrite_prediction_outcomes(rows: list[dict[str, Any]], backup: bool = True) -> int:
+    """Rewrite the whole outcomes CSV in place (header + rows).
+
+    The normal write path is append-only and deduped by game/market, so it can
+    never correct an already-persisted row. This is the one supported way to
+    back-fill historical rows. A timestamped .bak is written first so the
+    mutation stays reversible.
+    """
+    ensure_evolution_storage()
+    path = path_for("prediction_outcomes")
+    if backup and path.exists():
+        stamp = utc_now().replace(":", "").replace("-", "")
+        path.with_suffix(f".csv.{stamp}.bak").write_bytes(path.read_bytes())
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PREDICTION_OUTCOME_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in PREDICTION_OUTCOME_FIELDS})
+    return len(rows)
+
+
 def current_versions() -> dict[str, str]:
     prompts = read_json("prompt_versions")
     weights = read_json("weight_versions")
