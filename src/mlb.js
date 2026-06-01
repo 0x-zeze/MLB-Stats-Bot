@@ -118,7 +118,7 @@ function situationalWeightAdjustment(venueId, openerDetected, gameDateYmd) {
 }
 
 // --- Sharp Money Detection ---
-function detectSharpMoneySignal(modelPick, openingOdds, closingOdds) {
+export function detectSharpMoneySignal(modelPick, openingOdds, closingOdds) {
   if (!openingOdds || !closingOdds) return { direction: 'neutral', magnitude: 0, steam: false, risk: 0 };
   const opening = toNumber(openingOdds[modelPick], 0);
   const closing = toNumber(closingOdds[modelPick], 0);
@@ -2757,6 +2757,23 @@ function predictGame(
   );
   const lineupEdge = lineupWinEdge(homeLineup, awayLineup, homeInjuries, awayInjuries);
   const bullpenEdge = bullpenAvailabilityEdge(homeBullpen, awayBullpen);
+
+  // Platoon splits: team record vs opposing starter's handedness
+  // Data already exists in standings splitRecords but was only displayed, not computed.
+  const homeVsStarterHand = awayStarter?.pitchHand?.code === 'L'
+    ? splitPct(homeStanding, 'left')
+    : awayStarter?.pitchHand?.code === 'R'
+      ? splitPct(homeStanding, 'right')
+      : null;
+  const awayVsStarterHand = homeStarter?.pitchHand?.code === 'L'
+    ? splitPct(awayStanding, 'left')
+    : homeStarter?.pitchHand?.code === 'R'
+      ? splitPct(awayStanding, 'right')
+      : null;
+  const platoonEdge = (homeVsStarterHand != null && awayVsStarterHand != null)
+    ? (homeVsStarterHand - awayVsStarterHand) * 0.6
+    : 0;
+
   const offenseFatigueEdge =
     homeScheduleFatigue.offenseAdjustment - awayScheduleFatigue.offenseAdjustment;
   const evolutionControls = loadEvolutionControls();
@@ -2777,6 +2794,14 @@ function predictGame(
   const bullpenComponent = bullpenEdge * 0.9 * bullpenWeightMultiplier * sitWeights.bullpen;
   const formComponent = clamp(formEdge, -0.3, 0.3) * 0.28 * recentFormWeightMultiplier * sitWeights.recent_form;
   const homeFieldComponent = 0.12 * homeAdvantageWeightMultiplier * sitWeights.home_advantage;
+
+  // Weather edge: conditions that favor scoring (warm, wind out) slightly
+  // increase variance which reduces the better team's edge. Conditions that
+  // suppress scoring (cold, wind in) reduce variance and increase predictability.
+  // Scale the existing weatherRunAdjustment down for moneyline impact.
+  const weatherAdj = weatherRunAdjustment(game.weather);
+  const weatherComponent = clamp(weatherAdj * -0.08, -0.06, 0.06);
+
   const matchupEdge =
     offenseComponent +
     preventionComponent +
@@ -2790,10 +2815,11 @@ function predictGame(
     log5Edge * 0.16 +
     formComponent +
     h2hEdge * 0.025 +
-    memoryEdge;
+    memoryEdge +
+    platoonEdge;
   const recordDominated =
     Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
-  const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent;
+  const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent + weatherComponent;
   const rawHomeProbability = clamp(sigmoid(edge) * 100, 30, 70);
   const rawAwayProbability = 100 - rawHomeProbability;
   // Calibrate at the source so every surface (cards, /picks, auto-alert, stored
@@ -2827,7 +2853,9 @@ function predictGame(
     formEdge: formComponent,
     h2hEdge: h2hEdge * 0.025,
     memoryEdge,
+    platoonEdge,
     homeFieldEdge: homeFieldComponent,
+    weatherEdge: weatherComponent,
     recordDominated,
     rawHomeProbability,
     rawAwayProbability,

@@ -1273,7 +1273,10 @@ export class Storage {
         const loserKey = String(result.loser.id);
         const pickKey = String(prediction.pick.id);
 
-        const winnerBump = correct ? 0.002 : 0.006;
+        // When correct: small reinforcement for winner, small penalty for loser.
+        // When wrong: penalize the PREDICTED team more (model was wrong about them),
+        // give the ACTUAL winner only a small bump (they earned it but don't over-reward).
+        const winnerBump = correct ? 0.002 : 0.002;
         const loserDrop = correct ? 0.001 : 0.004;
         memory.teamBias[winnerKey] = clamp(
           (memory.teamBias[winnerKey] || 0) + winnerBump,
@@ -1286,9 +1289,10 @@ export class Storage {
           TEAM_BIAS_LIMIT
         );
 
+        // Extra penalty on the predicted team when the model was wrong
         if (!correct) {
           memory.teamBias[pickKey] = clamp(
-            (memory.teamBias[pickKey] || 0) - 0.004,
+            (memory.teamBias[pickKey] || 0) - 0.006,
             -TEAM_BIAS_LIMIT,
             TEAM_BIAS_LIMIT
           );

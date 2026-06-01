@@ -44,6 +44,8 @@ PREDICTION_OUTCOME_FIELDS = [
     "profit_loss",
     "clv",
     "brier_score",
+    "baseline_brier_score",
+    "brier_delta_llm",
     "calibration_bucket",
     "evaluation_json",
 ]

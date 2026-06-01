@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
 import { loadConfig } from './config.js';
 import { ANALYST_SKILL_VERSION, buildAnalystSkillSummary } from './analystSkill.js';
+import { calibratePercent, hasCalibrationMap } from './calibration.js';
 import { buildEvolutionContext } from './evolutionContext.js';
+import { loadEvolutionControls, moneylineWeightMultiplier } from './evolutionControls.js';
 import {
   analyzePredictionsWithAgent,
   answerInteractiveQuestion
@@ -9,6 +11,7 @@ import {
 import {
   applyMoneylineValueMarket,
   applyTotalRunMarket,
+  detectSharpMoneySignal,
   formatPredictions,
   getFinalGameResults,
   getMlbPredictions,
@@ -159,11 +162,86 @@ async function attachMarketContext(predictions) {
     await attachOddsContext(predictions);
   }
 
+  const evolutionControls = loadEvolutionControls();
+  const marketOddsMultiplier = moneylineWeightMultiplier(evolutionControls, 'market_odds');
+
   for (const prediction of predictions) {
     if (prediction.currentOdds?.totalLine && prediction.totalRuns) {
       prediction.totalRuns = applyTotalRunMarket(prediction.totalRuns, prediction.currentOdds.totalLine);
     }
+
+    // Bayesian prior: blend model probability with market-implied probability.
+    // Market odds are the single best predictor; even a small blend (10-15%)
+    // improves calibration and reduces overconfidence.
+    if (prediction.currentOdds && marketOddsMultiplier > 0) {
+      const homeImplied = americanImpliedProbability(prediction.currentOdds.homeMoneyline);
+      const awayImplied = americanImpliedProbability(prediction.currentOdds.awayMoneyline);
+      if (homeImplied != null && awayImplied != null) {
+        // Normalize implied to sum to 100 (removes the vig)
+        const totalImplied = homeImplied + awayImplied;
+        const homeNorm = (homeImplied / totalImplied) * 100;
+        const awayNorm = (awayImplied / totalImplied) * 100;
+        // Blend weight: base 0.12 scaled by evolution multiplier
+        const w = Math.min(0.25, 0.12 * marketOddsMultiplier);
+        const rawHome = Number(prediction.home?.winProbabilityRaw ?? prediction.home?.winProbability);
+        const rawAway = Number(prediction.away?.winProbabilityRaw ?? prediction.away?.winProbability);
+        if (Number.isFinite(rawHome) && Number.isFinite(rawAway)) {
+          const blendedHome = rawHome * (1 - w) + homeNorm * w;
+          const blendedAway = rawAway * (1 - w) + awayNorm * w;
+          // Re-calibrate the blended probabilities
+          const calibrated = hasCalibrationMap('moneyline');
+          const newHome = calibrated
+            ? Math.round(Math.max(30, Math.min(70, calibratePercent(blendedHome, 'moneyline'))))
+            : Math.round(Math.max(30, Math.min(70, blendedHome)));
+          const newAway = 100 - newHome;
+          prediction.home.winProbability = newHome;
+          prediction.away.winProbability = newAway;
+          prediction.home.winProbabilityRaw = blendedHome;
+          prediction.away.winProbabilityRaw = blendedAway;
+          // Update winner based on new probabilities
+          if (newHome >= newAway) {
+            prediction.winner = prediction.home;
+          } else {
+            prediction.winner = prediction.away;
+          }
+        }
+      }
+    }
+
     applyMoneylineValueMarket(prediction);
+
+    // Sharp money detection: compare opening odds vs current odds
+    // Now that odds are attached, we can detect line movement properly.
+    const openingOdds = prediction.openingOdds || storage.openingOddsFromSnapshots(prediction.gamePk);
+    const currentOdds = prediction.currentOdds;
+    if (openingOdds && currentOdds && prediction.modelBreakdown) {
+      const pickName = prediction.winner?.name ||
+        (prediction.home?.winProbability >= prediction.away?.winProbability ? prediction.home?.name : prediction.away?.name);
+      if (pickName) {
+        // Convert to the format detectSharpMoneySignal expects: { teamName: odds }
+        const opening = {};
+        const closing = {};
+        if (openingOdds.homeMoneyline != null) {
+          const homeName = prediction.home?.name;
+          if (homeName) opening[homeName] = openingOdds.homeMoneyline;
+        }
+        if (openingOdds.awayMoneyline != null) {
+          const awayName = prediction.away?.name;
+          if (awayName) opening[awayName] = openingOdds.awayMoneyline;
+        }
+        if (currentOdds.homeMoneyline != null) {
+          const homeName = prediction.home?.name;
+          if (homeName) closing[homeName] = currentOdds.homeMoneyline;
+        }
+        if (currentOdds.awayMoneyline != null) {
+          const awayName = prediction.away?.name;
+          if (awayName) closing[awayName] = currentOdds.awayMoneyline;
+        }
+        if (Object.keys(opening).length > 0 && Object.keys(closing).length > 0) {
+          prediction.modelBreakdown.sharpMoney = detectSharpMoneySignal(pickName, opening, closing);
+        }
+      }
+    }
   }
 
   return predictions;

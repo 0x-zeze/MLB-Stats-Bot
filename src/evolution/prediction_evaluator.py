@@ -322,6 +322,15 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
     outcome = 1 if status == "win" else 0
     brier = None if status in {"no_bet", "push"} else round((probability_value - outcome) ** 2, 6)
     odds = _market_odds(trajectory, lean)
+
+    # Paired Brier: compare LLM-shifted probability vs pre-LLM baseline
+    baseline_prob_raw = (prediction.get("moneyline") or {}).get("baseline_probability")
+    baseline_brier = None
+    brier_delta = None
+    if baseline_prob_raw is not None and status not in {"no_bet", "push"}:
+        baseline_prob = safe_float(baseline_prob_raw, probability_value) / 100.0
+        baseline_brier = round((baseline_prob - outcome) ** 2, 6)
+        brier_delta = round(brier - baseline_brier, 6)  # negative = LLM helped
     profit_loss = 0.0 if status in {"no_bet", "push"} else round(american_profit(odds, status == "win"), 4)
     edge = safe_float(prediction.get("model_edge"), 0.0)
     data_quality = safe_float((trajectory.get("input_snapshot") or {}).get("data_quality"), 0.0)
@@ -369,6 +378,8 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         if market == "moneyline"
         else final_result.get("closing_total") or final_result.get("closing_line"),
         "brier_score": brier,
+        "baseline_brier_score": baseline_brier,
+        "brier_delta_llm": brier_delta,
         "confidence_calibration_bucket": confidence,
         "calibration_bucket": confidence,
         "edge": edge,

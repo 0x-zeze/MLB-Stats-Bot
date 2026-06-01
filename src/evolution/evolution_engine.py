@@ -229,6 +229,21 @@ def _score_from_learning_log(entry: dict[str, Any]) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
+def _baseline_probability(prediction: dict[str, Any], pick: dict[str, Any]) -> float | None:
+    """Extract pre-LLM baseline probability for paired Brier comparison."""
+    agent_shift = prediction.get("agentShift")
+    if not agent_shift or not agent_shift.get("applied"):
+        return None
+    pick_id = pick.get("id")
+    away = prediction.get("away") or {}
+    home = prediction.get("home") or {}
+    if pick_id == away.get("id"):
+        return safe_float(agent_shift.get("baselineAwayProbability"), None)
+    if pick_id == home.get("id"):
+        return safe_float(agent_shift.get("baselineHomeProbability"), None)
+    return None
+
+
 def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
     away = prediction.get("away") or {}
     home = prediction.get("home") or {}
@@ -271,6 +286,8 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
             "away_probability": away.get("winProbability"),
             "confidence": confidence,
             "edge": moneyline_edge,
+            # Pre-LLM baseline for paired Brier comparison
+            "baseline_probability": _baseline_probability(prediction, pick),
             # CLV needs the OPENING price. Prefer the frozen openingOdds (set at
             # first save), falling back to currentOdds for older picks.
             "current_odds": prediction.get("openingOdds") or prediction.get("currentOdds") or {},
