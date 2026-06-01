@@ -6,7 +6,7 @@ import {
 } from './analystSkill.js';
 import { uiKV, uiTitle } from './telegramFormat.js';
 import { getCalibrationPenalty, loadEvolutionControls } from './evolutionControls.js';
-import { calibratePercent, hasCalibrationMap } from './calibration.js';
+import { hasCalibrationMap } from './calibration.js';
 
 function trimSlash(value) {
   return String(value || '').replace(/\/+$/, '');
@@ -677,23 +677,22 @@ function topPickCandidate(prediction) {
   const side = teamSideForPick(prediction);
   const pick = side === 'away' ? prediction.away : prediction.home;
   const opponent = side === 'away' ? prediction.home : prediction.away;
-  const rawProbability = normalizeProbability(
+  // winProbability is already calibrated at the source (mlb.js), so use it
+  // directly for display/edge — calibrating again here would double-apply.
+  const probability = normalizeProbability(
     side === 'away'
       ? prediction.agentAnalysis?.awayProbability ?? prediction.away?.winProbability
       : prediction.agentAnalysis?.homeProbability ?? prediction.home?.winProbability,
     50
   );
-  // Apply the per-market isotonic calibration the evolution pipeline trains, so
-  // the displayed probability reflects observed win rates, not the raw model.
-  const calibrated = hasCalibrationMap('moneyline')
-    ? calibratePercent(rawProbability, 'moneyline')
-    : rawProbability;
-  // Calibration can flip the favorite when the raw edge was an artifact; keep
-  // the pick on the side the calibrated probability actually favors.
-  const probability = calibrated;
-  // Confidence reflects model conviction + factor agreement, so feed it the raw
-  // model probability (the calibration map compresses the scale and would mute
-  // genuine conviction); the displayed probability stays calibrated.
+  // Raw (pre-calibration) model probability drives conviction-based confidence
+  // and tiering; the calibration map compresses the displayed scale toward 50.
+  const rawProbability = normalizeProbability(
+    side === 'away'
+      ? prediction.away?.winProbabilityRaw ?? prediction.away?.winProbability
+      : prediction.home?.winProbabilityRaw ?? prediction.home?.winProbability,
+    probability
+  );
   const confidence = prediction.agentAnalysis?.confidence || deterministicConfidenceFromPrediction(prediction, rawProbability);
   const calibratedEdgeInfo = calibratedEdge(prediction, probability);
   // Prefer the calibrated edge; fall back to the stored raw edge when no odds.

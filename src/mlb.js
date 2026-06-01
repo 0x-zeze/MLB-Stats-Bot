@@ -9,6 +9,7 @@ import {
 } from './utils.js';
 import { UI_LINE, UI_THIN_LINE, uiBullet, uiKV, uiSection, uiTitle } from './telegramFormat.js';
 import { getEvolutionRule, loadEvolutionControls, moneylineWeightMultiplier } from './evolutionControls.js';
+import { calibratePercent, hasCalibrationMap } from './calibration.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const GAME_SEPARATOR = UI_LINE;
@@ -307,6 +308,11 @@ function h2hProbText(team, probability) {
 function firstInningPickText(firstInning) {
   const pick = firstInning?.agent?.pick || firstInning?.baselinePick || 'NO';
   const probability = firstInning?.agent?.probability ?? firstInning?.baselineProbability ?? 50;
+  if (String(pick).toUpperCase() === 'NO BET') {
+    // Advisory-only: show the lean as context but mark it not actionable.
+    const lean = firstInning?.baselineLean || (probability >= 52 ? 'YES' : 'NO');
+    return `NO BET (advisory: lean ${lean}) ${percent(probability)}`;
+  }
   const label = pick === 'YES' ? 'YES / YRFI' : 'NO / NRFI';
   return `${label} ${percent(probability)}`;
 }
@@ -1667,7 +1673,15 @@ function buildFirstInningProjection({
   const blendedProbability =
     h2hGames >= 3 ? modelProbability * 0.85 + h2hProbability * 0.15 : modelProbability;
   const probability = clamp(blendedProbability * 100, 25, 75);
-  const pick = probability >= 52 ? 'YES' : 'NO';
+  const lean = probability >= 52 ? 'YES' : 'NO';
+  // YRFI is the only market that loses money historically (-3.8% ROI, 48% win),
+  // and no confidence band is profitable — the high-confidence band is actually
+  // the worst. So it is advisory-only by default: we still surface the lean and
+  // probability as context, but the actionable `pick` is NO BET so it is not
+  // graded as a bet. Re-enable as an active market with YRFI_ACTIVE=1 once the
+  // model proves profitable (e.g. after a calibration/feature rework).
+  const yrfiActive = String(process.env.YRFI_ACTIVE || '').trim() === '1';
+  const pick = yrfiActive ? lean : 'NO BET';
 
   const reasons = [
     `Top 1: ${away.abbreviation || away.name} offense/allowed profile projects ${percent(topRate * 100)} run chance.`,
@@ -1677,10 +1691,15 @@ function buildFirstInningProjection({
   if (h2hGames > 0) {
     reasons.push(`H2H first-inning run: ${headToHead.firstInning.runGames}/${h2hGames}.`);
   }
+  if (!yrfiActive) {
+    reasons.push('YRFI advisory-only: market historically unprofitable, not graded as a bet.');
+  }
 
   return {
     baselinePick: pick,
     baselineProbability: probability,
+    baselineLean: lean,
+    advisoryOnly: !yrfiActive,
     confidence:
       probability >= 60 || probability <= 40 ? 'high' : probability >= 55 || probability <= 45 ? 'medium' : 'low',
     topRate: topRate * 100,
@@ -2561,8 +2580,24 @@ function predictGame(
   const recordDominated =
     Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
   const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent;
-  const homeProbability = clamp(sigmoid(edge) * 100, 30, 70);
-  const awayProbability = 100 - homeProbability;
+  const rawHomeProbability = clamp(sigmoid(edge) * 100, 30, 70);
+  const rawAwayProbability = 100 - rawHomeProbability;
+  // Calibrate at the source so every surface (cards, /picks, auto-alert, stored
+  // picks, dashboard) shows the same honest, observed-frequency probability.
+  // Calibrate the favored side and derive the other as its complement so the two
+  // always sum to 100. Keep the raw model probability for conviction-based
+  // confidence/tiering (the calibration map compresses the scale toward 50).
+  let homeProbability = rawHomeProbability;
+  let awayProbability = rawAwayProbability;
+  if (hasCalibrationMap('moneyline')) {
+    if (rawHomeProbability >= 50) {
+      homeProbability = clamp(calibratePercent(rawHomeProbability, 'moneyline'), 30, 70);
+      awayProbability = 100 - homeProbability;
+    } else {
+      awayProbability = clamp(calibratePercent(rawAwayProbability, 'moneyline'), 30, 70);
+      homeProbability = 100 - awayProbability;
+    }
+  }
   const modelBreakdown = {
     matchupEdge,
     recordContextEdge,
@@ -2580,6 +2615,8 @@ function predictGame(
     memoryEdge,
     homeFieldEdge: homeFieldComponent,
     recordDominated,
+    rawHomeProbability,
+    rawAwayProbability,
     activeWeightVersion: evolutionControls.activeWeightVersion,
     situationalWeights: sitWeights,
     predictionTier: determinePredictionTier(game.gameDate),
@@ -2600,7 +2637,8 @@ function predictGame(
       ? 'Bulk pitcher TBD'
       : pitcherLabel(homeStarter, homePitcherStats),
     openerSituation: homeOpenerSituation,
-    winProbability: homeProbability
+    winProbability: homeProbability,
+    winProbabilityRaw: rawHomeProbability
   };
   const away = {
     id: awayTeam.id,
@@ -2612,7 +2650,8 @@ function predictGame(
       ? 'Bulk pitcher TBD'
       : pitcherLabel(awayStarter, awayPitcherStats),
     openerSituation: awayOpenerSituation,
-    winProbability: awayProbability
+    winProbability: awayProbability,
+    winProbabilityRaw: rawAwayProbability
   };
 
   const reasons = createReasons({

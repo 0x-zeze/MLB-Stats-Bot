@@ -271,7 +271,9 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
             "away_probability": away.get("winProbability"),
             "confidence": confidence,
             "edge": moneyline_edge,
-            "current_odds": prediction.get("currentOdds") or {},
+            # CLV needs the OPENING price. Prefer the frozen openingOdds (set at
+            # first save), falling back to currentOdds for older picks.
+            "current_odds": prediction.get("openingOdds") or prediction.get("currentOdds") or {},
         },
         "model_breakdown": prediction.get("modelBreakdown") or {},
         "model_breakdown_line": prediction.get("modelBreakdownLine") or "",
@@ -365,6 +367,10 @@ def _build_yrfi_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | None:
     first_inning = prediction.get("firstInning") or {}
     pick = first_inning.get("pick") or first_inning.get("baselinePick")
     if not pick:
+        return None
+    # Advisory-only YRFI calls are surfaced as context but are not actionable
+    # bets, so they must not be ingested as graded outcomes.
+    if str(pick).strip().upper() in ("NO BET", "NO_BET"):
         return None
 
     away = prediction.get("away") or {}

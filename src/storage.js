@@ -1012,6 +1012,12 @@ export class Storage {
           compact.openingOdds = existing.openingOdds;
         } else if (!compact.openingOdds && compact.currentOdds) {
           compact.openingOdds = { ...compact.currentOdds, savedAt: new Date().toISOString() };
+        } else if (!compact.openingOdds) {
+          // Live Odds API often fails to match, leaving currentOdds null. Fall
+          // back to the write-once opening_* line snapshots so moneyline CLV can
+          // still be computed (opening implied vs closing implied).
+          const openingOdds = this.openingOddsFromSnapshots(key);
+          if (openingOdds) compact.openingOdds = openingOdds;
         }
         this.writePredictionRow({
           ...compact,
@@ -1053,6 +1059,28 @@ export class Storage {
     return this.getLineSnapshot(gamePk, 'closing_home') !== null;
   }
 
+  openingOddsFromSnapshots(gamePk) {
+    if (!gamePk) return null;
+    const plausibleMoneyline = (value) => Number.isFinite(value) && Math.abs(value) >= 100 && Math.abs(value) <= 1000;
+    const plausibleTotal = (value) => Number.isFinite(value) && value >= 4 && value <= 14;
+    const read = (market) => {
+      const snapshot = this.getLineSnapshot(gamePk, market);
+      return snapshot ? Number(snapshot.value) : NaN;
+    };
+    const home = read('opening_home');
+    const away = read('opening_away');
+    const total = read('opening_total');
+    if (!plausibleMoneyline(home) && !plausibleMoneyline(away)) return null;
+    return {
+      homeMoneyline: plausibleMoneyline(home) ? home : null,
+      awayMoneyline: plausibleMoneyline(away) ? away : null,
+      totalLine: plausibleTotal(total) ? total : null,
+      moneylineBook: 'snapshot-open',
+      source: 'line_snapshots',
+      savedAt: new Date().toISOString()
+    };
+  }
+
   setLineSnapshot(gamePk, market, value, timestamp = new Date().toISOString()) {
     const parsedValue = Number(value);
     if (!Number.isFinite(parsedValue)) return;
@@ -1066,6 +1094,24 @@ export class Storage {
            timestamp = excluded.timestamp`
       )
       .run(String(gamePk), String(market), parsedValue, timestamp);
+
+    // Freeze the first-seen moneyline/total as the OPENING line (write-once).
+    // Live moneyline_*/total rows get overwritten every poll, so without this
+    // the opening price is lost and moneyline CLV can't be computed. INSERT OR
+    // IGNORE keeps only the earliest value.
+    const openingMarket = {
+      moneyline_home: 'opening_home',
+      moneyline_away: 'opening_away',
+      total: 'opening_total'
+    }[String(market)];
+    if (openingMarket) {
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO line_snapshots (game_pk, market, value, timestamp)
+           VALUES (?, ?, ?, ?)`
+        )
+        .run(String(gamePk), openingMarket, parsedValue, timestamp);
+    }
   }
 
   reserveLineAlert(alertKey, movement, chatId, timestamp = new Date().toISOString(), ttlHours = 18) {
@@ -1197,6 +1243,8 @@ export class Storage {
       let firstInningCorrect = null;
       if (
         prediction.firstInning &&
+        prediction.firstInning.pick &&
+        String(prediction.firstInning.pick).toUpperCase() !== 'NO BET' &&
         actualFirstInningRun !== null &&
         actualFirstInningRun !== undefined
       ) {

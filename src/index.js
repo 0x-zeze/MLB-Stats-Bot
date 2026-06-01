@@ -642,7 +642,13 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
   const firstInning = prediction.firstInning;
   const firstPick = firstInning?.agent?.pick || firstInning?.baselinePick || 'NO';
   const firstProbability = firstInning?.agent?.probability ?? firstInning?.baselineProbability ?? 50;
-  const firstLabel = firstPick === 'YES' ? 'YES / YRFI' : 'NO / NRFI';
+  const firstLean = firstInning?.baselineLean || (firstProbability >= 52 ? 'YES' : 'NO');
+  const firstLabel =
+    String(firstPick).toUpperCase() === 'NO BET'
+      ? `NO BET (advisory: lean ${firstLean})`
+      : firstPick === 'YES'
+        ? 'YES / YRFI'
+        : 'NO / NRFI';
   const injuryLines = prediction.injuryDetailLines?.length
     ? prediction.injuryDetailLines.map((line) => `• ${line}`)
     : [`• ${prediction.injuryLine || 'Data injury tidak tersedia.'}`];

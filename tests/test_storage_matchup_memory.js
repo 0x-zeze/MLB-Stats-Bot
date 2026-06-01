@@ -126,6 +126,36 @@ test('line snapshots persist last seen market values by game and market', () => 
   }
 });
 
+test('opening odds freeze the first-seen line for CLV even as the live line moves', () => {
+  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  mkdirSync(tempDir, { recursive: true });
+  const statePath = resolve(tempDir, `opening-state-${Date.now()}.json`);
+  const storage = new Storage(statePath);
+
+  try {
+    // First poll establishes the opening line.
+    storage.setLineSnapshot(54321, 'moneyline_home', -150, '2026-04-30T09:00:00.000Z');
+    storage.setLineSnapshot(54321, 'moneyline_away', 130, '2026-04-30T09:00:00.000Z');
+    // Later polls move the live line; opening must NOT change.
+    storage.setLineSnapshot(54321, 'moneyline_home', -185, '2026-04-30T11:00:00.000Z');
+    storage.setLineSnapshot(54321, 'moneyline_away', 160, '2026-04-30T11:00:00.000Z');
+
+    const opening = storage.openingOddsFromSnapshots(54321);
+    assert.equal(opening.homeMoneyline, -150);
+    assert.equal(opening.awayMoneyline, 130);
+    // The live (last-seen) line reflects the move.
+    assert.equal(storage.getLineSnapshot(54321, 'moneyline_home').value, -185);
+    // No opening odds when no plausible snapshot exists.
+    assert.equal(storage.openingOddsFromSnapshots(99999), null);
+  } finally {
+    storage.close();
+    rmSync(statePath, { force: true });
+    rmSync(storage.dbPath, { force: true });
+    rmSync(`${storage.dbPath}-wal`, { force: true });
+    rmSync(`${storage.dbPath}-shm`, { force: true });
+  }
+});
+
 test('line alert reservations suppress duplicate movement alerts', () => {
   const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
   mkdirSync(tempDir, { recursive: true });
