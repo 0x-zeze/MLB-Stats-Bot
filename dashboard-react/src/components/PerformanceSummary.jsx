@@ -57,12 +57,16 @@ export default function PerformanceSummary({ performance }) {
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
         <PerformanceCard label="Bets Taken" value={overall.bets_taken || 0} helper="Settled model plays" />
-        <PerformanceCard label="Win Rate" value={percent(overall.win_rate)} helper="Win/loss only" />
+        <PerformanceCard label="Win Rate" value={percent(overall.win_rate)} helper="All-time win/loss" />
+        <PerformanceCard
+          label="Win Rate (3d)"
+          value={overall.win_rate_3d != null ? percent(overall.win_rate_3d) : '-'}
+          helper={overall.win_rate_3d_sample ? `Last 3 days • ${overall.win_rate_3d_sample}` : 'Recent form'}
+        />
         <PerformanceCard label="ROI" value={percent(overall.roi)} helper="Per one-unit stake" />
         <PerformanceCard label="Average Edge" value={percent(overall.average_edge)} helper="Model vs market" />
         <PerformanceCard label="Average CLV" value={number(overall.average_clv, 2)} helper="Closing line value" />
         <PerformanceCard label="Brier Score" value={number(overall.brier_score, 3)} helper="Probability accuracy" />
-        <PerformanceCard label="Log Loss" value={number(overall.log_loss, 3)} helper="Penalty for overconfidence" />
         <PerformanceCard label="CLV Hit Rate" value={percent(overall.clv_hit_rate)} helper="Beat close rate" />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">

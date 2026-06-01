@@ -74,7 +74,8 @@ export const api = {
   performance: () => request('/api/performance'),
   evolution: () => request('/api/evolution'),
   evolve: () => request('/api/evolve', { method: 'POST' }),
-  audit: () => request('/api/audit', { method: 'POST' }),
+  // Backwards-compatible alias; the backend runs the same full pipeline.
+  audit: () => request('/api/evolve', { method: 'POST' }),
   settings: () => request('/api/settings'),
   saveSettings: (payload) =>
     request('/api/settings', {

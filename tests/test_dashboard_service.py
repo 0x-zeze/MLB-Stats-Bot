@@ -192,29 +192,32 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertIn("predicted", payload["calibration"][0])
         self.assertEqual({"moneyline", "totals"}, {row["market"] for row in payload["rows"]})
 
-    def test_run_evolve_cycle_uses_engine_directly(self):
-        result = {"summary": {"total_predictions_evaluated": 3}, "symbolic_candidates": 1}
+    def test_run_evolve_cycle_runs_cycle_and_audit(self):
+        cycle = {"summary": {"total_predictions_evaluated": 3}, "symbolic_candidates": 1}
+        audit = {"summary": {"evaluated": 3, "accuracy": 70.0}, "applied_updates": {"rules_added": []}}
 
         with patch("src.dashboard_service.subprocess.run", side_effect=AssertionError("subprocess not expected")):
-            with patch("src.evolution.evolution_engine.run_evolution_cycle", return_value=result):
-                payload = dashboard_service.run_evolve_cycle()
+            with patch("src.evolution.evolution_engine.run_evolution_cycle", return_value=cycle):
+                with patch("src.evolution.evolution_audit.build_evolution_audit", return_value=audit):
+                    payload = dashboard_service.run_evolve_cycle()
 
         self.assertEqual("ok", payload["status"])
-        self.assertEqual(result, payload["result"])
+        # Consolidated pipeline: cycle result plus the audit nested under "audit".
+        self.assertEqual(audit, payload["result"]["audit"])
+        self.assertEqual(1, payload["result"]["symbolic_candidates"])
         self.assertIn("total_predictions_evaluated", payload["output"])
 
-    def test_run_audit_cycle_uses_engine_and_audit_directly(self):
-        ingest = {"history_rows": 4, "evaluated": 2}
+    def test_run_audit_cycle_is_alias_for_evolve(self):
+        cycle = {"summary": {"total_predictions_evaluated": 2}, "symbolic_candidates": 0}
         audit = {"summary": {"evaluated": 2}, "applied_updates": {"rules_added": []}}
 
         with patch("src.dashboard_service.subprocess.run", side_effect=AssertionError("subprocess not expected")):
-            with patch("src.evolution.evolution_engine.ingest_bot_history", return_value=ingest):
+            with patch("src.evolution.evolution_engine.run_evolution_cycle", return_value=cycle):
                 with patch("src.evolution.evolution_audit.build_evolution_audit", return_value=audit):
                     payload = dashboard_service.run_audit_cycle()
 
         self.assertEqual("ok", payload["status"])
-        self.assertEqual(ingest, payload["learning_ingest"])
-        self.assertEqual(audit, payload["result"])
+        self.assertEqual(audit, payload["result"]["audit"])
         self.assertIn("applied_updates", payload["output"])
 
 

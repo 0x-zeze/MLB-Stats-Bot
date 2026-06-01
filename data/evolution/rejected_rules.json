@@ -9060,6 +9060,476 @@
         "status": "rejected"
       },
       "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "pending",
+        "candidate_id": "cand-60cb8215d3",
+        "created_at": "2026-05-14T07:46:54.455168+00:00",
+        "production_update_allowed": false,
+        "promotion_status": "pending",
+        "reason": "The prediction result matched the final outcome.",
+        "required_backtest": true,
+        "source_gradients": [
+          "grad-c512c52edf"
+        ],
+        "source_losses": [
+          "loss-23f37b85cc"
+        ],
+        "status": "pending",
+        "target": "analyst_prompt",
+        "type": "prompt_update",
+        "update": "Make the explanation explicitly state whether the lean is model-driven, market-driven, or data-quality-limited."
+      },
+      "date": "2026-06-01T06:44:37.183769+00:00",
+      "decision": {
+        "after_metrics": {
+          "accuracy": 0.540590405904059,
+          "average_clv": -1.0,
+          "brier_score": 0.2524570479704797,
+          "log_loss": 0.6991668007033502,
+          "max_drawdown": 15.0,
+          "roi": 0.08118081180811808,
+          "sample_size": 542
+        },
+        "before_metrics": {
+          "accuracy": 0.5343137254901961,
+          "average_clv": 0.0,
+          "brier_score": 0.2602774509803922,
+          "log_loss": 0.715827814362402,
+          "max_drawdown": 5.0,
+          "roi": 0.06862745098039216,
+          "sample_size": 204
+        },
+        "candidate_id": "cand-60cb8215d3",
+        "reason": "CLV degraded beyond tolerance. Max drawdown worsened too much.",
+        "sample_size": 542,
+        "status": "rejected"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "pending",
+        "candidate_id": "cand-a7e340d861",
+        "created_at": "2026-05-14T07:46:54.455880+00:00",
+        "production_update_allowed": false,
+        "promotion_status": "pending",
+        "reason": "The agent acted on a weak model edge.",
+        "required_backtest": true,
+        "source_gradients": [
+          "grad-4eacc2f687"
+        ],
+        "source_losses": [
+          "loss-1d8fb191e8"
+        ],
+        "status": "pending",
+        "target": "market_edge_threshold",
+        "type": "threshold_update",
+        "update": "Require a stronger edge or return NO BET when market difference is marginal."
+      },
+      "date": "2026-06-01T06:44:37.201873+00:00",
+      "decision": {
+        "after_metrics": {
+          "accuracy": 0.540590405904059,
+          "average_clv": -1.0,
+          "brier_score": 0.2524570479704797,
+          "log_loss": 0.6991668007033502,
+          "max_drawdown": 15.0,
+          "roi": 0.08118081180811808,
+          "sample_size": 542
+        },
+        "before_metrics": {
+          "accuracy": 0.5343137254901961,
+          "average_clv": 0.0,
+          "brier_score": 0.2602774509803922,
+          "log_loss": 0.715827814362402,
+          "max_drawdown": 5.0,
+          "roi": 0.06862745098039216,
+          "sample_size": 204
+        },
+        "candidate_id": "cand-a7e340d861",
+        "reason": "CLV degraded beyond tolerance. Max drawdown worsened too much.",
+        "sample_size": 542,
+        "status": "rejected"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "pending",
+        "candidate_id": "cand-703cd0c36a",
+        "created_at": "2026-05-14T07:46:54.456589+00:00",
+        "production_update_allowed": false,
+        "promotion_status": "pending",
+        "reason": "The prediction result matched the final outcome.",
+        "required_backtest": true,
+        "source_gradients": [
+          "grad-5f05e6df6b"
+        ],
+        "source_losses": [
+          "loss-7764d2ddd5"
+        ],
+        "status": "pending",
+        "target": "analyst_prompt",
+        "type": "prompt_update",
+        "update": "Make the explanation explicitly state whether the lean is model-driven, market-driven, or data-quality-limited."
+      },
+      "date": "2026-06-01T06:44:37.218766+00:00",
+      "decision": {
+        "after_metrics": {
+          "accuracy": 0.540590405904059,
+          "average_clv": -1.0,
+          "brier_score": 0.2524570479704797,
+          "log_loss": 0.6991668007033502,
+          "max_drawdown": 15.0,
+          "roi": 0.08118081180811808,
+          "sample_size": 542
+        },
+        "before_metrics": {
+          "accuracy": 0.5343137254901961,
+          "average_clv": 0.0,
+          "brier_score": 0.2602774509803922,
+          "log_loss": 0.715827814362402,
+          "max_drawdown": 5.0,
+          "roi": 0.06862745098039216,
+          "sample_size": 204
+        },
+        "candidate_id": "cand-703cd0c36a",
+        "reason": "CLV degraded beyond tolerance. Max drawdown worsened too much.",
+        "sample_size": 542,
+        "status": "rejected"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "pending",
+        "candidate_id": "cand-988938f5a6",
+        "created_at": "2026-05-14T07:46:54.457282+00:00",
+        "production_update_allowed": false,
+        "promotion_status": "pending",
+        "reason": "The prediction result matched the final outcome.",
+        "required_backtest": true,
+        "source_gradients": [
+          "grad-963f0f89dd"
+        ],
+        "source_losses": [
+          "loss-43d851e977"
+        ],
+        "status": "pending",
+        "target": "analyst_prompt",
+        "type": "prompt_update",
+        "update": "Make the explanation explicitly state whether the lean is model-driven, market-driven, or data-quality-limited."
+      },
+      "date": "2026-06-01T06:44:37.235601+00:00",
+      "decision": {
+        "after_metrics": {
+          "accuracy": 0.540590405904059,
+          "average_clv": -1.0,
+          "brier_score": 0.2524570479704797,
+          "log_loss": 0.6991668007033502,
+          "max_drawdown": 15.0,
+          "roi": 0.08118081180811808,
+          "sample_size": 542
+        },
+        "before_metrics": {
+          "accuracy": 0.5343137254901961,
+          "average_clv": 0.0,
+          "brier_score": 0.2602774509803922,
+          "log_loss": 0.715827814362402,
+          "max_drawdown": 5.0,
+          "roi": 0.06862745098039216,
+          "sample_size": 204
+        },
+        "candidate_id": "cand-988938f5a6",
+        "reason": "CLV degraded beyond tolerance. Max drawdown worsened too much.",
+        "sample_size": 542,
+        "status": "rejected"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "pending",
+        "candidate_id": "cand-813d47e9da",
+        "created_at": "2026-05-14T07:46:54.457991+00:00",
+        "production_update_allowed": false,
+        "promotion_status": "pending",
+        "reason": "The prediction result matched the final outcome.",
+        "required_backtest": true,
+        "source_gradients": [
+          "grad-d2440c9d02"
+        ],
+        "source_losses": [
+          "loss-f8bada25f2"
+        ],
+        "status": "pending",
+        "target": "analyst_prompt",
+        "type": "prompt_update",
+        "update": "Make the explanation explicitly state whether the lean is model-driven, market-driven, or data-quality-limited."
+      },
+      "date": "2026-06-01T06:44:37.252203+00:00",
+      "decision": {
+        "after_metrics": {
+          "accuracy": 0.540590405904059,
+          "average_clv": -1.0,
+          "brier_score": 0.2524570479704797,
+          "log_loss": 0.6991668007033502,
+          "max_drawdown": 15.0,
+          "roi": 0.08118081180811808,
+          "sample_size": 542
+        },
+        "before_metrics": {
+          "accuracy": 0.5343137254901961,
+          "average_clv": 0.0,
+          "brier_score": 0.2602774509803922,
+          "log_loss": 0.715827814362402,
+          "max_drawdown": 5.0,
+          "roi": 0.06862745098039216,
+          "sample_size": 204
+        },
+        "candidate_id": "cand-813d47e9da",
+        "reason": "CLV degraded beyond tolerance. Max drawdown worsened too much.",
+        "sample_size": 542,
+        "status": "rejected"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "pending",
+        "candidate_id": "cand-fa83a29664",
+        "created_at": "2026-05-14T07:46:54.458712+00:00",
+        "production_update_allowed": false,
+        "promotion_status": "pending",
+        "reason": "The prediction result matched the final outcome.",
+        "required_backtest": true,
+        "source_gradients": [
+          "grad-a1ce322d11"
+        ],
+        "source_losses": [
+          "loss-9ff0e6e9a7"
+        ],
+        "status": "pending",
+        "target": "analyst_prompt",
+        "type": "prompt_update",
+        "update": "Make the explanation explicitly state whether the lean is model-driven, market-driven, or data-quality-limited."
+      },
+      "date": "2026-06-01T06:44:37.269562+00:00",
+      "decision": {
+        "after_metrics": {
+          "accuracy": 0.540590405904059,
+          "average_clv": -1.0,
+          "brier_score": 0.2524570479704797,
+          "log_loss": 0.6991668007033502,
+          "max_drawdown": 15.0,
+          "roi": 0.08118081180811808,
+          "sample_size": 542
+        },
+        "before_metrics": {
+          "accuracy": 0.5343137254901961,
+          "average_clv": 0.0,
+          "brier_score": 0.2602774509803922,
+          "log_loss": 0.715827814362402,
+          "max_drawdown": 5.0,
+          "roi": 0.06862745098039216,
+          "sample_size": 204
+        },
+        "candidate_id": "cand-fa83a29664",
+        "reason": "CLV degraded beyond tolerance. Max drawdown worsened too much.",
+        "sample_size": 542,
+        "status": "rejected"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "pending",
+        "candidate_id": "cand-74568e79a5",
+        "created_at": "2026-05-14T07:46:54.464395+00:00",
+        "production_update_allowed": false,
+        "reason": "Repeated pattern appeared 5 times.",
+        "required_backtest": true,
+        "rule": "Require a stronger edge or return NO BET when market difference is marginal.",
+        "source_lessons": [
+          "lesson-1c45daec1c",
+          "lesson-4c226bb916",
+          "lesson-a6387dc1e3",
+          "lesson-a4fc93902e",
+          "lesson-542e1e753e"
+        ],
+        "source_losses": [],
+        "status": "pending",
+        "type": "no_bet_rule"
+      },
+      "date": "2026-06-01T06:44:37.287449+00:00",
+      "decision": {
+        "after_metrics": {
+          "accuracy": 0.540590405904059,
+          "average_clv": -1.0,
+          "brier_score": 0.2524570479704797,
+          "log_loss": 0.6991668007033502,
+          "max_drawdown": 15.0,
+          "roi": 0.08118081180811808,
+          "sample_size": 542
+        },
+        "before_metrics": {
+          "accuracy": 0.5343137254901961,
+          "average_clv": 0.0,
+          "brier_score": 0.2602774509803922,
+          "log_loss": 0.715827814362402,
+          "max_drawdown": 5.0,
+          "roi": 0.06862745098039216,
+          "sample_size": 204
+        },
+        "candidate_id": "cand-74568e79a5",
+        "reason": "CLV degraded beyond tolerance. Max drawdown worsened too much.",
+        "sample_size": 542,
+        "status": "rejected"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "pending",
+        "candidate_id": "cand-a9001e1c51",
+        "created_at": "2026-05-14T07:46:54.464849+00:00",
+        "production_update_allowed": false,
+        "reason": "Repeated pattern appeared 5 times.",
+        "required_backtest": true,
+        "rule": "Require a stronger edge or return NO BET when market difference is marginal.",
+        "source_lessons": [],
+        "source_losses": [
+          "loss-0c691a2e8a",
+          "loss-8bae15d766",
+          "loss-22e93a6b1a",
+          "loss-734dd1a29e",
+          "loss-1d8fb191e8"
+        ],
+        "status": "pending",
+        "type": "symbolic_update"
+      },
+      "date": "2026-06-01T06:44:37.305458+00:00",
+      "decision": {
+        "after_metrics": {
+          "accuracy": 0.540590405904059,
+          "average_clv": -1.0,
+          "brier_score": 0.2524570479704797,
+          "log_loss": 0.6991668007033502,
+          "max_drawdown": 15.0,
+          "roi": 0.08118081180811808,
+          "sample_size": 542
+        },
+        "before_metrics": {
+          "accuracy": 0.5343137254901961,
+          "average_clv": 0.0,
+          "brier_score": 0.2602774509803922,
+          "log_loss": 0.715827814362402,
+          "max_drawdown": 5.0,
+          "roi": 0.06862745098039216,
+          "sample_size": 204
+        },
+        "candidate_id": "cand-a9001e1c51",
+        "reason": "CLV degraded beyond tolerance. Max drawdown worsened too much.",
+        "sample_size": 542,
+        "status": "rejected"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "pending",
+        "candidate_id": "cand-1af3bc9de1",
+        "created_at": "2026-05-18T03:34:12.069905+00:00",
+        "production_update_allowed": false,
+        "promotion_status": "pending",
+        "reason": "The prediction result matched the final outcome.",
+        "required_backtest": true,
+        "source_gradients": [
+          "grad-7e4853b50c"
+        ],
+        "source_losses": [
+          "loss-56018e651d"
+        ],
+        "status": "pending",
+        "target": "analyst_prompt",
+        "type": "prompt_update",
+        "update": "Make the explanation explicitly state whether the lean is model-driven, market-driven, or data-quality-limited."
+      },
+      "date": "2026-06-01T06:44:37.323497+00:00",
+      "decision": {
+        "after_metrics": {
+          "accuracy": 0.5432595573440644,
+          "average_clv": -1.0,
+          "brier_score": 0.2519521106639839,
+          "log_loss": 0.6981667069713051,
+          "max_drawdown": 15.0,
+          "roi": 0.08651911468812877,
+          "sample_size": 497
+        },
+        "before_metrics": {
+          "accuracy": 0.5301204819277109,
+          "average_clv": 0.0,
+          "brier_score": 0.25987197188755023,
+          "log_loss": 0.7148129588209126,
+          "max_drawdown": 7.0,
+          "roi": 0.060240963855421686,
+          "sample_size": 249
+        },
+        "candidate_id": "cand-1af3bc9de1",
+        "reason": "CLV degraded beyond tolerance. Max drawdown worsened too much.",
+        "sample_size": 497,
+        "status": "rejected"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "pending",
+        "candidate_id": "cand-2028ddecc4",
+        "created_at": "2026-05-18T03:34:12.071156+00:00",
+        "production_update_allowed": false,
+        "promotion_status": "pending",
+        "reason": "The prediction result matched the final outcome.",
+        "required_backtest": true,
+        "source_gradients": [
+          "grad-8c90acf614"
+        ],
+        "source_losses": [
+          "loss-b33496777a"
+        ],
+        "status": "pending",
+        "target": "analyst_prompt",
+        "type": "prompt_update",
+        "update": "Make the explanation explicitly state whether the lean is model-driven, market-driven, or data-quality-limited."
+      },
+      "date": "2026-06-01T06:44:37.341077+00:00",
+      "decision": {
+        "after_metrics": {
+          "accuracy": 0.5432595573440644,
+          "average_clv": -1.0,
+          "brier_score": 0.2519521106639839,
+          "log_loss": 0.6981667069713051,
+          "max_drawdown": 15.0,
+          "roi": 0.08651911468812877,
+          "sample_size": 497
+        },
+        "before_metrics": {
+          "accuracy": 0.5301204819277109,
+          "average_clv": 0.0,
+          "brier_score": 0.25987197188755023,
+          "log_loss": 0.7148129588209126,
+          "max_drawdown": 7.0,
+          "roi": 0.060240963855421686,
+          "sample_size": 249
+        },
+        "candidate_id": "cand-2028ddecc4",
+        "reason": "CLV degraded beyond tolerance. Max drawdown worsened too much.",
+        "sample_size": 497,
+        "status": "rejected"
+      },
+      "rollback_supported": true
     }
   ]
 }

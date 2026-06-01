@@ -620,6 +620,36 @@ def _accuracy(correct: Any, total: Any) -> float:
     return round((safe_float(correct, 0.0) / parsed_total) * 100.0, 1)
 
 
+def _rolling_win_rate(learning_log: list[dict[str, Any]], days: int = 3) -> dict[str, Any] | None:
+    """Win rate over the last `days` from the Telegram learning log.
+
+    Mirrors the bot's /postgame rolling rate so recent form (which can differ a
+    lot from the all-time baseline) is visible on the dashboard too.
+    """
+    if not learning_log:
+        return None
+    cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+    correct = 0
+    total = 0
+    for entry in learning_log:
+        at = entry.get("at")
+        if not at or not isinstance(entry.get("correct"), bool):
+            continue
+        try:
+            stamp = datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        if stamp < cutoff:
+            continue
+        total += 1
+        if entry.get("correct"):
+            correct += 1
+    if total == 0:
+        return None
+    return {"days": days, "wins": correct, "total": total, "win_rate": _accuracy(correct, total)}
+
+
+
 def _telegram_calibration_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     predictions = state.get("predictions") or {}
     outcomes = _telegram_learning_by_game(state)
@@ -661,6 +691,8 @@ def get_telegram_model_performance() -> dict[str, Any] | None:
     correct = safe_float(memory.get("correctPicks"), 0.0)
     wrong = safe_float(memory.get("wrongPicks"), 0.0)
     win_rate = _accuracy(correct, total)
+    learning_log = memory.get("learningLog") or []
+    rolling_3d = _rolling_win_rate(learning_log, days=3)
     by_confidence = memory.get("byConfidence") or {}
     first_inning = memory.get("firstInning") or {}
     calibration = _telegram_calibration_rows(state)
@@ -682,6 +714,8 @@ def get_telegram_model_performance() -> dict[str, Any] | None:
             "wins": int(correct),
             "losses": int(wrong),
             "win_rate": win_rate,
+            "win_rate_3d": rolling_3d.get("win_rate") if rolling_3d else None,
+            "win_rate_3d_sample": f"{rolling_3d['wins']}/{rolling_3d['total']}" if rolling_3d else None,
             "roi": round(((correct - wrong) / total) * 100.0, 1) if total else 0.0,
             "average_edge": 0.0,
             "average_clv": 0.0,
@@ -794,11 +828,23 @@ def _json_tail(payload: dict[str, Any], limit: int = 2000) -> str:
 
 
 def run_evolve_cycle() -> dict[str, Any]:
-    """Run the full evolution cycle and return the result."""
+    """Run the full evolution pipeline: cycle (backfill + ingest + calibration +
+    candidates) followed by a safe-apply audit. Mirrors the bot's single
+    /evolve command so the dashboard button does everything in one click.
+    """
     try:
+        from .evolution.evolution_audit import build_evolution_audit
         from .evolution.evolution_engine import run_evolution_cycle as run_engine_evolution_cycle
 
-        result = run_engine_evolution_cycle()
+        cycle = run_engine_evolution_cycle()
+        audit = build_evolution_audit(
+            min_segment_sample=3,
+            candidate_limit=10,
+            persist=True,
+            apply_safe=True,
+            update_memory=True,
+        )
+        result = {**cycle, "audit": audit}
         return {
             **result,
             "status": "ok",
@@ -811,33 +857,10 @@ def run_evolve_cycle() -> dict[str, Any]:
 
 
 def run_audit_cycle() -> dict[str, Any]:
-    """Run ingest + audit and return the result."""
-    try:
-        from .evolution.evolution_audit import build_evolution_audit
-        from .evolution.evolution_engine import ingest_bot_history
-
-        learning_ingest = ingest_bot_history()
-        audit = build_evolution_audit(
-            min_segment_sample=3,
-            candidate_limit=10,
-            persist=True,
-            apply_safe=True,
-            update_memory=True,
-        )
-        output = {
-            "learning_ingest": learning_ingest,
-            "audit": audit,
-        }
-        return {
-            **audit,
-            "status": "ok",
-            "learning_ingest": learning_ingest,
-            "result": audit,
-            "output": _json_tail(output),
-            "detail": "",
-        }
-    except Exception as exc:
-        return {"status": "error", "output": "", "detail": str(exc)}
+    """Backwards-compatible alias. The dashboard now runs one consolidated
+    pipeline, so /api/audit performs the same full evolve cycle + audit.
+    """
+    return run_evolve_cycle()
 
 
 def _dashboard_backtest_rows(params: dict[str, Any], market: str) -> list[dict[str, Any]]:
