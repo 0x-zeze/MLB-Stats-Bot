@@ -19,7 +19,7 @@ export default function BacktestSection() {
     setError(null);
     setResults(null);
     try {
-      const data = await api.backtest({ start_date: startDate, end_date: endDate, market });
+      const data = await api.backtest({ start_date: startDate, end_date: endDate, market_type: market });
       setResults(data);
     } catch (err) {
       setError(err.message || 'Backtest failed');
@@ -76,6 +76,7 @@ export default function BacktestSection() {
               <option value="all">All Markets</option>
               <option value="moneyline">Moneyline</option>
               <option value="totals">Totals</option>
+              <option value="yrfi">YRFI</option>
             </select>
           </div>
           <Button type="submit" size="sm" variant="primary" disabled={running}>

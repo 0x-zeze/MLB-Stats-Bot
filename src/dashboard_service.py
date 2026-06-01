@@ -18,7 +18,6 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
-from .backtest import run_backtest
 from .evaluate import (
     calculate_metrics,
     calibration_rows,
@@ -863,13 +862,96 @@ def run_audit_cycle() -> dict[str, Any]:
     return run_evolve_cycle()
 
 
+def _history_backtest_rows(params: dict[str, Any], market: str) -> list[dict[str, Any]]:
+    """Replay the real settled-prediction history for one market, filtered by
+    the requested date window.
+
+    The dashboard backtest used to replay ``data/sample_games.csv`` — a tiny
+    static fixture — so every date range produced identical numbers. This reads
+    the canonical ``prediction_outcomes.csv`` instead and shapes each row into
+    the schema ``calculate_metrics``/``calibration_rows`` expect.
+    """
+    from .evolution.memory_store import read_prediction_outcomes
+
+    start_date = params.get("start_date") or None
+    end_date = params.get("end_date") or None
+
+    rows: list[dict[str, Any]] = []
+    for outcome in read_prediction_outcomes():
+        if str(outcome.get("market") or "").lower() != market:
+            continue
+        date = str(outcome.get("date") or "")
+        if start_date and date < start_date:
+            continue
+        if end_date and date > end_date:
+            continue
+
+        evaluation = _safe_evaluation(outcome.get("evaluation_json"))
+        result = str(outcome.get("result") or "").lower()
+        # predicted_probability is stored 0-100 for the PICKED side; metrics
+        # helpers work on a 0-1 scale, so normalize. Older rows (pre-calibration)
+        # left it blank but carry an authoritative brier_score column, so
+        # reconstruct the probability from brier the same way the calibrator
+        # does — otherwise row_probability() defaults to 0 and inflates brier.
+        predicted = safe_float(evaluation.get("predicted_probability"), None)
+        if predicted is not None and predicted > 1.0:
+            probability = predicted / 100.0
+        elif predicted is not None:
+            probability = predicted
+        else:
+            brier = safe_float(outcome.get("brier_score"), None)
+            if brier is not None and result in ("win", "loss"):
+                root = max(0.0, brier) ** 0.5
+                probability = (1.0 - root) if result == "win" else root
+            else:
+                probability = None
+        lean = str(outcome.get("prediction") or "")
+        actual_winner = evaluation.get("actual_winner")
+        # The outcomes CSV stores only the picked side, not both team names.
+        # Use the pick as home_team so row_probability() resolves the moneyline
+        # probability via the home field; surface the opponent when known.
+        opponent = actual_winner if actual_winner and actual_winner != lean else ""
+
+        shaped: dict[str, Any] = {
+            "date": date,
+            "away_team": opponent,
+            "home_team": lean,
+            "final_lean": lean,
+            "result": result,
+            "profit_loss": safe_float(outcome.get("profit_loss"), 0.0),
+            "model_edge": safe_float(evaluation.get("edge"), 0.0),
+            "closing_line_value": safe_float(outcome.get("clv"), 0.0),
+            "confidence": outcome.get("confidence") or evaluation.get("confidence"),
+            "market_total": evaluation.get("market_total"),
+        }
+        # Attach the calibrated/predicted probability to the field that
+        # row_probability() reads for this lean type.
+        if probability is not None:
+            if lean.startswith("Over"):
+                shaped["over_probability"] = probability
+            elif lean.startswith("Under"):
+                shaped["under_probability"] = probability
+            else:
+                shaped["home_win_probability"] = probability
+        rows.append(shaped)
+
+    return rows
+
+
+def _safe_evaluation(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
 def _dashboard_backtest_rows(params: dict[str, Any], market: str) -> list[dict[str, Any]]:
-    return run_backtest(
-        season=int(params["season"]) if params.get("season") else None,
-        start_date=params.get("start_date") or None,
-        end_date=params.get("end_date") or None,
-        market=market,
-    )
+    return _history_backtest_rows(params, market)
 
 
 def _camel_backtest_summary(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -883,9 +965,17 @@ def _camel_backtest_summary(metrics: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_dashboard_backtest(params: dict[str, Any]) -> dict[str, Any]:
-    """Run a sample backtest and shape it for the dashboard."""
+    """Replay real settled-prediction history for the selected market and date
+    window, shaped for the dashboard. Reads prediction_outcomes.csv (not the
+    static sample), so different date ranges yield different numbers.
+    """
     requested_market = params.get("market_type") or params.get("market") or "moneyline"
-    market_map = {"moneyline": ["moneyline"], "totals": ["totals"], "all": ["moneyline", "totals"]}
+    market_map = {
+        "moneyline": ["moneyline"],
+        "totals": ["totals"],
+        "yrfi": ["yrfi"],
+        "all": ["moneyline", "totals", "yrfi"],
+    }
     markets = market_map.get(requested_market)
     if not markets:
         supported = ", ".join(sorted(market_map))

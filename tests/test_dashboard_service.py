@@ -158,39 +158,74 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertEqual(75.0, performance["overall"]["win_rate"])
         self.assertEqual(50.0, performance["overall"]["roi"])
 
-    def test_run_dashboard_backtest_supports_all_market_dashboard_shape(self):
-        moneyline_row = {
-            "date": "2026-05-04",
-            "away_team": "Away",
-            "home_team": "Home",
-            "final_lean": "Home ML",
-            "result": "win",
-            "model_edge": 0.05,
-            "profit_loss": 1.0,
-            "model_probability": 0.6,
-        }
-        totals_row = {
-            "date": "2026-05-04",
-            "away_team": "Away",
-            "home_team": "Home",
-            "final_lean": "Over",
-            "result": "loss",
-            "model_edge": 0.02,
-            "profit_loss": -1.0,
-            "model_probability": 0.55,
-        }
+    def test_run_dashboard_backtest_replays_history_filtered_by_date(self):
+        import json as _json
 
-        def fake_run_backtest(*, market, **_kwargs):
-            return [moneyline_row] if market == "moneyline" else [totals_row]
+        def outcome(date, market, prediction, result, edge, pl, winner):
+            return {
+                "game_id": f"{date}-{prediction}",
+                "date": date,
+                "market": market,
+                "prediction": prediction,
+                "confidence": "medium",
+                "result": result,
+                "profit_loss": pl,
+                "clv": "",
+                "brier_score": "0.21",
+                "evaluation_json": _json.dumps(
+                    {"predicted_probability": 60.0, "edge": edge, "actual_winner": winner}
+                ),
+            }
 
-        with patch("src.dashboard_service.run_backtest", side_effect=fake_run_backtest):
-            payload = dashboard_service.run_dashboard_backtest({"market": "all", "start_date": "2026-05-04", "end_date": "2026-05-25"})
+        history = [
+            outcome("2026-05-04", "moneyline", "Home", "win", 5.0, 1.0, "Home"),
+            outcome("2026-05-04", "totals", "Over 8.5", "loss", 2.0, -1.0, None),
+            # Outside the requested window — must be filtered out.
+            outcome("2026-05-30", "moneyline", "Away", "win", 4.0, 1.0, "Away"),
+        ]
 
+        with patch("src.evolution.memory_store.read_prediction_outcomes", return_value=history):
+            payload = dashboard_service.run_dashboard_backtest(
+                {"market": "all", "start_date": "2026-05-04", "end_date": "2026-05-25"}
+            )
+
+        # Only the two 2026-05-04 rows fall in the window; 2026-05-30 is excluded.
         self.assertEqual(2, payload["summary"]["totalBets"])
-        self.assertEqual(["Moneyline", "Totals"], [row["market"] for row in payload["byMarket"]])
+        self.assertEqual(["Moneyline", "Totals", "Yrfi"], [row["market"] for row in payload["byMarket"]])
         self.assertIn("winRate", payload["byMarket"][0])
         self.assertIn("predicted", payload["calibration"][0])
         self.assertEqual({"moneyline", "totals"}, {row["market"] for row in payload["rows"]})
+
+    def test_run_dashboard_backtest_different_windows_differ(self):
+        import json as _json
+
+        def outcome(date, result):
+            return {
+                "game_id": f"{date}",
+                "date": date,
+                "market": "moneyline",
+                "prediction": "Home",
+                "confidence": "medium",
+                "result": result,
+                "profit_loss": 1.0 if result == "win" else -1.0,
+                "clv": "",
+                "brier_score": "0.21",
+                "evaluation_json": _json.dumps({"predicted_probability": 60.0, "edge": 3.0}),
+            }
+
+        history = [outcome("2026-05-04", "win"), outcome("2026-05-30", "loss")]
+        with patch("src.evolution.memory_store.read_prediction_outcomes", return_value=history):
+            early = dashboard_service.run_dashboard_backtest(
+                {"market": "moneyline", "start_date": "2026-05-01", "end_date": "2026-05-10"}
+            )
+            late = dashboard_service.run_dashboard_backtest(
+                {"market": "moneyline", "start_date": "2026-05-25", "end_date": "2026-05-31"}
+            )
+
+        # The reported bug: numbers were identical across windows. They must differ now.
+        self.assertEqual(1, early["summary"]["totalBets"])
+        self.assertEqual(1, late["summary"]["totalBets"])
+        self.assertNotEqual(early["summary"]["winRate"], late["summary"]["winRate"])
 
     def test_run_evolve_cycle_runs_cycle_and_audit(self):
         cycle = {"summary": {"total_predictions_evaluated": 3}, "symbolic_candidates": 1}

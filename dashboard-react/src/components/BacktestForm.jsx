@@ -25,6 +25,8 @@ export default function BacktestForm({ form, onChange, onRun, running, onExport 
             <Select value={form.market_type} onChange={(event) => onChange({ ...form, market_type: event.target.value })}>
               <option value="moneyline">Moneyline</option>
               <option value="totals">Totals</option>
+              <option value="yrfi">YRFI</option>
+              <option value="all">All Markets</option>
             </Select>
           </Field>
           <Button onClick={onRun} type="button">
