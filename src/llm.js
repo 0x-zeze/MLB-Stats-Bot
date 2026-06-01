@@ -824,15 +824,23 @@ function isQualityPick(candidate) {
   if (candidate.warnings.length >= 2) return false;
   // Require genuine conviction: the raw model favors the pick by a real margin.
   // (The calibrated probability compresses toward 50, so gate on raw here.)
+  // Threshold lowered from 53 → 51 to surface more picks on thin slates while
+  // still filtering out true coin-flips.
   const conviction = toNumber(candidate.rawProbability, candidate.probability);
-  if (conviction < 53) return false;
+  if (conviction < 51) return false;
   // When odds exist, require a non-negative calibrated edge — a negative edge
   // means the market price is better than the model, so it is not a value play.
   if (candidate.edgeInfo && candidate.edge < 0) return false;
   return true;
 }
 
-export function buildTopPicksAnswer(predictions, question = '', limit = 5) {
+// Relaxed filter for fallback: only excludes NO BET, everything else is
+// acceptable as a "thin lean" when the slate has no quality picks.
+function isAcceptablePick(candidate) {
+  return candidate.status !== 'NO BET';
+}
+
+export function buildTopPicksAnswer(predictions, question = '', limit = 5, memorySummary = null) {
   if (!asksForTopPicks(question) || !Array.isArray(predictions) || predictions.length === 0) {
     return null;
   }
@@ -841,15 +849,51 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5) {
     .map(topPickCandidate)
     .sort((left, right) => right.score - left.score);
 
-  // Prefer quality picks; if the slate is thin and none qualify, fall back to
-  // the best-ranked so the command still answers instead of going silent.
-  const quality = ranked.filter(isQualityPick).slice(0, limit);
-  const candidates = quality.length > 0 ? quality : ranked.slice(0, 1);
+  // Prefer quality picks; if the slate is thin and fewer than `limit` qualify,
+  // fill remaining slots with acceptable (non-NO-BET) picks so the user always
+  // gets up to 5 ranked suggestions.
+  const quality = ranked.filter(isQualityPick);
+  let candidates = quality.slice(0, limit);
+  if (candidates.length < limit) {
+    const remaining = limit - candidates.length;
+    const used = new Set(candidates.map(c => c.prediction));
+    const fallback = ranked
+      .filter(c => isAcceptablePick(c) && !used.has(c.prediction))
+      .slice(0, remaining);
+    candidates = [...candidates, ...fallback];
+  }
 
   if (candidates.length === 0) return null;
 
+  // Determine overall slate quality for the header note
+  const qualityCount = quality.length;
+  const thinSlate = qualityCount < 3;
+
   const calibrated = hasCalibrationMap('moneyline');
   const lines = [uiTitle('🏆', 'Top Pick Model | Hari Ini'), ''];
+
+  if (thinSlate && candidates.length > qualityCount) {
+    lines.push(`⚠️ Slate tipis: ${qualityCount} pick berkualitas, sisanya thin lean/lean only.`);
+    lines.push('');
+  }
+
+  // Memory context header
+  if (memorySummary) {
+    const { totalPicks, correctPicks, accuracy, byConfidence } = memorySummary;
+    if (totalPicks > 0) {
+      const confParts = [];
+      for (const level of ['high', 'medium', 'low']) {
+        const bucket = byConfidence?.[level];
+        if (bucket?.total > 0) {
+          const pct = Math.round((bucket.correct / bucket.total) * 100);
+          confParts.push(`${level}: ${pct}% (${bucket.total})`);
+        }
+      }
+      lines.push(`📊 Record: ${correctPicks}/${totalPicks} (${accuracy}%) | ${confParts.join(' | ')}`);
+      lines.push('');
+    }
+  }
+
   candidates.forEach((candidate, index) => {
     const pickLabel = candidate.pick?.abbreviation || candidate.pick?.name || 'TBD';
     const opponentLabel = candidate.opponent?.abbreviation || candidate.opponent?.name || 'TBD';
@@ -866,6 +910,34 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5) {
     lines.push(`   ${uiKV('🧠', 'Keyakinan', confidenceReason(candidate))}`);
     lines.push(`   ${uiKV('📋', 'Konfirmasi', confirmationSignals(candidate.prediction).join(' | '))}`);
     lines.push(`   ${uiKV('💡', 'Alasan', `${shortReason(candidate)}.`)}`);
+
+    // Memory context per pick: team bias + matchup history
+    if (memorySummary) {
+      const memParts = [];
+      const teamId = String(candidate.pick?.id || '');
+      const oppId = String(candidate.opponent?.id || '');
+      // teamBias is in raw memory, but memorySummary doesn't include it directly.
+      // Use byConfidence accuracy as proxy for pick quality.
+      const confBucket = memorySummary.byConfidence?.[candidate.confidence];
+      if (confBucket?.total > 0) {
+        const pct = Math.round((confBucket.correct / confBucket.total) * 100);
+        memParts.push(`historis ${candidate.confidence}: ${pct}% win (${confBucket.total} picks)`);
+      }
+      // Matchup memory from recent entries (key is "sortedIdA:sortedIdB")
+      const matchup = memorySummary.matchupMemory?.recent?.find(m => {
+        const key = String(m.key || '');
+        return key.includes(teamId) && key.includes(oppId);
+      });
+      if (matchup) {
+        const streak = matchup.currentStreak ? ` | streak: ${matchup.currentStreak}` : '';
+        const margin = matchup.averageMargin ? ` | avg margin: ${matchup.averageMargin}` : '';
+        memParts.push(`H2H: ${matchup.totalGames} game${streak}${margin}`);
+      }
+      if (memParts.length) {
+        lines.push(`   ${uiKV('📚', 'Memory', memParts.join(' | '))}`);
+      }
+    }
+
     if (candidate.warnings.length) {
       lines.push(`   ${uiKV('⚠️', 'Risk', candidate.warnings.join(' | '))}`);
     }
@@ -1034,7 +1106,7 @@ async function askLocalAgent(config, { question, dateYmd, predictions, memorySum
 export async function answerInteractiveQuestion(config, payload) {
   if (!config.interactiveAgent) return null;
 
-  const deterministicAnswer = buildTopPicksAnswer(payload.predictions, payload.question);
+  const deterministicAnswer = buildTopPicksAnswer(payload.predictions, payload.question, 5, payload.memorySummary);
   if (deterministicAnswer) return deterministicAnswer;
 
   if (config.analystAgent.mode === 'external') {
