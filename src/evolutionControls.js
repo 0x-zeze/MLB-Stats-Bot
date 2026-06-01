@@ -125,12 +125,8 @@ export function getCalibrationPenalty(probability, controls) {
 
   const memory = controls?.memory || {};
   const cautions = Array.isArray(memory.next_game_cautions) ? memory.next_game_cautions : [];
-  for (const caution of cautions) {
-    const text = String(caution || '').toLowerCase();
-    if (text.includes('probability') && text.includes('60') && probability >= 60 && probability < 65) {
-      penalty = Math.min(penalty, -1);
-    }
-  }
+  // Note: the old 60-65% caution penalty was removed because the model has
+  // improved (now 56.5% accuracy in that range). Re-enable if accuracy drops.
 
   return Math.max(-2, penalty);
 }

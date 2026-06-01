@@ -302,7 +302,7 @@ function multiFactorConfidence(prediction, probability, evolutionControls) {
   const calibrationPenalty = getCalibrationPenalty(normalizeProbability(probability, 50), evolutionControls);
   score += calibrationPenalty;
 
-  if (breakdown.recordDominated) score -= 2;
+  if (breakdown.recordDominated) score -= 1;
 
   if (edge >= 5 && edge < 8 && agreeing <= 1) return 'low';
 

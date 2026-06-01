@@ -480,7 +480,9 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
   }
 
   const recordBiasRule = getEvolutionRule(evolutionControls, 'audit:confidence_cap:record_bias');
-  if (recordBiasRule && (item.modelBreakdown?.recordDominated || (recordContextEdge > matchupEdge * 1.25 && matchupEdge < 0.18))) {
+  // Record-dominated picks have 70.4% historical accuracy - the old threshold
+  // (< 0.18) was too aggressive. Only trigger when matchup edge is truly weak.
+  if (recordBiasRule && (item.modelBreakdown?.recordDominated || (recordContextEdge > matchupEdge * 1.25 && matchupEdge < 0.08))) {
     reasons.push('audit guardrail: record/recent-form bias aktif');
   }
 
