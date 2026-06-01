@@ -2820,7 +2820,14 @@ function predictGame(
   const recordDominated =
     Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
   const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent + weatherComponent;
-  const rawHomeProbability = clamp(sigmoid(edge) * 100, 30, 70);
+
+  // Edge dampening: the model is systematically overconfident at higher edges.
+  // Analysis of 407 outcomes shows 60% predictions win only 50.7% (coin flip).
+  // Scale the edge down by 30% before sigmoid to reduce overconfidence.
+  // The calibration map handles the remaining gap.
+  const dampenedEdge = edge * 0.7;
+
+  const rawHomeProbability = clamp(sigmoid(dampenedEdge) * 100, 30, 70);
   const rawAwayProbability = 100 - rawHomeProbability;
   // Calibrate at the source so every surface (cards, /picks, auto-alert, stored
   // picks, dashboard) shows the same honest, observed-frequency probability.
@@ -2839,6 +2846,9 @@ function predictGame(
     }
   }
   const modelBreakdown = {
+    rawEdge: edge,
+    dampenedEdge,
+    dampeningFactor: 0.7,
     matchupEdge,
     recordContextEdge,
     offenseEdge: offenseComponent,
