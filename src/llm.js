@@ -6,6 +6,7 @@ import {
 } from './analystSkill.js';
 import { uiKV, uiTitle } from './telegramFormat.js';
 import { getCalibrationPenalty, loadEvolutionControls } from './evolutionControls.js';
+import { calibratePercent, hasCalibrationMap } from './calibration.js';
 
 function trimSlash(value) {
   return String(value || '').replace(/\/+$/, '');
@@ -626,23 +627,85 @@ function teamSideForPick(prediction) {
     : 'away';
 }
 
+// Human-readable labels for the modelBreakdown components, keyed by the field
+// name. Used to surface the strongest factors behind a pick.
+const FACTOR_LABELS = {
+  starterEdge: 'starting pitcher',
+  matchupEdge: 'matchup',
+  offenseEdge: 'offense',
+  preventionEdge: 'run prevention',
+  bullpenEdge: 'bullpen',
+  lineupEdge: 'lineup',
+  formEdge: 'recent form',
+  pythagoreanEdge: 'pythag record',
+  log5Edge: 'log5 strength',
+  homeFieldEdge: 'home field',
+  fatigueEdge: 'rest/fatigue',
+  h2hEdge: 'head-to-head',
+  memoryEdge: 'matchup memory'
+};
+
+// Components ranked from strongest to weakest evidence that agree with the
+// pick direction. Returns up to `limit` readable labels.
+function supportingFactors(prediction, side, limit = 3) {
+  const breakdown = prediction.modelBreakdown || {};
+  // Positive breakdown edge favors the home side; flip for an away pick.
+  const direction = side === 'home' ? 1 : -1;
+  return Object.entries(FACTOR_LABELS)
+    .map(([key, label]) => ({ label, value: toNumber(breakdown[key], 0) * direction }))
+    .filter((item) => item.value > 0.02)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, limit)
+    .map((item) => item.label);
+}
+
+// Returns the model-vs-market edge for the picked side recomputed against the
+// CALIBRATED probability, plus the odds context, when a price is available.
+function calibratedEdge(prediction, calibratedProbability) {
+  const decision = prediction.betDecision || {};
+  const implied = toNumber(decision.impliedProbability, NaN);
+  if (!Number.isFinite(implied)) return null;
+  return {
+    edge: Math.round((calibratedProbability - implied) * 10) / 10,
+    implied: Math.round(implied * 10) / 10,
+    odds: decision.odds,
+    book: decision.book
+  };
+}
+
 function topPickCandidate(prediction) {
   const side = teamSideForPick(prediction);
   const pick = side === 'away' ? prediction.away : prediction.home;
   const opponent = side === 'away' ? prediction.home : prediction.away;
-  const probability = normalizeProbability(
+  const rawProbability = normalizeProbability(
     side === 'away'
       ? prediction.agentAnalysis?.awayProbability ?? prediction.away?.winProbability
       : prediction.agentAnalysis?.homeProbability ?? prediction.home?.winProbability,
     50
   );
-  const confidence = prediction.agentAnalysis?.confidence || deterministicConfidenceFromPrediction(prediction, probability);
-  const edge = toNumber(prediction.betDecision?.edge ?? prediction.valuePick?.edge, 0);
+  // Apply the per-market isotonic calibration the evolution pipeline trains, so
+  // the displayed probability reflects observed win rates, not the raw model.
+  const calibrated = hasCalibrationMap('moneyline')
+    ? calibratePercent(rawProbability, 'moneyline')
+    : rawProbability;
+  // Calibration can flip the favorite when the raw edge was an artifact; keep
+  // the pick on the side the calibrated probability actually favors.
+  const probability = calibrated;
+  // Confidence reflects model conviction + factor agreement, so feed it the raw
+  // model probability (the calibration map compresses the scale and would mute
+  // genuine conviction); the displayed probability stays calibrated.
+  const confidence = prediction.agentAnalysis?.confidence || deterministicConfidenceFromPrediction(prediction, rawProbability);
+  const calibratedEdgeInfo = calibratedEdge(prediction, probability);
+  // Prefer the calibrated edge; fall back to the stored raw edge when no odds.
+  const edge = calibratedEdgeInfo
+    ? calibratedEdgeInfo.edge
+    : toNumber(prediction.betDecision?.edge ?? prediction.valuePick?.edge, 0);
   const matchupEdge = Math.abs(toNumber(prediction.modelBreakdown?.matchupEdge, 0)) * 10;
   const status = String(prediction.betDecision?.status || 'LEAN ONLY').toUpperCase();
   const statusBoost = status === 'VALUE' ? 5 : status === 'NO BET' ? -4 : 0;
   const warnings = topPickWarnings(prediction);
   const lineupPenalty = (prediction.lineups?.away?.confirmed && prediction.lineups?.home?.confirmed) ? 0 : -3;
+  const factors = supportingFactors(prediction, side);
   const score = probability - 50 + Math.max(edge, 0) * 0.8 + confidenceScore(confidence) + matchupEdge + statusBoost - warnings.length * 2.5 + lineupPenalty;
 
   return {
@@ -651,7 +714,11 @@ function topPickCandidate(prediction) {
     pick,
     opponent,
     probability,
+    rawProbability,
     confidence,
+    edge,
+    edgeInfo: calibratedEdgeInfo,
+    factors,
     score,
     status,
     warnings
@@ -684,10 +751,18 @@ function topPickWarnings(prediction) {
 
 function pickTier(candidate) {
   if (candidate.status === 'NO BET' || candidate.warnings.length >= 2) return '⛔ No Bet Risk';
-  if (candidate.probability >= 63 && confidenceRank(candidate.confidence) >= 3 && candidate.warnings.length === 0) {
+  // Calibrated moneyline probabilities compress (the trained map tops out near
+  // 60%), so tiering keys off conviction (raw probability + confidence) and,
+  // when odds exist, the calibrated market edge — the real value signal.
+  const conviction = toNumber(candidate.rawProbability, candidate.probability);
+  const hasOdds = Boolean(candidate.edgeInfo);
+  const edge = toNumber(candidate.edge, 0);
+  const strongEdge = hasOdds ? edge >= 3 : conviction >= 60;
+  if (strongEdge && confidenceRank(candidate.confidence) >= 3 && candidate.warnings.length === 0) {
     return '✅ Strong Pick';
   }
-  if (candidate.probability >= 58 || confidenceRank(candidate.confidence) >= 2) return '🟡 Lean Only';
+  const leanEdge = hasOdds ? edge >= 1 : conviction >= 56;
+  if (leanEdge || confidenceRank(candidate.confidence) >= 2) return '🟡 Lean Only';
   return '⚪ Thin Lean';
 }
 
@@ -712,25 +787,85 @@ function shortReason(candidate) {
   return 'model memberi edge matchup paling jelas di slate ini';
 }
 
+// Short justification for why the confidence label landed where it did, so the
+// user can see the analysis is grounded (factor agreement + edge size).
+function confidenceReason(candidate) {
+  // Conviction band uses the raw model probability (the calibrated value is
+  // compressed); edge uses the calibrated market edge shown to the user.
+  const conviction = Math.abs(toNumber(candidate.rawProbability, candidate.probability) - 50);
+  const factorCount = candidate.factors.length;
+  const parts = [`${factorCount} faktor mendukung`];
+  if (Number.isFinite(candidate.edge) && candidate.edge !== 0) {
+    parts.push(`edge ${candidate.edge > 0 ? '+' : ''}${candidate.edge}%`);
+  }
+  parts.push(`konviksi ${conviction >= 12 ? 'kuat' : conviction >= 6 ? 'sedang' : 'tipis'}`);
+  return parts.join(', ');
+}
+
+// Confirmation/maturity signals: lineup, probable pitcher, and sharp-money
+// alignment. Returns short readable tags.
+function confirmationSignals(prediction) {
+  const signals = [];
+  const lineups = [prediction.lineups?.away, prediction.lineups?.home].filter(Boolean);
+  const bothConfirmed = lineups.length === 2 && lineups.every((l) => l.confirmed && toNumber(l.count, 0) >= 9);
+  signals.push(bothConfirmed ? 'lineup ✓' : 'lineup belum');
+  const hasPitchers = Boolean(prediction.away?.starter && prediction.home?.starter);
+  signals.push(hasPitchers ? 'pitcher ✓' : 'pitcher TBD');
+  const sharp = prediction.modelBreakdown?.sharpMoney;
+  if (sharp?.direction === 'toward_model') signals.push('sharp searah');
+  else if (sharp?.direction === 'against_model' && toNumber(sharp?.magnitude, 0) >= 15) signals.push('sharp lawan');
+  return signals;
+}
+
+// A pick is worth surfacing only if it carries real signal: not a NO BET, not
+// drowning in warnings, and a probability edge above a coinflip. This keeps the
+// top list honest instead of always padding to five thin leans.
+function isQualityPick(candidate) {
+  if (candidate.status === 'NO BET') return false;
+  if (candidate.warnings.length >= 2) return false;
+  // Require genuine conviction: the raw model favors the pick by a real margin.
+  // (The calibrated probability compresses toward 50, so gate on raw here.)
+  const conviction = toNumber(candidate.rawProbability, candidate.probability);
+  if (conviction < 53) return false;
+  // When odds exist, require a non-negative calibrated edge — a negative edge
+  // means the market price is better than the model, so it is not a value play.
+  if (candidate.edgeInfo && candidate.edge < 0) return false;
+  return true;
+}
+
 export function buildTopPicksAnswer(predictions, question = '', limit = 5) {
   if (!asksForTopPicks(question) || !Array.isArray(predictions) || predictions.length === 0) {
     return null;
   }
 
-  const candidates = predictions
+  const ranked = predictions
     .map(topPickCandidate)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
+    .sort((left, right) => right.score - left.score);
+
+  // Prefer quality picks; if the slate is thin and none qualify, fall back to
+  // the best-ranked so the command still answers instead of going silent.
+  const quality = ranked.filter(isQualityPick).slice(0, limit);
+  const candidates = quality.length > 0 ? quality : ranked.slice(0, 1);
 
   if (candidates.length === 0) return null;
 
-  const lines = [uiTitle('🏆', 'Top 5 Pick Model | Hari Ini'), ''];
+  const calibrated = hasCalibrationMap('moneyline');
+  const lines = [uiTitle('🏆', 'Top Pick Model | Hari Ini'), ''];
   candidates.forEach((candidate, index) => {
     const pickLabel = candidate.pick?.abbreviation || candidate.pick?.name || 'TBD';
     const opponentLabel = candidate.opponent?.abbreviation || candidate.opponent?.name || 'TBD';
     lines.push(`${index + 1}. 🎯 ${pickLabel} ML vs ${opponentLabel}`);
     lines.push(`   ${uiKV('🏷️', 'Tier', pickTier(candidate))}`);
-    lines.push(`   ${uiKV('✅', 'Prediksi menang', `${candidate.pick?.name || pickLabel} | ${candidate.probability}% | ${candidate.confidence}`)}`);
+    lines.push(`   ${uiKV('✅', 'Prediksi menang', `${candidate.pick?.name || pickLabel} | ${candidate.probability}%${calibrated ? ' (kalibrasi)' : ''} | ${candidate.confidence}`)}`);
+    if (candidate.edgeInfo) {
+      const oddsText = candidate.edgeInfo.odds != null ? ` @ ${candidate.edgeInfo.odds}` : '';
+      lines.push(`   ${uiKV('📈', 'Edge', `${candidate.edge > 0 ? '+' : ''}${candidate.edge}% vs market ${candidate.edgeInfo.implied}%${oddsText}`)}`);
+    }
+    if (candidate.factors.length) {
+      lines.push(`   ${uiKV('🔬', 'Faktor', candidate.factors.join(', '))}`);
+    }
+    lines.push(`   ${uiKV('🧠', 'Keyakinan', confidenceReason(candidate))}`);
+    lines.push(`   ${uiKV('📋', 'Konfirmasi', confirmationSignals(candidate.prediction).join(' | '))}`);
     lines.push(`   ${uiKV('💡', 'Alasan', `${shortReason(candidate)}.`)}`);
     if (candidate.warnings.length) {
       lines.push(`   ${uiKV('⚠️', 'Risk', candidate.warnings.join(' | '))}`);

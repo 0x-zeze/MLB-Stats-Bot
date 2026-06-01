@@ -61,11 +61,25 @@ test('top 5 pick question uses concise deterministic formatter', () => {
 
   const answer = buildTopPicksAnswer(predictions, 'best 5 top pick for today');
 
-  assert.match(answer, /^🏆 Top 5 Pick Model \| Hari Ini/);
+  assert.match(answer, /^🏆 Top Pick Model \| Hari Ini/);
   assert.match(answer, /Prediksi menang \|/);
+  assert.match(answer, /Keyakinan \|/);
+  assert.match(answer, /Konfirmasi \|/);
   assert.match(answer, /Alasan \|/);
   assert.match(answer, /5\. /);
   assert.doesNotMatch(answer, /6\. /);
   assert.doesNotMatch(answer, /RISK:/i);
   assert.doesNotMatch(answer, /<think>/i);
+});
+
+test('top picks filters out a coinflip pick below the quality threshold', () => {
+  const predictions = [
+    prediction(1, 'Away One', 'Home One', 38, 62, 'Home One starter dominan.'),
+    prediction(2, 'Away Two', 'Home Two', 64, 36, 'Away Two run prevention unggul.'),
+    prediction(3, 'Coin Away', 'Coin Home', 50, 50, 'Murni coinflip tanpa edge.')
+  ];
+
+  const answer = buildTopPicksAnswer(predictions, 'best 5 top pick for today');
+  // The 50/50 game carries no edge and must be excluded from the surfaced list.
+  assert.doesNotMatch(answer, /Coin (Away|Home)/);
 });
