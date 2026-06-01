@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from ..utils import safe_float
-from .memory_store import append_jsonl, current_versions, utc_now
+from .memory_store import append_jsonl, current_versions, read_jsonl, utc_now
 
 POSTGAME_KEYS = {
     "actual_home_score",
@@ -141,8 +141,30 @@ def build_prediction_trajectory(game_context: dict[str, Any], prediction_output:
     return record
 
 
+def trajectory_dedupe_key(record: dict[str, Any]) -> str:
+    prediction = record.get("prediction") or {}
+    parts = [
+        record.get("game_id"),
+        record.get("date"),
+        record.get("market"),
+        prediction.get("final_lean"),
+        prediction.get("projected_total_runs"),
+        prediction.get("market_total"),
+        record.get("prompt_version"),
+        record.get("rule_version"),
+        record.get("weight_version"),
+        record.get("model_version"),
+    ]
+    return "|".join(str(part or "") for part in parts)
+
+
 def log_prediction_trajectory(game_context: dict[str, Any], prediction_output: dict[str, Any] | None = None) -> dict[str, Any]:
     trajectory = build_prediction_trajectory(game_context, prediction_output)
+    trajectory["trajectory_key"] = trajectory_dedupe_key(trajectory)
+    for existing in read_jsonl("trajectories"):
+        existing_key = existing.get("trajectory_key") or trajectory_dedupe_key(existing)
+        if existing_key == trajectory["trajectory_key"]:
+            return existing
     return append_jsonl("trajectories", trajectory)
 
 

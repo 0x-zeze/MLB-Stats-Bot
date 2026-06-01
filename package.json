@@ -20,6 +20,7 @@
     "migrate:storage": "node scripts/migrate_state_to_sqlite.js",
     "doctor": "node scripts/doctor.mjs",
     "once": "node src/index.js --once",
+    "test": "npm run check && npm run test:js && npm run test:py",
     "test:js": "node --test tests/*.js",
     "test:py": "python3 -m pytest",
     "check": "node --check src/index.js && node --check src/dashboard.js && node --check src/config.js && node --check src/telegram.js && node --check src/mlb.js && node --check src/storage.js && node --check src/lineMovement.js && node --check src/llm.js && node --check src/analystSkill.js && node --check src/telegramFormat.js && node --check src/utils.js && node --check scripts/prepare_start.js && node --check scripts/process_runner.mjs && node --check scripts/start_all.mjs && node --check scripts/run_control_center.mjs && node --check scripts/run_api.mjs && node --check scripts/migrate_state_to_sqlite.js && node --check scripts/doctor.mjs"

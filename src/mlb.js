@@ -787,6 +787,10 @@ function ymdOffset(dateYmd, offsetDays) {
   return date.toISOString().slice(0, 10);
 }
 
+function firstInningHistoryEndDate(dateYmd) {
+  return ymdOffset(dateYmd, -1);
+}
+
 function ymdDiff(laterYmd, earlierYmd) {
   const later = new Date(`${laterYmd}T00:00:00Z`);
   const earlier = new Date(`${earlierYmd}T00:00:00Z`);
@@ -1143,6 +1147,10 @@ async function fetchBoxscore(gamePk) {
   return fetchJson(`${MLB_BASE_URL}/game/${gamePk}/boxscore`);
 }
 
+async function fetchLiveFeed(gamePk) {
+  return fetchJson(`${MLB_BASE_URL}/game/${gamePk}/feed/live`);
+}
+
 function lineupPlayerName(player) {
   return player?.person?.fullName || player?.person?.displayName || player?.person?.boxscoreName || null;
 }
@@ -1463,12 +1471,13 @@ async function fetchFirstInningProfiles(season, dateYmd) {
     season: String(season),
     gameTypes: 'R',
     startDate: seasonStartDate(season),
-    endDate: dateYmd,
+    endDate: firstInningHistoryEndDate(dateYmd),
     hydrate: 'linescore,team'
   });
 
   const data = await fetchJson(`${MLB_BASE_URL}/schedule?${params}`);
   const profiles = new Map();
+  const pitcherProfiles = new Map();
   const games = (data.dates || [])
     .flatMap((date) => date.games || [])
     .filter((game) => game.status?.abstractGameState === 'Final')
@@ -1479,10 +1488,34 @@ async function fetchFirstInningProfiles(season, dateYmd) {
     addFirstInningGame(profiles, game, game.teams.home.team, 'home');
   }
 
+  const MAX_CONCURRENT = 5;
+  const queue = [...games];
+  async function runNext() {
+    while (queue.length) {
+      const game = queue.shift();
+      let boxscore;
+      let liveFeed;
+      try {
+        [boxscore, liveFeed] = await Promise.all([fetchBoxscore(game.gamePk), fetchLiveFeed(game.gamePk)]);
+      } catch {
+        continue;
+      }
+
+      addPitcherFirstInningGame(pitcherProfiles, game, boxscore, liveFeed, 'home');
+      addPitcherFirstInningGame(pitcherProfiles, game, boxscore, liveFeed, 'away');
+    }
+  }
+  const workers = Array.from({ length: Math.min(MAX_CONCURRENT, games.length) }, () => runNext());
+  await Promise.all(workers);
+
   for (const [teamId, profile] of profiles.entries()) {
     profiles.set(teamId, finalizeFirstInningProfile(profile));
   }
+  for (const [pitcherId, profile] of pitcherProfiles.entries()) {
+    pitcherProfiles.set(pitcherId, finalizePitcherFirstInningProfile(profile));
+  }
 
+  profiles.pitchers = pitcherProfiles;
   return profiles;
 }
 
@@ -1592,6 +1625,129 @@ function addFirstInningGame(profiles, game, team, side) {
   });
 }
 
+function boxscorePlayer(boxscore, side, personId) {
+  return boxscore?.teams?.[side]?.players?.[`ID${personId}`] || null;
+}
+
+function actualStarterForSide(boxscore, side) {
+  const boxTeam = boxscore?.teams?.[side];
+  for (const personId of boxTeam?.pitchers || []) {
+    const player = boxTeam?.players?.[`ID${personId}`];
+    if (toNumber(player?.stats?.pitching?.gamesStarted, 0) > 0) {
+      return {
+        id: Number(personId),
+        fullName: lineupPlayerName(player) || player?.person?.fullName || `Pitcher ${personId}`
+      };
+    }
+  }
+  return null;
+}
+
+function baseKey(base) {
+  return `${base?.start || ''}:${base?.end || ''}`;
+}
+
+function scoreKey(runner) {
+  return `${runner?.details?.event || ''}:${runner?.movement?.start || ''}:score`;
+}
+
+function firstInningRunsChargedToPitcher(liveFeed, pitcherSide, starterId) {
+  if (!starterId) return null;
+  const battingSide = pitcherSide === 'home' ? 'away' : 'home';
+  const halfInning = battingSide === 'away' ? 'top' : 'bottom';
+  const plays = (liveFeed?.liveData?.plays?.allPlays || [])
+    .filter((play) => toNumber(play?.about?.inning, 0) === 1)
+    .filter((play) => String(play?.about?.halfInning || '').toLowerCase() === halfInning);
+  if (!plays.length) return null;
+
+  let chargedRuns = 0;
+  const responsiblePitcherByBase = new Map();
+
+  for (const play of plays) {
+    const pitcherId = play?.matchup?.pitcher?.id || null;
+    const batterId = play?.matchup?.batter?.id || null;
+    const nextResponsible = new Map();
+    const runners = Array.isArray(play.runners) ? play.runners : [];
+    const scoredThisPlay = new Set();
+
+    for (const runner of runners) {
+      if (runner?.movement?.isOut) continue;
+      const start = runner?.movement?.start || '';
+      const end = runner?.movement?.end || '';
+      const runnerId = runner?.details?.runner?.id || null;
+      const existingResponsible = start ? responsiblePitcherByBase.get(start) : null;
+      const responsiblePitcher = existingResponsible || (runnerId && runnerId === batterId ? pitcherId : null);
+
+      if (end === 'score') {
+        const key = scoreKey(runner);
+        if (!scoredThisPlay.has(key) && responsiblePitcher === starterId) {
+          chargedRuns += 1;
+          scoredThisPlay.add(key);
+        }
+      } else if (end) {
+        nextResponsible.set(end, responsiblePitcher || pitcherId || null);
+      }
+    }
+
+    if (pitcherId === starterId && batterId) {
+      const batterRunner = runners.find((runner) => runner?.details?.runner?.id === batterId);
+      const end = batterRunner?.movement?.end || '';
+      if (end && end !== 'score' && !batterRunner?.movement?.isOut) {
+        nextResponsible.set(end, starterId);
+      }
+    }
+
+    for (const runner of runners) {
+      const key = baseKey(runner?.movement);
+      if (key && runner?.movement?.start) responsiblePitcherByBase.delete(runner.movement.start);
+    }
+    for (const [base, responsiblePitcher] of nextResponsible.entries()) {
+      responsiblePitcherByBase.set(base, responsiblePitcher);
+    }
+  }
+
+  return chargedRuns;
+}
+
+// Record the real 1st-inning runs charged to an actual starting pitcher. The
+// home starter pitches the TOP of the 1st, the away starter the BOTTOM.
+function addPitcherFirstInningGame(pitcherProfiles, game, boxscore, liveFeed, pitcherSide) {
+  const starter = actualStarterForSide(boxscore, pitcherSide);
+  if (!starter?.id) return;
+  const allowedRuns = firstInningRunsChargedToPitcher(liveFeed, pitcherSide, starter.id);
+  if (allowedRuns === null) return;
+
+  if (!pitcherProfiles.has(starter.id)) {
+    pitcherProfiles.set(starter.id, { pitcherId: starter.id, name: starter.fullName, games: [] });
+  }
+  pitcherProfiles.get(starter.id).games.push({
+    gamePk: game.gamePk,
+    date: game.officialDate || game.gameDate,
+    allowed: allowedRuns > 0,
+    allowedRuns,
+    source: 'play_by_play'
+  });
+}
+
+function finalizePitcherFirstInningProfile(profile) {
+  const games = [...profile.games].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const recentGames = games.slice(-10);
+  const allowed = games.filter((g) => g.allowed).length;
+  const recentAllowed = recentGames.filter((g) => g.allowed).length;
+  // Per-half allowed-run rate against this starter in the 1st, season + recent
+  // blended and smoothed toward the league per-half prior so thin samples don't
+  // dominate.
+  const seasonRate = smoothedRate(allowed, games.length, DEFAULTS.firstInningRunRate);
+  const recentRate = smoothedRate(recentAllowed, recentGames.length, DEFAULTS.firstInningRunRate);
+  return {
+    ...profile,
+    games,
+    starts: games.length,
+    allowed,
+    allowedRateBlend: seasonRate * 0.65 + recentRate * 0.35
+  };
+}
+
 function smoothedRate(count, total, prior, weight = 8) {
   return (count + prior * weight) / (Math.max(0, total) + weight);
 }
@@ -1634,18 +1790,36 @@ function defaultFirstInningProfile(team) {
   return finalizeFirstInningProfile(emptyFirstInningProfile(team));
 }
 
-function pitcherFirstInningRisk(stats) {
-  if (!stats) return 0;
+function pitcherFirstInningRisk(stats, pitcherFirstInningProfile = null) {
+  const eraRisk = stats ? (statEra(stats) - DEFAULTS.era) / 18 : 0;
+  const whipRisk = stats ? (statWhip(stats) - DEFAULTS.whip) / 6 : 0;
+  const kbbRisk = stats ? (2.2 - kToBb(stats)) / 18 : 0;
+  const seasonRisk = clamp(eraRisk + whipRisk + kbbRisk, -0.1, 0.1);
 
-  const eraRisk = (statEra(stats) - DEFAULTS.era) / 18;
-  const whipRisk = (statWhip(stats) - DEFAULTS.whip) / 6;
-  const kbbRisk = (2.2 - kToBb(stats)) / 18;
-  return clamp(eraRisk + whipRisk + kbbRisk, -0.1, 0.1);
+  if (!pitcherFirstInningProfile?.starts) return seasonRisk;
+
+  // Actual 1st-inning allowed history is useful context, but it is noisy and has
+  // small samples. Treat it as a bounded additive adjustment so a neutral/thin
+  // profile does not make a bad season-risk pitcher look safer by existing.
+  const sampleWeight = clamp(pitcherFirstInningProfile.starts / 12, 0, 1);
+  const observedAdjustment =
+    clamp(
+      (pitcherFirstInningProfile.allowedRateBlend - DEFAULTS.firstInningRunRate) * 0.5,
+      -0.08,
+      0.08
+    ) * sampleWeight;
+  return clamp(seasonRisk + observedAdjustment, -0.12, 0.12);
 }
 
 function firstInningProfileLine(profile) {
   const team = profile.team.abbreviation || profile.team.name;
   return `${team} scored 1st ${profile.season.scored}/${profile.season.games}, allowed ${profile.season.allowed}/${profile.season.games}, recent any ${profile.recent.anyRun}/${profile.recent.games}`;
+}
+
+function pitcherFirstInningProfileLine(profile) {
+  if (!profile?.starts) return null;
+  const allowed = profile.allowed ?? profile.games.filter((game) => game.allowed).length;
+  return `${profile.name} allowed 1st ${allowed}/${profile.starts}`;
 }
 
 function buildFirstInningProjection({
@@ -1655,19 +1829,21 @@ function buildFirstInningProjection({
   homeProfile,
   awayPitcherStats,
   homePitcherStats,
+  awayPitcherFirstInningProfile,
+  homePitcherFirstInningProfile,
   headToHead
 }) {
   const topRate = clamp(
     awayProfile.scoredBlend * 0.55 +
       homeProfile.allowedBlend * 0.45 +
-      pitcherFirstInningRisk(homePitcherStats),
+      pitcherFirstInningRisk(homePitcherStats, homePitcherFirstInningProfile),
     0.08,
     0.62
   );
   const bottomRate = clamp(
     homeProfile.scoredBlend * 0.55 +
       awayProfile.allowedBlend * 0.45 +
-      pitcherFirstInningRisk(awayPitcherStats),
+      pitcherFirstInningRisk(awayPitcherStats, awayPitcherFirstInningProfile),
     0.08,
     0.62
   );
@@ -1709,6 +1885,13 @@ function buildFirstInningProjection({
     `Bottom 1: ${home.abbreviation || home.name} offense/allowed profile projects ${percent(bottomRate * 100)} run chance.`
   ];
 
+  const pitcherLines = [
+    pitcherFirstInningProfileLine(homePitcherFirstInningProfile),
+    pitcherFirstInningProfileLine(awayPitcherFirstInningProfile)
+  ].filter(Boolean);
+  if (pitcherLines.length) {
+    reasons.push(`Starter 1st-inning history: ${pitcherLines.join(' | ')}.`);
+  }
   if (h2hGames > 0) {
     reasons.push(`H2H first-inning run: ${headToHead.firstInning.runGames}/${h2hGames}.`);
   }
@@ -1734,6 +1917,8 @@ function buildFirstInningProjection({
     },
     awayProfileLine: firstInningProfileLine(awayProfile),
     homeProfileLine: firstInningProfileLine(homeProfile),
+    awayPitcherFirstInningLine: pitcherFirstInningProfileLine(awayPitcherFirstInningProfile),
+    homePitcherFirstInningLine: pitcherFirstInningProfileLine(homePitcherFirstInningProfile),
     reasons
   };
 }
@@ -2499,6 +2684,12 @@ function predictGame(
     firstInningProfiles.get(awayTeam.id) || defaultFirstInningProfile(awayTeam);
   const homeFirstInningProfile =
     firstInningProfiles.get(homeTeam.id) || defaultFirstInningProfile(homeTeam);
+  const awayPitcherFirstInningProfile = awayStarter && !awayOpenerSituation.isOpener
+    ? firstInningProfiles.pitchers?.get(awayStarter.id) || null
+    : null;
+  const homePitcherFirstInningProfile = homeStarter && !homeOpenerSituation.isOpener
+    ? firstInningProfiles.pitchers?.get(homeStarter.id) || null
+    : null;
 
   const homeWinPct = leagueRecordPct(homeStanding?.leagueRecord || game.teams.home.leagueRecord);
   const awayWinPct = leagueRecordPct(awayStanding?.leagueRecord || game.teams.away.leagueRecord);
@@ -2727,6 +2918,8 @@ function predictGame(
     homeProfile: homeFirstInningProfile,
     awayPitcherStats: effectiveAwayPitcherStats,
     homePitcherStats: effectiveHomePitcherStats,
+    awayPitcherFirstInningProfile,
+    homePitcherFirstInningProfile,
     headToHead
   });
   const awayPitcherRecentLine = awayOpenerSituation.isOpener
@@ -2812,6 +3005,15 @@ function predictGame(
     reasons
   };
 }
+
+export const __mlbTestInternals = {
+  actualStarterForSide,
+  addPitcherFirstInningGame,
+  buildFirstInningProjection,
+  firstInningHistoryEndDate,
+  firstInningRunsChargedToPitcher,
+  pitcherFirstInningRisk
+};
 
 export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta'), modelMemory = {}) {
   const season = seasonFromDate(dateYmd);

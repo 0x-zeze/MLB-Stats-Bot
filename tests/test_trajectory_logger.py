@@ -3,7 +3,7 @@ import unittest
 
 from evolution_helpers import isolated_evolution_store
 from src.evolution.memory_store import read_jsonl
-from src.evolution.trajectory_logger import log_prediction_trajectory
+from src.evolution.trajectory_logger import log_prediction_trajectory, trajectory_dedupe_key
 
 
 class TrajectoryLoggerTests(unittest.TestCase):
@@ -30,6 +30,42 @@ class TrajectoryLoggerTests(unittest.TestCase):
         self.assertNotIn("actual_away_score", serialized)
         self.assertNotIn('"result"', serialized)
         self.assertEqual(record["prediction"]["final_lean"], "Under 8.5")
+        self.assertEqual(record["trajectory_key"], trajectory_dedupe_key(record))
+
+    def test_duplicate_trajectory_is_not_appended_twice(self):
+        with isolated_evolution_store():
+            context = {
+                "id": "game-1",
+                "date": "2026-04-30",
+                "away_team": "Tampa Bay Rays",
+                "home_team": "Cleveland Guardians",
+                "totals": {"lean": "Under 8.5", "projected_total": 7.9, "market_total": 8.5},
+            }
+            first = log_prediction_trajectory(context)
+            second = log_prediction_trajectory(context)
+            stored = read_jsonl("trajectories")
+
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(first["trajectory_key"], second["trajectory_key"])
+        self.assertEqual(stored[0]["trajectory_key"], first["trajectory_key"])
+
+    def test_materially_different_prediction_gets_new_trajectory(self):
+        with isolated_evolution_store():
+            context = {
+                "id": "game-1",
+                "date": "2026-04-30",
+                "away_team": "Tampa Bay Rays",
+                "home_team": "Cleveland Guardians",
+                "totals": {"lean": "Under 8.5", "projected_total": 7.9, "market_total": 8.5},
+            }
+            log_prediction_trajectory(context)
+            changed = dict(context)
+            changed["totals"] = {"lean": "Over 8.5", "projected_total": 9.2, "market_total": 8.5}
+            log_prediction_trajectory(changed)
+            stored = read_jsonl("trajectories")
+
+        self.assertEqual(len(stored), 2)
+        self.assertNotEqual(stored[0]["trajectory_key"], stored[1]["trajectory_key"])
 
 
 if __name__ == "__main__":

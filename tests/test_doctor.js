@@ -44,8 +44,28 @@ test('doctor distinguishes optional odds and weather keys from required checks',
   });
 
   const optional = checks.filter((check) => ['odds_api_key', 'weather_api_key'].includes(check.id));
+  const dashboardToken = checks.find((check) => check.id === 'dashboard_api_token');
   assert.ok(optional.every((check) => check.status === 'warn'));
+  assert.equal(dashboardToken.status, 'warn');
+  assert.match(dashboardToken.fix, /DASHBOARD_API_TOKEN/);
   assert.ok(checks.some((check) => check.id === 'node_version' && check.status === 'pass'));
+});
+
+test('doctor passes dashboard token when configured', () => {
+  const checks = collectDoctorChecks({
+    env: {
+      NODE_ENV: 'production',
+      TELEGRAM_BOT_TOKEN: 'token',
+      DASHBOARD_API_TOKEN: 'dashboard-token',
+      DASHBOARD_CORS_ORIGINS: 'https://example.com',
+    },
+    rootDir: process.cwd(),
+    nodeVersion: 'v20.11.0',
+    runCommand: () => ({ ok: true, stdout: 'Python 3.11.0' }),
+  });
+
+  const dashboardToken = checks.find((check) => check.id === 'dashboard_api_token');
+  assert.equal(dashboardToken.status, 'pass');
 });
 
 test('doctor report prints pass warn and fail guidance', () => {
