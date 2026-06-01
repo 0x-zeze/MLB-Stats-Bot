@@ -8,12 +8,16 @@ from typing import Any
 from .utils import clamp, safe_float
 
 
-LEAGUE_AVG_FIRST_INNING_SCORING_RATE = 0.27
+# Per-half-inning scoring prior. Empirically a run scores in the 1st in ~55% of
+# games, which implies a per-half rate near 0.33 (1-(1-r)^2 = 0.55). The old
+# 0.27 / 0.46 venue rate centered YRFI near 47% — below the true base rate —
+# biasing the model toward NRFI on games that actually scored.
+LEAGUE_AVG_FIRST_INNING_SCORING_RATE = 0.33
 LEAGUE_AVG_FIRST_INNING_ERA = 4.50
 LEAGUE_AVG_FIRST_INNING_WHIP = 1.40
 LEAGUE_AVG_LEADOFF_OBP = 0.330
 LEAGUE_AVG_FIRST_PITCH_STRIKE_RATE = 0.60
-LEAGUE_AVG_VENUE_YRFI_RATE = 0.46
+LEAGUE_AVG_VENUE_YRFI_RATE = 0.55
 LEAGUE_AVG_K_RATE = 0.22
 LEAGUE_AVG_GROUND_BALL_RATE = 0.44
 

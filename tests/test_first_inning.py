@@ -16,6 +16,14 @@ class TestPredictFirstInning(unittest.TestCase):
         self.assertGreater(result.yrfi_probability, 0.0)
         self.assertGreater(result.nrfi_probability, 0.0)
 
+    def test_default_context_centers_on_empirical_base_rate(self) -> None:
+        # A run scores in the 1st in ~55% of games. A league-average context must
+        # center near that, not below 50% — the old 0.27 prior biased it to ~47%
+        # and made the model pick NRFI on games that actually scored.
+        result = predict_first_inning(FirstInningContext())
+        self.assertGreaterEqual(result.yrfi_probability, 0.52)
+        self.assertLessEqual(result.yrfi_probability, 0.60)
+
     def test_high_scoring_teams_favor_yrfi(self) -> None:
         ctx = FirstInningContext(
             away_first_inning_scoring_rate=0.38,

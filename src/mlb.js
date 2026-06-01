@@ -74,8 +74,12 @@ const DEFAULTS = {
   bbRate: 0.085,
   kMinusBb: 0.12,
   hr9: 1.1,
-  firstInningRunRate: 0.26,
-  gameFirstInningRunRate: 0.46
+  // Per-half-inning scoring prior. Empirically a run scores in the 1st in
+  // ~55% of games (anyRun), which implies a per-half rate near 0.33 via
+  // 1-(1-r)^2 = 0.55. The old 0.26 centered the model at ~45% and made it pick
+  // NO ~73% of the time on games that actually scored. See gameFirstInningRunRate.
+  firstInningRunRate: 0.33,
+  gameFirstInningRunRate: 0.55
 };
 
 // --- Situational Weight Adjustment ---
@@ -1658,28 +1662,45 @@ function buildFirstInningProjection({
       homeProfile.allowedBlend * 0.45 +
       pitcherFirstInningRisk(homePitcherStats),
     0.08,
-    0.58
+    0.62
   );
   const bottomRate = clamp(
     homeProfile.scoredBlend * 0.55 +
       awayProfile.allowedBlend * 0.45 +
       pitcherFirstInningRisk(awayPitcherStats),
     0.08,
-    0.58
+    0.62
   );
-  const modelProbability = 1 - (1 - topRate) * (1 - bottomRate);
+  // Two independent estimates of "a run scores in the 1st":
+  //  (a) OR-combination of each half-inning's scoring rate, and
+  //  (b) the teams' directly-observed any-run rate (anyRunBlend), which the old
+  //      model computed but never used. Average them for a less biased center.
+  const orProbability = 1 - (1 - topRate) * (1 - bottomRate);
+  const directAnyRun =
+    ((awayProfile.anyRunBlend ?? DEFAULTS.gameFirstInningRunRate) +
+      (homeProfile.anyRunBlend ?? DEFAULTS.gameFirstInningRunRate)) /
+    2;
+  const modelProbability = orProbability * 0.5 + directAnyRun * 0.5;
   const h2hGames = headToHead?.firstInning?.games || 0;
   const h2hProbability = (headToHead?.firstInning?.probability || DEFAULTS.gameFirstInningRunRate * 100) / 100;
   const blendedProbability =
     h2hGames >= 3 ? modelProbability * 0.85 + h2hProbability * 0.15 : modelProbability;
-  const probability = clamp(blendedProbability * 100, 25, 75);
-  const lean = probability >= 52 ? 'YES' : 'NO';
-  // YRFI is the only market that loses money historically (-3.8% ROI, 48% win),
-  // and no confidence band is profitable — the high-confidence band is actually
-  // the worst. So it is advisory-only by default: we still surface the lean and
-  // probability as context, but the actionable `pick` is NO BET so it is not
-  // graded as a bet. Re-enable as an active market with YRFI_ACTIVE=1 once the
-  // model proves profitable (e.g. after a calibration/feature rework).
+  // Per-game YRFI signal has historically shown ~zero correlation with outcomes
+  // (the matchup features barely move the needle), so shrink hard toward the
+  // league base rate. This keeps the probability honest instead of emitting
+  // overconfident leans the data does not support.
+  const baseRate = DEFAULTS.gameFirstInningRunRate;
+  const shrunkProbability = blendedProbability * 0.4 + baseRate * 0.6;
+  const probability = clamp(shrunkProbability * 100, 35, 70);
+  // Break-even for a YRFI bet at typical -110/-120 juice is ~52-55%. Only lean
+  // YES when the projection clears the base rate by a real margin, and NO only
+  // when it falls well below it; otherwise there is no actionable edge.
+  const lean = probability >= 58 ? 'YES' : probability <= 48 ? 'NO' : 'YES';
+  // YRFI carried no per-game edge historically (corr ~ -0.02 with outcomes) and
+  // the market already prices the >50% base rate, so it stays advisory-only by
+  // default: the lean/probability are surfaced as context but `pick` is NO BET
+  // so it is not graded as a bet. Re-enable with YRFI_ACTIVE=1 only if a future
+  // feature set demonstrates a real, calibrated edge.
   const yrfiActive = String(process.env.YRFI_ACTIVE || '').trim() === '1';
   const pick = yrfiActive ? lean : 'NO BET';
 
@@ -1695,13 +1716,15 @@ function buildFirstInningProjection({
     reasons.push('YRFI advisory-only: market historically unprofitable, not graded as a bet.');
   }
 
+  // Confidence reflects how far the projection sits from the ~55% league base
+  // rate (the shrunk scale rarely leaves the 45-65% band), not raw probability.
+  const baseDistance = Math.abs(probability - DEFAULTS.gameFirstInningRunRate * 100);
   return {
     baselinePick: pick,
     baselineProbability: probability,
     baselineLean: lean,
     advisoryOnly: !yrfiActive,
-    confidence:
-      probability >= 60 || probability <= 40 ? 'high' : probability >= 55 || probability <= 45 ? 'medium' : 'low',
+    confidence: baseDistance >= 8 ? 'high' : baseDistance >= 4 ? 'medium' : 'low',
     topRate: topRate * 100,
     bottomRate: bottomRate * 100,
     h2h: {
