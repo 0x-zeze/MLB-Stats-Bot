@@ -129,6 +129,35 @@ function firstMarket(bookmakers, key) {
   return null;
 }
 
+// American odds → decimal payout. Higher decimal = better price for the bettor
+// (+160 beats +150; -110 beats -120). Used to line-shop the best moneyline.
+function americanToDecimal(value) {
+  const odds = Number(value);
+  if (!Number.isFinite(odds) || odds === 0) return null;
+  return odds > 0 ? odds / 100 + 1 : 100 / Math.abs(odds) + 1;
+}
+
+// Line shopping: scan EVERY bookmaker's market for the outcome matching teamName
+// and return the single best price across all books, plus which book offered it.
+// Betting each side at its best available price is free CLV — the model and edge
+// are unchanged, only the price improves.
+function bestMoneylineForTeam(bookmakers, teamName) {
+  let best = null;
+  for (const bookmaker of bookmakers || []) {
+    const market = (bookmaker.markets || []).find((item) => item.key === 'h2h');
+    if (!market?.outcomes?.length) continue;
+    const outcome = findOutcome(market.outcomes, teamName);
+    const price = toFiniteNumber(outcome?.price);
+    if (price === null) continue;
+    const decimal = americanToDecimal(price);
+    if (decimal === null) continue;
+    if (!best || decimal > best.decimal) {
+      best = { price, decimal, book: bookmaker.title || bookmaker.key || 'bookmaker' };
+    }
+  }
+  return best;
+}
+
 function toFiniteNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -161,14 +190,18 @@ function originalModelEdge(game) {
 function buildSnapshot(game, event) {
   const h2h = firstMarket(event.bookmakers, 'h2h');
   const totals = firstMarket(event.bookmakers, 'totals');
-  const homeOutcome = h2h ? findOutcome(h2h.market.outcomes, game.home?.name) : null;
-  const awayOutcome = h2h ? findOutcome(h2h.market.outcomes, game.away?.name) : null;
   const overOutcome = totals?.market.outcomes.find((outcome) =>
     String(outcome.name || '').toLowerCase().includes('over')
   );
   const underOutcome = totals?.market.outcomes.find((outcome) =>
     String(outcome.name || '').toLowerCase().includes('under')
   );
+
+  // Line shopping: take the best moneyline price for each side across ALL books,
+  // not just the first book that lists the market.
+  const bestHome = bestMoneylineForTeam(event.bookmakers, game.home?.name);
+  const bestAway = bestMoneylineForTeam(event.bookmakers, game.away?.name);
+  const moneylineBook = bestHome?.book || bestAway?.book || h2h?.bookmaker?.title || h2h?.bookmaker?.key || 'bookmaker';
 
   return {
     gamePk: String(game.gamePk || game.game_id || game.id || ''),
@@ -177,10 +210,12 @@ function buildSnapshot(game, event) {
     awayTeam: game.away?.name || event.away_team,
     homeAbbreviation: game.home?.abbreviation || game.home?.name || event.home_team,
     awayAbbreviation: game.away?.abbreviation || game.away?.name || event.away_team,
-    homeMoneyline: toFiniteNumber(homeOutcome?.price),
-    awayMoneyline: toFiniteNumber(awayOutcome?.price),
+    homeMoneyline: bestHome ? bestHome.price : null,
+    awayMoneyline: bestAway ? bestAway.price : null,
+    homeMoneylineBook: bestHome?.book || null,
+    awayMoneylineBook: bestAway?.book || null,
     totalLine: toFiniteNumber(overOutcome?.point ?? underOutcome?.point),
-    moneylineBook: h2h?.bookmaker?.title || h2h?.bookmaker?.key || 'bookmaker',
+    moneylineBook,
     totalBook: totals?.bookmaker?.title || totals?.bookmaker?.key || 'bookmaker',
     originalModelEdge: originalModelEdge(game)
   };
@@ -260,6 +295,8 @@ export async function attachCurrentOdds(games = []) {
     const snapshot = buildSnapshot(game, event);
     game.currentOdds = {
       moneylineBook: snapshot.moneylineBook,
+      awayMoneylineBook: snapshot.awayMoneylineBook,
+      homeMoneylineBook: snapshot.homeMoneylineBook,
       totalBook: snapshot.totalBook,
       awayMoneyline: snapshot.awayMoneyline,
       homeMoneyline: snapshot.homeMoneyline,

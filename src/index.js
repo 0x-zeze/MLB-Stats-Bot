@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { ANALYST_SKILL_VERSION, buildAnalystSkillSummary } from './analystSkill.js';
 import { calibratePercent, hasCalibrationMap } from './calibration.js';
@@ -543,11 +544,27 @@ function runPythonModule(moduleName, args = [], options = {}) {
 }
 
 function parseJsonOutput(output) {
+  const text = String(output || '').trim();
+  if (!text) return {};
   try {
-    return JSON.parse(output || '{}');
+    return JSON.parse(text);
   } catch {
-    return { raw: output };
+    return { raw: text };
   }
+}
+
+function numberValue(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return 0;
+}
+
+function phaseDiagnostic(label, phase) {
+  if (!phase || typeof phase !== 'object') return null;
+  if (phase.error) return uiKV('🚨', label, String(phase.error));
+  if (phase.raw) return uiKV('⚠️', label, `output Python tidak bisa diparse JSON (${String(phase.raw).slice(0, 120)})`);
+  return null;
 }
 
 function formatEvolveResult(payload) {
@@ -560,45 +577,75 @@ function formatEvolveResult(payload) {
   const audit = payload.audit || {};
   const auditSummary = audit.summary || {};
   const applied = audit.applied_updates || {};
+  const diagnostics = [
+    phaseDiagnostic('Cycle', cycle),
+    phaseDiagnostic('Audit', audit)
+  ].filter(Boolean);
   const calibratedMarkets = Array.isArray(calibration.calibrated_markets)
     ? calibration.calibrated_markets
     : [];
 
+  const newSymbolic = numberValue(cycle.symbolic_candidates);
+  const totalSymbolic = numberValue(cycle.total_symbolic_candidates);
+  const newRules = numberValue(cycle.rule_candidates);
+  const totalRules = numberValue(cycle.total_rule_candidates);
+  const ingestedNew = numberValue(ingest.evaluated);
+  const skippedDup = numberValue(ingest.skipped_duplicates);
+  const totalEvaluated = numberValue(summary.total_predictions_evaluated, auditSummary.evaluated);
+  const totalLessons = numberValue(summary.lessons_generated, auditSummary.lessons);
+  const totalLosses = numberValue(summary.language_losses_generated, auditSummary.language_losses);
+  const totalGradients = numberValue(summary.language_gradients_generated, auditSummary.language_gradients);
+  const totalCandidates = numberValue(summary.candidates_proposed, auditSummary.candidates);
+  const dataDir = cycle.evolution_data_dir || audit.evolution_data_dir;
+  const noNewButHasHistory = Number(ingestedNew) === 0 && Number(totalEvaluated) > 0;
+  const noSafeUpdate = (applied.rules_added || []).length === 0 &&
+    (applied.rules_released || []).length === 0 &&
+    (applied.weight_versions_added || []).length === 0;
+
   return [
     uiTitle('🧠', 'MLB Agent Evolution | selesai'),
     '',
+    diagnostics.length ? uiSection('⚠️', 'Diagnostics') : null,
+    ...diagnostics,
+    diagnostics.length ? '' : null,
     uiSection('🏁', 'Post-game'),
-    uiKV('📅', 'Tanggal dicek', postgame.dates_checked || 0),
-    uiKV('🧠', 'Game baru dipelajari', postgame.learned_games || 0),
+    uiKV('📅', 'Tanggal dicek', postgame.dates_checked ?? 0),
+    uiKV('🧠', 'Game baru dipelajari', postgame.learned_games ?? 0),
     '',
     uiSection('🩹', 'Backfill data flat'),
-    uiKV('🔧', 'Baris diperbaiki', backfill.updated || 0),
-    uiKV('📈', 'Totals/YRFI', `${backfill.totals_fixed || 0}/${backfill.yrfi_fixed || 0}`),
+    uiKV('🔧', 'Baris diperbaiki', backfill.updated ?? 0),
+    uiKV('📈', 'Totals/YRFI', `${backfill.totals_fixed ?? 0}/${backfill.yrfi_fixed ?? 0}`),
     '',
     uiSection('📥', 'Ingest'),
-    uiKV('📊', 'Evaluasi baru', ingest.evaluated || 0),
-    uiKV('♻️', 'Duplikat dilewati', ingest.skipped_duplicates || 0),
+    uiKV('📊', 'Evaluasi baru/run ini', ingestedNew),
+    uiKV('♻️', 'Duplikat dilewati', skippedDup),
+    noNewButHasHistory ? uiBullet('📚', `Tidak ada evaluasi baru; ${totalEvaluated} evaluasi historis tetap terbaca.`) : null,
     '',
     uiSection('🎚️', 'Kalibrasi'),
     uiKV('✅', 'Market terkalibrasi', calibratedMarkets.length ? calibratedMarkets.join(', ') : 'belum cukup sample'),
     '',
     uiSection('🔄', 'Cycle'),
-    uiKV('🧪', 'Symbolic candidates', cycle.symbolic_candidates || 0),
-    uiKV('📏', 'Rule candidates', cycle.rule_candidates || 0),
+    uiKV('🧪', 'Symbolic baru/tersimpan', `${newSymbolic}/${totalSymbolic}`),
+    uiKV('📏', 'Rule queue baru/tersimpan', `${newRules}/${totalRules}`),
     '',
     uiSection('🔎', 'Audit'),
-    uiKV('📊', 'Evaluated', auditSummary.evaluated || 0),
-    uiKV('📈', 'Accuracy', `${auditSummary.accuracy || 0}%`),
-    uiKV('🔧', 'Rules applied', (applied.rules_added || []).length),
+    uiKV('📊', 'Evaluated', auditSummary.evaluated ?? 0),
+    uiKV('📈', 'Accuracy', `${auditSummary.accuracy ?? 0}%`),
+    uiKV('🔧', 'Rules added', (applied.rules_added || []).length),
+    uiKV('🔓', 'Rules released', (applied.rules_released || []).length),
+    uiKV('🎛️', 'Active controls', applied.active_control_count ?? '—'),
     uiKV('⚖️', 'Weight updates', (applied.weight_versions_added || []).length),
+    noSafeUpdate && applied.note ? uiBullet('ℹ️', applied.note) : null,
     '',
     uiSection('📌', 'Total tersimpan'),
-    uiKV('📊', 'Evaluated', summary.total_predictions_evaluated || 0),
-    uiKV('📚', 'Lessons', summary.lessons_generated || 0),
-    uiKV('🧪', 'Candidates', summary.candidates_proposed || 0),
+    uiKV('📊', 'Evaluated', totalEvaluated),
+    uiKV('📚', 'Lessons', totalLessons),
+    uiKV('🧾', 'Losses/gradients', `${totalLosses}/${totalGradients}`),
+    uiKV('🧪', 'Candidates unik', totalCandidates),
+    dataDir ? uiKV('📁', 'Evolution data', dataDir) : null,
     '',
     uiBullet('🛡️', 'Guardrail aman diterapkan otomatis. Rules/prompt/weights production tetap lewat promotion gate.')
-  ].join('\n');
+  ].filter((line) => line !== null && line !== undefined).join('\n');
 }
 
 async function processStoredPostGamesForEvolution() {
@@ -1197,6 +1244,12 @@ function setCachedPredictions(chatId, dateYmd, predictions) {
   predictionCache.set(key, { predictions, timestamp: Date.now() });
 }
 
+function predictionsHaveRawProbabilities(predictions) {
+  return Array.isArray(predictions) && predictions.every((prediction) =>
+    prediction?.away?.winProbabilityRaw != null && prediction?.home?.winProbabilityRaw != null
+  );
+}
+
 async function handleLineupAlertsCommand(bot, chat, args) {
   const chatId = chat.id;
   const action = String(args[0] || 'status').toLowerCase();
@@ -1231,6 +1284,41 @@ async function handleLineupAlertsCommand(bot, chat, args) {
     '',
     uiBullet('💡', 'Bot akan kirim alert saat lineup resmi terdeteksi dari MLB StatsAPI (biasanya 1-3 jam sebelum game).')
   ].join('\n'));
+}
+
+async function handlePicksCommand(bot, chatId, question, dateYmd = dateInTimezone(config.timezone)) {
+  await bot.sendMessage(chatId, uiKV('🏆', 'Generating Top 5 picks...', dateYmd));
+  storage.appendChatMessage(chatId, 'user', question);
+
+  let predictions = getCachedPredictions(chatId, dateYmd);
+  if (!predictionsHaveRawProbabilities(predictions)) {
+    // Generate only when the cache is missing or predates winProbabilityRaw.
+    // Work with the in-memory version so raw conviction is preserved for /picks.
+    predictions = await getMlbPredictions(dateYmd, config.modelMemory ? storage.getMemory() : {});
+    predictions = predictions || [];
+    await attachMarketContext(predictions);
+    storage.savePredictions(dateYmd, predictions);
+    setCachedPredictions(chatId, dateYmd, predictions);
+  }
+
+  const answer = await answerInteractiveQuestion(config, {
+    question,
+    dateYmd,
+    predictions,
+    memorySummary: storage.getMemorySummary(),
+    knowledgeContext: '',
+    conversationHistory: storage.getChatHistory(chatId, 10)
+  }).catch((error) => {
+    console.error('Picks command error:', error.message);
+    return null;
+  });
+
+  const response = answer ||
+    uiBullet('⚠️', 'Agent belum bisa menjawab sekarang. Coba lagi atau pastikan OPENAI_API_KEY aktif.');
+
+  storage.appendChatMessage(chatId, 'assistant', response);
+  await bot.sendMessage(chatId, response);
+  console.log(`Picks command handled for ${chatId}.`);
 }
 
 async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.timezone)) {
@@ -1543,7 +1631,7 @@ async function handleMessage(bot, message) {
     const { dateYmd, question } = buildPicksQuestion(args);
     if (!acquireCommandLock(chatId, 'picks')) return;
     try {
-      await askAgent(bot, chatId, question, dateYmd);
+      await handlePicksCommand(bot, chatId, question, dateYmd);
     } finally {
       releaseCommandLock(chatId, 'picks');
     }
@@ -1998,7 +2086,7 @@ async function captureClosingLinesForUpcoming() {
   const now = Date.now();
   const soonGames = predictions.filter((p) => {
     if (storage.hasClosingLine(p.gamePk)) return false;
-    const start = p.start || p.gameTime;
+    const start = p.startTime || p.start || p.gameTime;
     if (!start) return false;
     const startMs = new Date(start).getTime();
     // Capture anytime within 30 min before first pitch (was 5 min, which
@@ -2090,7 +2178,11 @@ async function main() {
   await poll(bot);
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+export { formatEvolveResult, parseJsonOutput };
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

@@ -10,7 +10,7 @@ from statistics import mean
 from typing import Any
 
 from ..utils import safe_float
-from .memory_store import append_jsonl, read_json, read_jsonl, read_prediction_outcomes, record_evolution_event, utc_now, write_json
+from .memory_store import append_jsonl, evolution_data_dir, read_json, read_jsonl, read_prediction_outcomes, record_evolution_event, utc_now, write_json
 from .time_decay import AUDIT_HALF_LIFE_DAYS, decay_row_weight
 
 
@@ -49,8 +49,12 @@ NON_ACTIONABLE_LOSS_TYPES = {
 }
 
 SAFE_APPLY_MIN_SAMPLE = 5
+SAFE_APPLY_MIN_SAMPLE_INCREMENT = 50
+SAFE_APPLY_MAX_ACTIVE_CONTROLS = 6
 SAFE_APPLY_MAX_WEIGHT_DELTA = 0.05
 SAFE_APPLY_MIN_LOSS_RATE = 55.0
+CALIBRATION_RELEASE_ERROR_THRESHOLD = 5.0
+CALIBRATION_RELEASE_MIN_SAMPLE = 10
 
 MEMORY_CAUTION_BY_PATTERN = {
     "weak_edge": "Prefer NO BET or LEAN ONLY when edge is marginal and no Tier 1 signal confirms the side.",
@@ -591,8 +595,19 @@ def _rule_candidate_from_entry(entry: dict[str, Any]) -> dict[str, Any]:
 
 def _active_rule_keys(payload: dict[str, Any]) -> set[str]:
     keys: set[str] = set()
-    for entry in [*payload.get("active_controls", []), *payload.get("approved", [])]:
+    for entry in payload.get("active_controls", []):
         if not isinstance(entry, dict):
+            continue
+        candidate = _rule_candidate_from_entry(entry)
+        key = candidate.get("rule_key") or candidate.get("candidate_id")
+        if key:
+            keys.add(str(key))
+
+    for entry in payload.get("approved", []):
+        if not isinstance(entry, dict):
+            continue
+        decision_status = str((entry.get("decision") or {}).get("status") or "").lower()
+        if decision_status in {"released", "removed"}:
             continue
         candidate = _rule_candidate_from_entry(entry)
         key = candidate.get("rule_key") or candidate.get("candidate_id")
@@ -619,9 +634,9 @@ def _safe_rule_candidates_from_audit(audit: dict[str, Any]) -> list[dict[str, An
                 "target": "moneyline",
                 "rule": "Return NO BET when moneyline value/model edge is weak and no stronger Tier 1 signal confirms the side.",
                 "parameters": {
-                    "max_value_edge": 2.0,
-                    "max_probability_edge": 5.0,
-                    "max_matchup_edge": 0.08,
+                    "max_value_edge": 1.0,
+                    "max_probability_edge": 3.0,
+                    "max_matchup_edge": 0.05,
                 },
                 "reason": f"Audit found edge:weak <2 at {weak_edge.get('wins')}-{weak_edge.get('losses')} with {weak_edge.get('loss_rate')}% loss rate.",
                 "evidence": weak_edge,
@@ -690,26 +705,174 @@ def _safe_rule_candidates_from_audit(audit: dict[str, Any]) -> list[dict[str, An
     return candidates
 
 
+def _last_guardrail_sample_sizes(payload: dict[str, Any]) -> dict[str, int]:
+    """Return the total sample size at the time each active guardrail was last applied."""
+    sizes: dict[str, int] = {}
+    approved = payload.get("approved", [])
+    for entry in reversed(approved):
+        if not isinstance(entry, dict):
+            continue
+        candidate = _rule_candidate_from_entry(entry)
+        key = str(candidate.get("rule_key") or candidate.get("candidate_id") or "")
+        if not key:
+            continue
+        if key not in sizes:
+            decision = entry.get("decision") or {}
+            sizes[key] = int(decision.get("sample_size", 0))
+    return sizes
+
+
+def _release_calibrated_confidence_caps(
+    payload: dict[str, Any],
+    audit: dict[str, Any],
+    active_controls: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Remove confidence-cap guardrails for buckets that are now calibrated.
+
+    When a probability bucket shows |calibration_error| < threshold with enough
+    sample, the guardrail is no longer needed and should be released so it stops
+    suppressing edges in that bucket.
+    """
+    calibration_buckets = audit.get("calibration_buckets", [])
+    released: list[str] = []
+    kept: list[dict[str, Any]] = []
+
+    for control in active_controls:
+        rule_key = str(control.get("rule_key") or control.get("candidate_id") or "")
+        if control.get("type") != "confidence_cap" or not rule_key.startswith("audit:confidence_cap:probability-"):
+            kept.append(control)
+            continue
+
+        bucket_label = str(
+            control.get("parameters", {}).get("probability_bucket")
+            or control.get("target")
+            or ""
+        )
+        if not bucket_label:
+            # Fallback for older controls that predate parameters.probability_bucket.
+            bucket_label = rule_key.replace("audit:confidence_cap:", "").replace("plus", "+").replace("-", ":", 1)
+            if not bucket_label.startswith("probability:"):
+                bucket_label = bucket_label.replace("probability", "probability:", 1) if "probability" in bucket_label else bucket_label
+
+        bucket = next((b for b in calibration_buckets if str(b.get("bucket") or "") == bucket_label), None)
+        if not bucket:
+            kept.append(control)
+            continue
+
+        sample_size = int(bucket.get("sample_size", 0))
+        error = abs(safe_float(bucket.get("calibration_error"), 999.0))
+        verdict = str(bucket.get("verdict") or "")
+
+        if (sample_size >= CALIBRATION_RELEASE_MIN_SAMPLE
+                and error < CALIBRATION_RELEASE_ERROR_THRESHOLD
+                and verdict == "calibrated"):
+            record_evolution_event(
+                "audit_guardrail_released",
+                {
+                    "rule_key": rule_key,
+                    "reason": f"Bucket {bucket_label} now calibrated: error={error}%, n={sample_size}.",
+                    "bucket": bucket,
+                },
+            )
+            released.append(rule_key)
+        else:
+            kept.append(control)
+
+    if released:
+        # Archive released rules in approved list
+        for entry in payload.get("approved", []):
+            if not isinstance(entry, dict):
+                continue
+            candidate = _rule_candidate_from_entry(entry)
+            key = str(candidate.get("rule_key") or candidate.get("candidate_id") or "")
+            if key in released:
+                decision = entry.get("decision") or {}
+                decision["status"] = "released"
+                decision["released_at"] = utc_now()
+                decision["release_reason"] = "Calibration bucket now within threshold."
+                entry["decision"] = decision
+
+    return kept, released
+
+
+def _rate_limit_guardrail_apply(
+    new_rules: list[dict[str, Any]],
+    payload: dict[str, Any],
+    audit: dict[str, Any],
+    active_control_count: int | None = None,
+) -> list[dict[str, Any]]:
+    """Only apply guardrails when sample size has meaningfully grown or a new
+    high-severity pattern emerges."""
+    current_sample = int(audit.get("summary", {}).get("evaluated") or 0)
+    last_sizes = _last_guardrail_sample_sizes(payload)
+
+    eligible: list[dict[str, Any]] = []
+    skipped_increment: list[str] = []
+    for candidate in new_rules:
+        rule_key = str(candidate.get("rule_key") or "")
+        last_sample = last_sizes.get(rule_key, 0)
+        evidence = candidate.get("evidence") or {}
+        evidence_sample = int(evidence.get("decided") or evidence.get("sample_size") or evidence.get("count") or 0)
+        # New pattern with strong evidence: allow even without increment gate
+        if last_sample == 0 and evidence_sample >= SAFE_APPLY_MIN_SAMPLE * 2:
+            eligible.append(candidate)
+            continue
+        # Existing pattern: require meaningful sample increment
+        if current_sample - last_sample >= SAFE_APPLY_MIN_SAMPLE_INCREMENT or last_sample == 0:
+            eligible.append(candidate)
+        else:
+            skipped_increment.append(rule_key)
+
+    if skipped_increment:
+        record_evolution_event(
+            "audit_guardrail_rate_limited",
+            {"skipped": skipped_increment, "current_sample": current_sample, "threshold": SAFE_APPLY_MIN_SAMPLE_INCREMENT},
+        )
+
+    # Also enforce max active controls against the post-release active count.
+    active_count = active_control_count
+    if active_count is None:
+        active_count = sum(
+            1 for entry in payload.get("active_controls", [])
+            if isinstance(entry, dict)
+        )
+    available_slots = max(0, SAFE_APPLY_MAX_ACTIVE_CONTROLS - active_count)
+    if len(eligible) > available_slots:
+        # Keep highest-priority (lowest index = highest priority from _safe_rule_candidates_from_audit)
+        eligible = eligible[:available_slots]
+
+    return eligible
+
+
 def _apply_safe_rule_candidates(audit: dict[str, Any]) -> list[dict[str, Any]]:
     payload = read_json("approved_rules")
-    existing = _active_rule_keys(payload)
-    new_rules = [candidate for candidate in _safe_rule_candidates_from_audit(audit) if candidate.get("rule_key") not in existing]
-    if not new_rules:
+
+    # ── Step 1: Release calibrated guardrails ──
+    active_controls = [_rule_candidate_from_entry(entry) for entry in payload.get("active_controls", []) if isinstance(entry, dict)]
+    active_controls, released = _release_calibrated_confidence_caps(payload, audit, active_controls)
+    payload["active_controls"] = active_controls
+    existing_keys = _active_rule_keys(payload)
+
+    # ── Step 2: Generate + rate-limit new guardrails ──
+    all_candidates = _safe_rule_candidates_from_audit(audit)
+    new_rule_candidates = [c for c in all_candidates if c.get("rule_key") not in existing_keys]
+    eligible = _rate_limit_guardrail_apply(new_rule_candidates, payload, audit, active_control_count=len(active_controls))
+
+    if not eligible and not released:
         return []
 
     next_version = _next_minor_version(str(payload.get("active_rule_version") or "rules-v1.0"), "rules-")
     payload["active_rule_version"] = next_version
     payload.setdefault("rollback_supported", True)
     payload.setdefault("approved", [])
-    active_controls = [_rule_candidate_from_entry(entry) for entry in payload.get("active_controls", []) if isinstance(entry, dict)]
 
-    for rule in new_rules:
+    for rule in eligible:
         rule["rule_version"] = next_version
         decision = {
             "candidate_id": rule.get("candidate_id"),
             "status": "approved",
             "reason": "Conservative audit guardrail only reduces risk; it does not increase confidence.",
-            "sample_size": rule.get("evidence", {}).get("decided") or rule.get("evidence", {}).get("sample_size") or rule.get("evidence", {}).get("count") or 0,
+            "sample_size": int(audit.get("summary", {}).get("evaluated") or 0),
             "rule_version": next_version,
         }
         payload["approved"].append(
@@ -729,7 +892,7 @@ def _apply_safe_rule_candidates(audit: dict[str, Any]) -> list[dict[str, Any]]:
         deduped[key] = rule
     payload["active_controls"] = list(deduped.values())
     write_json("approved_rules", payload)
-    return new_rules
+    return eligible
 
 
 def _normalize_weights(weights: dict[str, Any]) -> dict[str, float]:
@@ -841,6 +1004,28 @@ def apply_safe_audit_updates(audit: dict[str, Any]) -> dict[str, Any]:
 
     applied_rules = _apply_safe_rule_candidates(audit)
     applied_weights = _apply_safe_weight_update(audit)
+
+    # Detect released guardrails by comparing before/after active_controls counts
+    payload = read_json("approved_rules")
+    active_count = len([entry for entry in payload.get("active_controls", []) if isinstance(entry, dict)])
+    released_rules = []
+    for entry in payload.get("approved", []):
+        if not isinstance(entry, dict):
+            continue
+        decision = entry.get("decision") or {}
+        if decision.get("status") == "released" and not decision.get("reported", False):
+            candidate = _rule_candidate_from_entry(entry)
+            released_rules.append({
+                "candidate_id": candidate.get("candidate_id"),
+                "rule_key": candidate.get("rule_key"),
+                "type": candidate.get("type"),
+                "release_reason": decision.get("release_reason", "Calibration now within threshold."),
+            })
+            decision["reported"] = True
+
+    if released_rules:
+        write_json("approved_rules", payload)
+
     result = {
         "rules_added": [
             {
@@ -852,6 +1037,8 @@ def apply_safe_audit_updates(audit: dict[str, Any]) -> dict[str, Any]:
             }
             for rule in applied_rules
         ],
+        "rules_released": released_rules,
+        "active_control_count": active_count,
         "weight_versions_added": [
             {
                 "version": version.get("version"),
@@ -861,7 +1048,7 @@ def apply_safe_audit_updates(audit: dict[str, Any]) -> dict[str, Any]:
             }
             for version in applied_weights
         ],
-        "note": "Only conservative risk-reducing updates were eligible. No confidence-increasing or safety-removing change is applied.",
+        "note": "Only conservative risk-reducing updates were eligible. No confidence-increasing or safety-removing change is applied unless calibration confirms rebalance is safe.",
     }
     record_evolution_event("audit_safe_apply_summary", result)
     return result
@@ -1110,6 +1297,7 @@ def build_evolution_audit(
         "segment_performance": segments[:30],
         "applied_updates": None,
         "memory_update": None,
+        "evolution_data_dir": str(evolution_data_dir()),
         "safety": "Audit can apply only conservative, versioned risk guardrails when --apply-safe is used. It never increases confidence or removes NO BET protections.",
     }
     if apply_safe or update_memory:

@@ -49,7 +49,10 @@ test('moneyline value can select lower-probability underdog when odds are mispri
   assert.equal(game.valuePick.teamName, 'Away Underdogs');
   assert.equal(game.valuePick.modelProbability, 45);
   assert.equal(game.valuePick.impliedProbability, 38.5);
-  assert.equal(game.valuePick.edge, 6.5);
+  // Edge is measured vs the no-vig fair line (38.46/98.46 = 39.1%), not raw
+  // implied (38.5%): 45 - 39.1 = 5.9.
+  assert.equal(game.valuePick.fairProbability, 39.1);
+  assert.equal(game.valuePick.edge, 5.9);
 });
 
 test('record dominated favorite is downgraded to no bet even with positive value', () => {

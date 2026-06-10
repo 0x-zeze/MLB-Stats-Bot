@@ -431,6 +431,24 @@ function americanImpliedProbabilityPercent(value) {
   return probabilityValue * 100;
 }
 
+// Two-sided de-vig: the raw implied probabilities of both moneyline sides sum to
+// >100% (the overround / vig the book charges). The fair, no-vig probability for
+// each side is its raw implied normalized by the total. Edge must be measured
+// against this fair line, not the juiced raw implied — otherwise the vig is
+// silently counted against (favorites) or for (underdogs) every pick.
+function devigMoneylinePercent(awayOdds, homeOdds) {
+  const awayImplied = americanImpliedProbabilityPercent(awayOdds);
+  const homeImplied = americanImpliedProbabilityPercent(homeOdds);
+  if (awayImplied === null || homeImplied === null) return null;
+  const total = awayImplied + homeImplied;
+  if (!Number.isFinite(total) || total <= 0) return null;
+  return {
+    away: (awayImplied / total) * 100,
+    home: (homeImplied / total) * 100,
+    overround: total - 100
+  };
+}
+
 function round1(value) {
   return Math.round(toNumber(value, 0) * 10) / 10;
 }
@@ -450,7 +468,13 @@ function moneylineValueOption(item, side) {
 
   const team = side === 'away' ? item.away : item.home;
   const modelProbability = displayedProbabilityForSide(item, side);
-  const edge = modelProbability - impliedProbability;
+
+  // Edge against the no-vig fair line when both sides are available; otherwise
+  // fall back to raw implied (single-sided) so a missing opposite price doesn't
+  // drop the option entirely.
+  const devig = devigMoneylinePercent(item.currentOdds?.awayMoneyline, item.currentOdds?.homeMoneyline);
+  const fairProbability = devig ? (side === 'away' ? devig.away : devig.home) : impliedProbability;
+  const edge = modelProbability - fairProbability;
 
   return {
     side,
@@ -461,6 +485,8 @@ function moneylineValueOption(item, side) {
     book: item.currentOdds?.moneylineBook || 'market',
     modelProbability: round1(modelProbability),
     impliedProbability: round1(impliedProbability),
+    fairProbability: round1(fairProbability),
+    overround: devig ? round1(devig.overround) : null,
     edge: round1(edge)
   };
 }
@@ -480,10 +506,15 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
   }
 
   const recordBiasRule = getEvolutionRule(evolutionControls, 'audit:confidence_cap:record_bias');
-  // Record-dominated picks have 70.4% historical accuracy - the old threshold
-  // (< 0.18) was too aggressive. Only trigger when matchup edge is truly weak.
-  if (recordBiasRule && (item.modelBreakdown?.recordDominated || (recordContextEdge > matchupEdge * 1.25 && matchupEdge < 0.08))) {
-    reasons.push('audit guardrail: record/recent-form bias aktif');
+  if (recordBiasRule) {
+    const params = recordBiasRule.parameters || {};
+    const recordMultiplier = toNumber(params.record_context_multiplier, 1.25);
+    const maxRecordMatchupEdge = toNumber(params.max_matchup_edge, 0.18);
+    const recordDominatedThinMatchup = item.modelBreakdown?.recordDominated && matchupEdge < maxRecordMatchupEdge;
+    const recordContextDominates = recordContextEdge > matchupEdge * recordMultiplier && matchupEdge < maxRecordMatchupEdge;
+    if (recordDominatedThinMatchup || recordContextDominates) {
+      reasons.push('audit guardrail: record/recent-form bias aktif');
+    }
   }
 
   if (matchupEdge < 0.08 && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
@@ -507,10 +538,16 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
   const weakEdgeRule = getEvolutionRule(evolutionControls, 'audit:no_bet:weak_edge');
   if (weakEdgeRule) {
     const params = weakEdgeRule.parameters || {};
-    const maxValueEdge = toNumber(params.max_value_edge, MONEYLINE_VALUE_EDGE_THRESHOLD);
-    const maxProbabilityEdge = toNumber(params.max_probability_edge, 5);
-    const maxMatchupEdge = toNumber(params.max_matchup_edge, 0.08);
+    // Use relaxed defaults: the guardrail should only fire when edge is truly
+    // marginal. The old defaults (value edge < 2%, prob edge < 5%) were too
+    // aggressive and suppressed picks that had decent matchup signal (0.08-0.12).
+    const maxValueEdge = toNumber(params.max_value_edge, 1.0);
+    const maxProbabilityEdge = toNumber(params.max_probability_edge, 3.0);
+    const maxMatchupEdge = toNumber(params.max_matchup_edge, 0.05);
     const modelProbabilityEdge = Math.abs(toNumber(option.modelProbability, 50) - 50);
+    // Trigger when either value edge or model probability edge is weak, but only
+    // when matchup signal is also thin. This preserves the guardrail's purpose
+    // while relaxed parameters keep it from suppressing moderate matchup edges.
     if ((option.edge < maxValueEdge || modelProbabilityEdge < maxProbabilityEdge) && matchupEdge < maxMatchupEdge) {
       reasons.push('audit guardrail: edge model/value masih lemah');
     }
@@ -563,9 +600,9 @@ function auditMemoryNotes(item, option, evolutionControls = loadEvolutionControl
     const caution = String(pattern.caution || '').trim();
     if (!caution) continue;
 
-    if ((type.includes('weak_edge') || factor.includes('edge:weak') || factor === 'market_edge') && (valueEdge < STRONG_VALUE_EDGE_THRESHOLD || modelProbabilityEdge < 5)) {
+    if ((type.includes('weak_edge') || factor.includes('edge:weak') || factor === 'market_edge') && (valueEdge < 1.0 || modelProbabilityEdge < 3) && matchupEdge < 0.05) {
       notes.push(caution);
-    } else if ((type === 'record_bias' || factor === 'record_context') && (breakdown.recordDominated || (recordContextEdge > matchupEdge * 1.25 && matchupEdge < 0.18))) {
+    } else if ((type === 'record_bias' || factor === 'record_context') && ((breakdown.recordDominated && matchupEdge < 0.18) || (recordContextEdge > matchupEdge * 1.25 && matchupEdge < 0.18))) {
       notes.push(caution);
     } else if (factor === 'starting_pitcher' && starterEdge >= 0.18 && starterEdge > Math.max(offenseEdge, lineupEdge, bullpenEdge)) {
       notes.push(caution);
@@ -2973,6 +3010,7 @@ function predictGame(
     gamePk: game.gamePk,
     status: game.status?.detailedState || 'Scheduled',
     start: formatGameTime(game.gameDate),
+    startTime: game.gameDate || null,
     venue: game.venue?.name || 'TBD',
     away,
     home,
@@ -3168,6 +3206,7 @@ export async function getMlbScheduleChoices(dateYmd = dateInTimezone('Asia/Jakar
     status: game.status?.detailedState || 'Scheduled',
     abstractGameState: game.status?.abstractGameState || '',
     start: formatGameTime(game.gameDate),
+    startTime: game.gameDate || null,
     venue: game.venue?.name || 'TBD',
     away: {
       id: game.teams.away.team.id,

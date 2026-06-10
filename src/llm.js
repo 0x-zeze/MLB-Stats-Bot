@@ -4,7 +4,7 @@ import {
   ANALYST_SKILL_VERSION,
   ANALYST_SYSTEM_PROMPT
 } from './analystSkill.js';
-import { uiKV, uiTitle } from './telegramFormat.js';
+import { uiKV, uiTitle, UI_LINE, UI_THIN_LINE } from './telegramFormat.js';
 import { getCalibrationPenalty, loadEvolutionControls } from './evolutionControls.js';
 import { hasCalibrationMap } from './calibration.js';
 
@@ -834,10 +834,15 @@ function isQualityPick(candidate) {
   return true;
 }
 
-// Relaxed filter for fallback: only excludes NO BET, everything else is
-// acceptable as a "thin lean" when the slate has no quality picks.
+// Relaxed filter for fallback: excludes only true coinflips (raw conviction
+// strictly below 50, meaning the pick side is genuinely the underdog). Status
+// is deliberately NOT checked — most picks on thin slates are NO BET due to
+// safety guards, but the tier label already shows "No Bet Risk" so the user
+// sees the risk. This keeps /picks always showing up to 5 ranked suggestions
+// instead of 1 or 0.
 function isAcceptablePick(candidate) {
-  return candidate.status !== 'NO BET';
+  const conviction = toNumber(candidate.rawProbability, candidate.probability);
+  return conviction > 50;
 }
 
 export function buildTopPicksAnswer(predictions, question = '', limit = 5, memorySummary = null) {
@@ -849,18 +854,27 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5, memor
     .map(topPickCandidate)
     .sort((left, right) => right.score - left.score);
 
-  // Prefer quality picks; if the slate is thin and fewer than `limit` qualify,
-  // fill remaining slots with acceptable (non-NO-BET) picks so the user always
-  // gets up to 5 ranked suggestions.
+  // Always return up to `limit` picks. Layer order:
+  //   1. Quality picks (status VALUE/LEAN ONLY, <2 warnings, conviction>=51)
+  //   2. Acceptable picks (non-coinflip, conviction>50)
+  //   3. Last resort: any non-coinflip by score
+  // True coinflips (conviction<=50, no model preference) are always excluded
+  // — we never surface a pick the model gives no edge on, even as fallback.
+  const isNotCoinflip = (c) => toNumber(c.rawProbability, c.probability) > 50;
   const quality = ranked.filter(isQualityPick);
-  let candidates = quality.slice(0, limit);
-  if (candidates.length < limit) {
-    const remaining = limit - candidates.length;
-    const used = new Set(candidates.map(c => c.prediction));
-    const fallback = ranked
-      .filter(c => isAcceptablePick(c) && !used.has(c.prediction))
-      .slice(0, remaining);
-    candidates = [...candidates, ...fallback];
+  const acceptable = ranked.filter(isAcceptablePick);
+  const nonCoinflip = ranked.filter(isNotCoinflip);
+  const seen = new Set();
+  const candidates = [];
+  for (const source of [quality, acceptable, nonCoinflip]) {
+    for (const c of source) {
+      if (candidates.length >= limit) break;
+      const key = c.prediction;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(c);
+    }
+    if (candidates.length >= limit) break;
   }
 
   if (candidates.length === 0) return null;
@@ -868,12 +882,17 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5, memor
   // Determine overall slate quality for the header note
   const qualityCount = quality.length;
   const thinSlate = qualityCount < 3;
+  const allNoBet = qualityCount === 0 && candidates.every(c => c.status === 'NO BET');
 
   const calibrated = hasCalibrationMap('moneyline');
-  const lines = [uiTitle('🏆', 'Top Pick Model | Hari Ini'), ''];
+  const lines = ['', `╔══ ${uiTitle('🏆', 'Top Pick Model | Hari Ini')} ══╗`, ''];
 
-  if (thinSlate && candidates.length > qualityCount) {
-    lines.push(`⚠️ Slate tipis: ${qualityCount} pick berkualitas, sisanya thin lean/lean only.`);
+  if (allNoBet) {
+    lines.push('⚠️  Semua pick hari ini NO BET — edge terlalu tipis atau lineup belum jelas.');
+    lines.push('     Ini ranking model murni, bukan rekomendasi bet.');
+    lines.push('');
+  } else if (thinSlate && candidates.length > qualityCount) {
+    lines.push(`⚠️  Slate tipis: ${qualityCount} pick berkualitas, sisanya thin lean / lean only.`);
     lines.push('');
   }
 
@@ -889,7 +908,7 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5, memor
           confParts.push(`${level}: ${pct}% (${bucket.total})`);
         }
       }
-      lines.push(`📊 Record: ${correctPicks}/${totalPicks} (${accuracy}%) | ${confParts.join(' | ')}`);
+      lines.push(`📊 Record: ${correctPicks}/${totalPicks} (${accuracy}%)  |  ${confParts.join('  |  ')}`);
       lines.push('');
     }
   }
@@ -897,51 +916,72 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5, memor
   candidates.forEach((candidate, index) => {
     const pickLabel = candidate.pick?.abbreviation || candidate.pick?.name || 'TBD';
     const opponentLabel = candidate.opponent?.abbreviation || candidate.opponent?.name || 'TBD';
-    lines.push(`${index + 1}. 🎯 ${pickLabel} ML vs ${opponentLabel}`);
-    lines.push(`   ${uiKV('🏷️', 'Tier', pickTier(candidate))}`);
-    lines.push(`   ${uiKV('✅', 'Prediksi menang', `${candidate.pick?.name || pickLabel} | ${candidate.probability}%${calibrated ? ' (kalibrasi)' : ''} | ${candidate.confidence}`)}`);
-    if (candidate.edgeInfo) {
-      const oddsText = candidate.edgeInfo.odds != null ? ` @ ${candidate.edgeInfo.odds}` : '';
-      lines.push(`   ${uiKV('📈', 'Edge', `${candidate.edge > 0 ? '+' : ''}${candidate.edge}% vs market ${candidate.edgeInfo.implied}%${oddsText}`)}`);
-    }
-    if (candidate.factors.length) {
-      lines.push(`   ${uiKV('🔬', 'Faktor', candidate.factors.join(', '))}`);
-    }
-    lines.push(`   ${uiKV('🧠', 'Keyakinan', confidenceReason(candidate))}`);
-    lines.push(`   ${uiKV('📋', 'Konfirmasi', confirmationSignals(candidate.prediction).join(' | '))}`);
-    lines.push(`   ${uiKV('💡', 'Alasan', `${shortReason(candidate)}.`)}`);
+    const pickName = candidate.pick?.name || pickLabel;
 
-    // Memory context per pick: team bias + matchup history
+    // Separator antar pick
+    if (index > 0) lines.push(`  ${UI_THIN_LINE}`);
+
+    // Header pick
+    lines.push(`${index + 1}.  🎯  ${pickLabel} ML  vs  ${opponentLabel}`);
+    lines.push('');
+
+    // Tier + Prediksi + Edge (blok info utama)
+    lines.push(`     ${uiKV('🏷️', 'Tier', pickTier(candidate))}`);
+    lines.push(`     ${uiKV('✅', 'Prediksi', `${pickName} menang  |  ${candidate.probability}%${calibrated ? ' (kalibrasi)' : ''}  |  ${candidate.confidence}`)}`);
+    if (candidate.edgeInfo) {
+      const oddsText = candidate.edgeInfo.odds != null ? `  @ ${candidate.edgeInfo.odds}` : '';
+      lines.push(`     ${uiKV('📈', 'Edge', `${candidate.edge > 0 ? '+' : ''}${candidate.edge}%  vs  market ${candidate.edgeInfo.implied}%${oddsText}`)}`);
+    }
+
+    // Faktor & Keyakinan
+    if (candidate.factors.length) {
+      lines.push(`     ${uiKV('🔬', 'Faktor', candidate.factors.join(', '))}`);
+    }
+    lines.push(`     ${uiKV('🧠', 'Keyakinan', confidenceReason(candidate))}`);
+
+    // Konfirmasi & Alasan
+    lines.push(`     ${uiKV('📋', 'Konfirmasi', confirmationSignals(candidate.prediction).join('  |  '))}`);
+    lines.push(`     ${uiKV('💡', 'Alasan', shortReason(candidate))}`);
+
+    // Memory context per pick
     if (memorySummary) {
       const memParts = [];
       const teamId = String(candidate.pick?.id || '');
       const oppId = String(candidate.opponent?.id || '');
-      // teamBias is in raw memory, but memorySummary doesn't include it directly.
-      // Use byConfidence accuracy as proxy for pick quality.
       const confBucket = memorySummary.byConfidence?.[candidate.confidence];
       if (confBucket?.total > 0) {
         const pct = Math.round((confBucket.correct / confBucket.total) * 100);
         memParts.push(`historis ${candidate.confidence}: ${pct}% win (${confBucket.total} picks)`);
       }
-      // Matchup memory from recent entries (key is "sortedIdA:sortedIdB")
       const matchup = memorySummary.matchupMemory?.recent?.find(m => {
         const key = String(m.key || '');
         return key.includes(teamId) && key.includes(oppId);
       });
       if (matchup) {
-        const streak = matchup.currentStreak ? ` | streak: ${matchup.currentStreak}` : '';
-        const margin = matchup.averageMargin ? ` | avg margin: ${matchup.averageMargin}` : '';
-        memParts.push(`H2H: ${matchup.totalGames} game${streak}${margin}`);
+        // currentStreak is an object { winner, length }, not a string
+        const streakObj = matchup.currentStreak;
+        const streakText = streakObj?.length >= 2
+          ? ` | streak: ${String(streakObj.winner?.abbreviation || streakObj.winner?.name || '?')} ${streakObj.length}W`
+          : '';
+        const marginText = matchup.averageMargin != null
+          ? ` | avg margin: ${Number(matchup.averageMargin).toFixed(1)}`
+          : '';
+        memParts.push(`H2H: ${matchup.totalGames} game${streakText}${marginText}`);
       }
       if (memParts.length) {
-        lines.push(`   ${uiKV('📚', 'Memory', memParts.join(' | '))}`);
+        lines.push(`     ${uiKV('📚', 'Memory', memParts.join('  |  '))}`);
       }
     }
 
+    // Risk warnings
     if (candidate.warnings.length) {
-      lines.push(`   ${uiKV('⚠️', 'Risk', candidate.warnings.join(' | '))}`);
+      lines.push(`     ${uiKV('⚠️', 'Risk', candidate.warnings.join('  |  '))}`);
     }
   });
+
+  // Footer
+  lines.push('');
+  lines.push(`╚══ ${UI_LINE} ══╝`);
 
   return lines.join('\n');
 }

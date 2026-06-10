@@ -21,6 +21,7 @@ from .lesson_generator import attribute_prediction_result, generate_lesson
 from .memory_store import (
     append_jsonl,
     append_prediction_outcome,
+    evolution_data_dir,
     path_for,
     read_json,
     read_jsonl,
@@ -575,11 +576,14 @@ def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
         "ingest": ingest,
         "symbolic_candidates": len(symbolic_candidates),
         "rule_candidates": len(rule_candidates),
+        "total_symbolic_candidates": len(read_jsonl("symbolic_updates")),
+        "total_rule_candidates": len(read_jsonl("rule_candidates")),
         "backtest": backtest,
         "calibration": calibration,
         "summary": summary.get("summary", {}),
         "miscalibrated_buckets": miscalibrated,
         "lessons_decayed": len(raw_lessons) - len(decayed_lessons),
+        "evolution_data_dir": str(evolution_data_dir()),
         "safety": "Candidates are pending only. Production rules, prompts, and weights were not auto-promoted.",
     }
 

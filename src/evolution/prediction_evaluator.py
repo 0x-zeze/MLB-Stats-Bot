@@ -339,10 +339,13 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         no_bet_appropriate = data_quality < 65 or abs(edge) < 2.0 or confidence == "low"
 
     notes = []
-    if status == "loss" and confidence in {"medium", "high"}:
-        notes.append("Potential overconfidence.")
-    if status == "win" and confidence == "low":
-        notes.append("Potential underconfidence.")
+    # Overconfidence = model was very confident (>65%) but lost.
+    # Underconfidence = model was cautious (<55%) but won.
+    # Threshold-based, not confidence-label-based, because labels can be wrong.
+    if status == "loss" and probability_value > 0.65:
+        notes.append("Potential overconfidence (predicted {:.0f}%).".format(probability_value * 100))
+    if status == "win" and 0 < probability_value < 0.55:
+        notes.append("Potential underconfidence (predicted {:.0f}%).".format(probability_value * 100))
     if no_bet and no_bet_appropriate:
         notes.append("NO BET was supported by weak edge, low confidence, or data quality risk.")
     if no_bet and no_bet_appropriate is False:
@@ -384,8 +387,10 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         "calibration_bucket": confidence,
         "edge": edge,
         "data_quality": data_quality,
-        "overconfidence": status == "loss" and confidence in {"medium", "high"},
-        "underconfidence": status == "win" and confidence == "low",
+        # Overconfidence = model was >65% sure but lost → real calibration gap.
+        # Underconfidence = model was <55% sure but won → real calibration gap.
+        "overconfidence": status == "loss" and probability_value > 0.65,
+        "underconfidence": status == "win" and probability_value < 0.55 and probability_value > 0,
         "main_factors": trajectory.get("main_factors") or [],
         "risk_factors": trajectory.get("risk_factors") or [],
         "bet_decision": trajectory.get("bet_decision") or {},

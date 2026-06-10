@@ -45,7 +45,10 @@ function normalizeRules(approvedRules) {
     if (!candidate) continue;
     const key = candidate.rule_key || candidate.candidate_id;
     if (!key) continue;
-    const status = String(candidate.status || entry?.decision?.status || 'active').toLowerCase();
+    const decisionStatus = String(entry?.decision?.status || '').toLowerCase();
+    // Skip guardrails that have been released by the calibration-driven removal mechanism
+    if (decisionStatus === 'released' || decisionStatus === 'removed') continue;
+    const status = String(candidate.status || decisionStatus || 'active').toLowerCase();
     const productionAllowed = candidate.production_update_allowed !== false;
     const isApproved = status === 'active' || status === 'approved' || String(candidate.promotion_status || '').startsWith('approved');
     if (productionAllowed && isApproved) {

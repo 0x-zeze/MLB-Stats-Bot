@@ -34,35 +34,61 @@ function readJsonlFile(fileName) {
   }
 }
 
-function readPredictionOutcomes() {
+function parseCsvLine(line) {
+  const values = [];
+  let current = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      if (quoted && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (char === ',' && !quoted) {
+      values.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  values.push(current);
+  return values;
+}
+
+export function readPredictionOutcomes() {
   const path = resolve(evolutionDataDir(), 'prediction_outcomes.csv');
   if (!existsSync(path)) return [];
   try {
     const raw = readFileSync(path, 'utf8').split('\n').filter(Boolean);
     if (raw.length < 2) return [];
+    const header = parseCsvLine(raw[0]);
     const rows = [];
     for (let i = 1; i < raw.length; i++) {
-      const line = raw[i];
-      const evalStart = line.indexOf(',"{');
-      if (evalStart < 0) continue;
-      const prefix = line.slice(0, evalStart);
-      const evalJson = line.slice(evalStart + 2, -1).replace(/""/g, '"');
-      const parts = prefix.split(',');
+      const values = parseCsvLine(raw[i]);
+      const record = Object.fromEntries(header.map((name, index) => [name, values[index] ?? '']));
+      const extras = values.slice(header.length);
+      if (extras.length && header.includes('evaluation_json')) {
+        record.evaluation_json = extras[extras.length - 1];
+        if (extras.length >= 2) record.calibration_bucket = extras[extras.length - 2];
+      }
       let evaluation = {};
-      try { evaluation = JSON.parse(evalJson); } catch {}
+      try { evaluation = JSON.parse(record.evaluation_json || '{}'); } catch {}
       rows.push({
-        game_id: parts[0],
-        date: parts[1],
-        market: parts[2],
-        prediction: parts[3],
-        confidence: parts[4],
-        result: parts[5],
-        actual_score: parts[6],
-        actual_total: Number(parts[7]) || 0,
-        profit_loss: Number(parts[8]) || 0,
-        clv: parts[9] ? Number(parts[9]) : null,
-        brier_score: parts[10] ? Number(parts[10]) : null,
-        calibration_bucket: parts[11],
+        game_id: record.game_id,
+        date: record.date,
+        market: record.market,
+        prediction: record.prediction,
+        confidence: record.confidence,
+        result: record.result,
+        actual_score: record.actual_score,
+        actual_total: Number(record.actual_total) || 0,
+        profit_loss: Number(record.profit_loss) || 0,
+        clv: record.clv ? Number(record.clv) : null,
+        brier_score: record.brier_score ? Number(record.brier_score) : null,
+        calibration_bucket: record.calibration_bucket,
         evaluation
       });
     }

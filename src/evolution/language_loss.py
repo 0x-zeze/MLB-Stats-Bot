@@ -50,7 +50,7 @@ def calculate_language_loss(trajectory: dict[str, Any], final_result: dict[str, 
         severity = "medium"
         affected_factor = "record_context"
         summary = "The moneyline pick leaned too much on record, form, H2H, or previous-series context instead of game-specific matchup signals."
-    elif evaluation.get("overconfidence"):
+    elif evaluation.get("overconfidence") or (evaluation.get("result") == "loss" and confidence in {"medium", "high"}):
         loss_type = "overconfidence"
         severity = "high" if confidence == "high" else "medium"
         affected_factor = "confidence_calibration"

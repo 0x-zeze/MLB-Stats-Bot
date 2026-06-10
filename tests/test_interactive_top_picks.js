@@ -61,8 +61,8 @@ test('top 5 pick question uses concise deterministic formatter', () => {
 
   const answer = buildTopPicksAnswer(predictions, 'best 5 top pick for today');
 
-  assert.match(answer, /^🏆 Top Pick Model \| Hari Ini/);
-  assert.match(answer, /Prediksi menang \|/);
+  assert.match(answer, /Top Pick Model \| Hari Ini/);
+  assert.match(answer, /Prediksi \|/);
   assert.match(answer, /Keyakinan \|/);
   assert.match(answer, /Konfirmasi \|/);
   assert.match(answer, /Alasan \|/);

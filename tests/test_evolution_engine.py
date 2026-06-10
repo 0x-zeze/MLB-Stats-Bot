@@ -12,11 +12,15 @@ from src.evolution.evolution_engine import (
 )
 from src.evolution.prediction_evaluator import _predicted_probability
 from src.evolution.memory_store import (
+    append_jsonl,
     append_prediction_outcome,
+    ensure_evolution_storage,
+    path_for,
     read_json,
     read_jsonl,
     read_prediction_outcomes,
 )
+from src.evolution.evolution_report import build_evolution_summary
 
 
 class EvolutionEngineTests(unittest.TestCase):
@@ -184,6 +188,51 @@ class EvolutionEngineTests(unittest.TestCase):
         self.assertNotAlmostEqual(brier_after, 0.25, places=4)
         self.assertLess(brier_after, 0.25)
         self.assertEqual(second["updated"], 0)  # idempotent
+
+    def test_prediction_outcome_schema_migrates_old_header(self):
+        with isolated_evolution_store():
+            path = path_for("prediction_outcomes")
+            path.write_text(
+                "game_id,date,market,prediction,confidence,result,actual_score,actual_total,profit_loss,clv,brier_score,calibration_bucket,evaluation_json\n"
+                "1,2026-05-01,moneyline,Alpha,medium,win,4-2,6,1.0,,0.16,confidence:medium,\"{\"\"edge\"\": 3.2}\"\n",
+                encoding="utf-8",
+            )
+
+            ensure_evolution_storage()
+            rows = read_prediction_outcomes()
+            header = path.read_text(encoding="utf-8").splitlines()[0].split(",")
+
+        self.assertIn("baseline_brier_score", header)
+        self.assertIn("brier_delta_llm", header)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["evaluation_json"], '{"edge": 3.2}')
+
+    def test_evolution_summary_reports_nonzero_stored_totals(self):
+        with isolated_evolution_store():
+            append_prediction_outcome(
+                {
+                    "game_id": "1",
+                    "date": "2026-05-01",
+                    "market": "moneyline",
+                    "prediction": "Alpha",
+                    "confidence": "medium",
+                    "result": "win",
+                    "evaluation_json": json.dumps({"edge": 3.0}),
+                }
+            )
+            append_jsonl("language_losses", {"loss_id": "loss-1", "loss_type": "correct_pick"})
+            append_jsonl("language_gradients", {"gradient_id": "gradient-1", "loss_id": "loss-1"})
+            append_jsonl("lessons", {"lesson_id": "lesson-1", "lesson_type": "correct_pick"})
+            append_jsonl("rule_candidates", {"candidate_id": "candidate-1"})
+            append_jsonl("symbolic_updates", {"candidate_id": "candidate-1"})
+
+            summary = build_evolution_summary()["summary"]
+
+        self.assertEqual(summary["total_predictions_evaluated"], 1)
+        self.assertEqual(summary["lessons_generated"], 1)
+        self.assertEqual(summary["language_losses_generated"], 1)
+        self.assertEqual(summary["language_gradients_generated"], 1)
+        self.assertEqual(summary["candidates_proposed"], 1)
 
 
 if __name__ == "__main__":

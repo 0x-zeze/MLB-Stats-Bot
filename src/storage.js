@@ -253,18 +253,21 @@ function compactPrediction(prediction, dateYmd) {
     gamePk: prediction.gamePk,
     dateYmd,
     status: prediction.status,
+    startTime: prediction.startTime || null,
     matchup: `${prediction.away.name} @ ${prediction.home.name}`,
     away: {
       id: prediction.away.id,
       name: prediction.away.name,
       abbreviation: prediction.away.abbreviation,
-      winProbability: awayProbability
+      winProbability: awayProbability,
+      winProbabilityRaw: prediction.away.winProbabilityRaw ?? awayProbability
     },
     home: {
       id: prediction.home.id,
       name: prediction.home.name,
       abbreviation: prediction.home.abbreviation,
-      winProbability: homeProbability
+      winProbability: homeProbability,
+      winProbabilityRaw: prediction.home.winProbabilityRaw ?? homeProbability
     },
     pick: {
       id: agentPick.id,

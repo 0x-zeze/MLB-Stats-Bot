@@ -142,14 +142,54 @@ def _default_json(file_key: str) -> dict[str, Any]:
     return {}
 
 
+def _normalize_outcome_row(header: list[str], values: list[str]) -> dict[str, Any]:
+    row = {name: values[index] if index < len(values) else "" for index, name in enumerate(header)}
+    extras = values[len(header):]
+
+    # Older files were created before baseline_brier_score/brier_delta_llm were
+    # inserted before calibration_bucket/evaluation_json. If a newer writer
+    # appended to that old header, csv readers map the trailing values to the
+    # wrong columns and leave the real calibration/evaluation fields as extras.
+    if extras and "evaluation_json" in header:
+        row["evaluation_json"] = extras[-1]
+        if len(extras) >= 2:
+            row["calibration_bucket"] = extras[-2]
+
+    return {field: row.get(field, "") for field in PREDICTION_OUTCOME_FIELDS}
+
+
+def ensure_prediction_outcome_schema() -> None:
+    path = path_for("prediction_outcomes")
+    if not path.exists():
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=PREDICTION_OUTCOME_FIELDS).writeheader()
+        return
+
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        try:
+            header = next(reader)
+        except StopIteration:
+            header = []
+        rows = list(reader)
+
+    if header == PREDICTION_OUTCOME_FIELDS:
+        return
+
+    stamp = utc_now().replace(":", "").replace("-", "")
+    path.with_suffix(f".csv.{stamp}.bak").write_bytes(path.read_bytes())
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PREDICTION_OUTCOME_FIELDS)
+        writer.writeheader()
+        for values in rows:
+            writer.writerow(_normalize_outcome_row(header, values))
+
+
 def ensure_evolution_storage() -> Path:
     root = evolution_data_dir()
     root.mkdir(parents=True, exist_ok=True)
 
-    outcome_path = path_for("prediction_outcomes")
-    if not outcome_path.exists():
-        with outcome_path.open("w", encoding="utf-8", newline="") as handle:
-            csv.DictWriter(handle, fieldnames=PREDICTION_OUTCOME_FIELDS).writeheader()
+    ensure_prediction_outcome_schema()
 
     for file_key in JSONL_FILES:
         path_for(file_key).touch(exist_ok=True)
