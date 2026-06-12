@@ -24,6 +24,7 @@ import { setupWebhook, TelegramBot } from './telegram.js';
 import { UI_LINE, UI_THIN_LINE, uiBullet, uiCommand, uiKV, uiSection, uiTitle } from './telegramFormat.js';
 import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils.js';
 import { startDashboard } from './dashboard.js';
+import { formatLedgerReport } from './ledgerReport.js';
 import {
   attachCurrentOdds,
   americanImpliedProbability,
@@ -65,6 +66,7 @@ function helpText() {
     uiSection('📋', 'Shortcut analyst'),
     uiCommand('/picks', 'top 5 pick model hari ini'),
     uiCommand('/picks YYYY-MM-DD', 'top pick untuk tanggal tertentu'),
+    uiCommand('/ledger', 'rekap bet ledger: open, record, units P/L, ROI'),
     uiCommand('/analyze', 'analisa edge, risk, value, dan no-bet slate hari ini'),
     uiCommand('/analyze TEAM', 'analisa tim/game tertentu dari data bot'),
     uiCommand('/news', 'ringkas injury, lineup, market, weather, dan data-quality risk'),
@@ -1301,6 +1303,17 @@ async function handlePicksCommand(bot, chatId, question, dateYmd = dateInTimezon
     setCachedPredictions(chatId, dateYmd, predictions);
   }
 
+  // Record each VALUE bet at decision time (idempotent on game+market) so the
+  // /ledger can later settle it to units P/L. NO BET / leans are skipped inside
+  // recordBet. Errors here must never block the /picks answer.
+  for (const prediction of predictions) {
+    try {
+      storage.recordBet(prediction);
+    } catch (error) {
+      console.error('recordBet failed:', error.message);
+    }
+  }
+
   const answer = await answerInteractiveQuestion(config, {
     question,
     dateYmd,
@@ -1422,6 +1435,12 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
 
     if (learned) {
       storage.recordOutcome(prediction, result, { enabled: config.modelMemory });
+      // Settle any open VALUE bet for this game into units P/L (idempotent).
+      try {
+        storage.settleBet(prediction, result, clv);
+      } catch (error) {
+        console.error('settleBet failed:', error.message);
+      }
     }
   }
 
@@ -1634,6 +1653,17 @@ async function handleMessage(bot, message) {
       await handlePicksCommand(bot, chatId, question, dateYmd);
     } finally {
       releaseCommandLock(chatId, 'picks');
+    }
+    return;
+  }
+
+  if (command === '/ledger') {
+    if (!acquireCommandLock(chatId, 'ledger')) return;
+    try {
+      const rows = storage.readLedger();
+      await bot.sendMessage(chatId, formatLedgerReport(rows));
+    } finally {
+      releaseCommandLock(chatId, 'ledger');
     }
     return;
   }

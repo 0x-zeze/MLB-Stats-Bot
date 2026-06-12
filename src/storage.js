@@ -457,6 +457,28 @@ export class Storage {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS bet_ledger (
+        decision_id TEXT PRIMARY KEY,
+        game_pk TEXT NOT NULL,
+        date_ymd TEXT NOT NULL,
+        market TEXT NOT NULL,
+        team TEXT,
+        side TEXT,
+        odds REAL,
+        fair_prob REAL,
+        model_prob REAL,
+        edge REAL,
+        units_staked REAL NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        result TEXT,
+        units_pl REAL,
+        clv REAL,
+        recommended_at TEXT NOT NULL,
+        settled_at TEXT,
+        UNIQUE(game_pk, market),
+        FOREIGN KEY (game_pk) REFERENCES picks(game_pk) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS line_snapshots (
         game_pk TEXT NOT NULL,
         market TEXT NOT NULL,
@@ -477,6 +499,8 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_picks_date ON picks(date_ymd);
       CREATE INDEX IF NOT EXISTS idx_picks_post_game ON picks(post_game_processed);
       CREATE INDEX IF NOT EXISTS idx_yrfi_date ON yrfi_results(date_ymd);
+      CREATE INDEX IF NOT EXISTS idx_bet_ledger_date ON bet_ledger(date_ymd);
+      CREATE INDEX IF NOT EXISTS idx_bet_ledger_status ON bet_ledger(status);
       CREATE INDEX IF NOT EXISTS idx_line_snapshots_timestamp ON line_snapshots(timestamp);
       CREATE INDEX IF NOT EXISTS idx_line_alerts_timestamp ON line_alerts(timestamp);
 
@@ -1384,6 +1408,115 @@ export class Storage {
         processedAt,
         processedAt
       );
+  }
+
+  // Record a VALUE bet at decision time. Idempotent on (game_pk, market): a
+  // re-run of /picks for the same game never creates a duplicate ledger row.
+  // Only VALUE picks with a positive Kelly stake are recorded.
+  recordBet(prediction) {
+    const decision = prediction?.betDecision;
+    const value = prediction?.valuePick;
+    if (!decision || decision.status !== 'VALUE') return null;
+    if (!value || !(Number(value.kellyStakePercent) > 0)) return null;
+
+    const gamePk = String(prediction.gamePk || '');
+    const market = 'moneyline';
+    const dateYmd = prediction.dateYmd || '';
+    if (!gamePk) return null;
+
+    const count = this.db
+      .prepare('SELECT COUNT(*) AS count FROM bet_ledger WHERE date_ymd = ? AND market = ?')
+      .get(dateYmd, market).count;
+    const decisionId = `${dateYmd}-${market}-${String(count + 1).padStart(2, '0')}`;
+    const now = new Date().toISOString();
+
+    const info = this.db
+      .prepare(
+        `INSERT INTO bet_ledger (
+          decision_id, game_pk, date_ymd, market, team, side, odds,
+          fair_prob, model_prob, edge, units_staked, status, recommended_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+        ON CONFLICT(game_pk, market) DO NOTHING`
+      )
+      .run(
+        decisionId,
+        gamePk,
+        dateYmd,
+        market,
+        value.teamName || null,
+        value.side || null,
+        Number(value.odds),
+        Number(value.fairProbability),
+        Number(value.modelProbability),
+        Number(value.edge),
+        Number(value.kellyStakePercent),
+        now
+      );
+
+    return info.changes > 0 ? decisionId : null;
+  }
+
+  // Settle an open bet against the final result. Idempotent: the status='open'
+  // guard makes a second settle of the same game a no-op (units_pl unchanged).
+  // 100u notional bankroll, so units_staked = stake% and a win pays
+  // units_staked * profit-multiple of the American odds; a loss returns -stake.
+  settleBet(prediction, result, clv = null) {
+    const gamePk = String(prediction?.gamePk || '');
+    const market = 'moneyline';
+    if (!gamePk) return false;
+
+    const row = this.db
+      .prepare("SELECT * FROM bet_ledger WHERE game_pk = ? AND market = ? AND status = 'open'")
+      .get(gamePk, market);
+    if (!row) return false;
+
+    const stakedTeamId = row.side === 'home' ? prediction.home?.id : prediction.away?.id;
+    const winnerId = result?.winner?.id;
+    let outcome = 'loss';
+    let unitsPl = -row.units_staked;
+    if (winnerId == null) {
+      outcome = 'push';
+      unitsPl = 0;
+    } else if (String(stakedTeamId) === String(winnerId)) {
+      outcome = 'win';
+      const odds = Number(row.odds);
+      const profitMultiple = odds > 0 ? odds / 100 : 100 / Math.abs(odds);
+      unitsPl = row.units_staked * profitMultiple;
+    }
+
+    this.db
+      .prepare(
+        `UPDATE bet_ledger
+         SET status = 'settled', result = ?, units_pl = ?, clv = ?, settled_at = ?
+         WHERE game_pk = ? AND market = ? AND status = 'open'`
+      )
+      .run(
+        outcome,
+        Math.round(unitsPl * 1000) / 1000,
+        clv,
+        new Date().toISOString(),
+        gamePk,
+        market
+      );
+    return true;
+  }
+
+  readLedger({ status = null, sinceDays = null } = {}) {
+    const clauses = [];
+    const params = [];
+    if (status) {
+      clauses.push('status = ?');
+      params.push(status);
+    }
+    if (Number.isFinite(sinceDays)) {
+      const cutoff = new Date(Date.now() - sinceDays * 86400000).toISOString().slice(0, 10);
+      clauses.push('date_ymd >= ?');
+      params.push(cutoff);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    return this.db
+      .prepare(`SELECT * FROM bet_ledger ${where} ORDER BY date_ymd ASC, decision_id ASC`)
+      .all(...params);
   }
 
   appendChatMessage(chatId, role, content) {
