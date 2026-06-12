@@ -145,6 +145,23 @@ def _predicted_probability(trajectory: dict[str, Any], market: str, lean: str) -
     return probability(prediction.get("moneyline_probability"), 0.5)
 
 
+def _has_predicted_probability(trajectory: dict[str, Any], market: str, lean: str) -> bool:
+    """Whether the trajectory carries a real probability for this market/lean.
+
+    _predicted_probability falls back to 0.5 when the source field is absent;
+    that default must NOT be read as a genuine calibration signal (a missing
+    probability is not the model being underconfident).
+    """
+    prediction = trajectory.get("prediction") or {}
+    if market == "totals":
+        key = "under_probability" if lean.lower().startswith("under") else "over_probability"
+    elif market == "yrfi":
+        key = "yrfi_probability"
+    else:
+        key = "moneyline_probability"
+    return prediction.get(key) not in (None, "")
+
+
 def _market_odds(trajectory: dict[str, Any], lean: str) -> Any:
     odds = (trajectory.get("prediction") or {}).get("market_odds")
     if isinstance(odds, dict):
@@ -319,6 +336,7 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         status = "win" if correct else "loss"
 
     probability_value = _predicted_probability(trajectory, market, lean)
+    has_probability = _has_predicted_probability(trajectory, market, lean)
     outcome = 1 if status == "win" else 0
     brier = None if status in {"no_bet", "push"} else round((probability_value - outcome) ** 2, 6)
     odds = _market_odds(trajectory, lean)
@@ -342,9 +360,11 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
     # Overconfidence = model was very confident (>65%) but lost.
     # Underconfidence = model was cautious (<55%) but won.
     # Threshold-based, not confidence-label-based, because labels can be wrong.
-    if status == "loss" and probability_value > 0.65:
+    # Gated on has_probability so a missing field (defaulted to 0.5) is never
+    # mistaken for a real calibration signal.
+    if has_probability and status == "loss" and probability_value > 0.65:
         notes.append("Potential overconfidence (predicted {:.0f}%).".format(probability_value * 100))
-    if status == "win" and 0 < probability_value < 0.55:
+    if has_probability and status == "win" and probability_value < 0.55:
         notes.append("Potential underconfidence (predicted {:.0f}%).".format(probability_value * 100))
     if no_bet and no_bet_appropriate:
         notes.append("NO BET was supported by weak edge, low confidence, or data quality risk.")
@@ -389,8 +409,10 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         "data_quality": data_quality,
         # Overconfidence = model was >65% sure but lost → real calibration gap.
         # Underconfidence = model was <55% sure but won → real calibration gap.
-        "overconfidence": status == "loss" and probability_value > 0.65,
-        "underconfidence": status == "win" and probability_value < 0.55 and probability_value > 0,
+        # has_probability guards against the 0.5 default standing in for a
+        # missing field, which is not a calibration signal.
+        "overconfidence": has_probability and status == "loss" and probability_value > 0.65,
+        "underconfidence": has_probability and status == "win" and probability_value < 0.55,
         "main_factors": trajectory.get("main_factors") or [],
         "risk_factors": trajectory.get("risk_factors") or [],
         "bet_decision": trajectory.get("bet_decision") or {},

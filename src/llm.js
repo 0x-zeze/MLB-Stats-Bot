@@ -882,7 +882,8 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5, memor
   // Determine overall slate quality for the header note
   const qualityCount = quality.length;
   const thinSlate = qualityCount < 3;
-  const allNoBet = qualityCount === 0 && candidates.every(c => c.status === 'NO BET');
+  const noBetShown = candidates.filter(c => c.status === 'NO BET').length;
+  const allNoBet = candidates.every(c => c.status === 'NO BET');
 
   const calibrated = hasCalibrationMap('moneyline');
   const lines = ['', `╔══ ${uiTitle('🏆', 'Top Pick Model | Hari Ini')} ══╗`, ''];
@@ -890,6 +891,9 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5, memor
   if (allNoBet) {
     lines.push('⚠️  Semua pick hari ini NO BET — edge terlalu tipis atau lineup belum jelas.');
     lines.push('     Ini ranking model murni, bukan rekomendasi bet.');
+    lines.push('');
+  } else if (noBetShown > 0) {
+    lines.push(`⚠️  ${qualityCount} pick berkualitas; ${noBetShown} sisanya NO BET (ranking model, bukan rekomendasi bet).`);
     lines.push('');
   } else if (thinSlate && candidates.length > qualityCount) {
     lines.push(`⚠️  Slate tipis: ${qualityCount} pick berkualitas, sisanya thin lean / lean only.`);

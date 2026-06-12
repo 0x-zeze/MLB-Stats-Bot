@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { formatEvolveResult } from '../src/index.js';
+import { formatEvolveResult, predictionsHaveRawProbabilities } from '../src/index.js';
 
 test('/evolve formatter shows stored totals when no new rows are ingested', () => {
   const text = formatEvolveResult({
@@ -47,4 +47,19 @@ test('/evolve formatter surfaces Python errors instead of normal all-zero succes
   assert.match(text, /Diagnostics/);
   assert.match(text, /Cycle \| evolution timeout/);
   assert.match(text, /Audit \| output Python tidak bisa diparse JSON/);
+});
+
+test('predictionsHaveRawProbabilities treats an empty array as missing (triggers regen)', () => {
+  // Vacuous .every made [] return true, so a cached empty slate skipped
+  // regeneration in /picks. An empty array must be treated as "no data".
+  assert.equal(predictionsHaveRawProbabilities([]), false);
+  assert.equal(predictionsHaveRawProbabilities(null), false);
+  assert.equal(
+    predictionsHaveRawProbabilities([{ away: { winProbabilityRaw: 60 }, home: { winProbabilityRaw: 40 } }]),
+    true
+  );
+  assert.equal(
+    predictionsHaveRawProbabilities([{ away: { winProbability: 60 }, home: { winProbability: 40 } }]),
+    false
+  );
 });

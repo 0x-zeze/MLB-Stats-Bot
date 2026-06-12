@@ -1245,7 +1245,7 @@ function setCachedPredictions(chatId, dateYmd, predictions) {
 }
 
 function predictionsHaveRawProbabilities(predictions) {
-  return Array.isArray(predictions) && predictions.every((prediction) =>
+  return Array.isArray(predictions) && predictions.length > 0 && predictions.every((prediction) =>
     prediction?.away?.winProbabilityRaw != null && prediction?.home?.winProbabilityRaw != null
   );
 }
@@ -2178,7 +2178,7 @@ async function main() {
   await poll(bot);
 }
 
-export { formatEvolveResult, parseJsonOutput };
+export { formatEvolveResult, parseJsonOutput, predictionsHaveRawProbabilities };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((error) => {

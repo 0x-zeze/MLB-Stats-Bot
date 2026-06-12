@@ -6,7 +6,20 @@ from src.evolution.language_loss import calculate_language_loss
 
 class LanguageLossTests(unittest.TestCase):
     def test_overconfidence_creates_confidence_loss(self):
-        loss = calculate_language_loss(sample_trajectory(), final_result(home_score=3, away_score=3))
+        trajectory = sample_trajectory(
+            prediction={
+                "final_lean": "Over 8.5",
+                "confidence": "High",
+                "projected_total": 10.5,
+                "market_total": 8.5,
+                "over_probability": 72,
+                "under_probability": 28,
+                "model_edge": 4.0,
+                "market_odds": {"over": "-110", "under": "-110"},
+            },
+        )
+
+        loss = calculate_language_loss(trajectory, final_result(home_score=3, away_score=3))
 
         self.assertEqual(loss["loss_type"], "overconfidence")
         self.assertEqual(loss["affected_factor"], "confidence_calibration")

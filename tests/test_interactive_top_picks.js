@@ -83,3 +83,26 @@ test('top picks filters out a coinflip pick below the quality threshold', () => 
   // The 50/50 game carries no edge and must be excluded from the surfaced list.
   assert.doesNotMatch(answer, /Coin (Away|Home)/);
 });
+
+test('mixed slate labels NO BET fallbacks honestly, not as thin leans', () => {
+  // One quality VALUE pick + several NO BET picks (all non-coinflip so they
+  // fill the remaining slots). The header must disclose the NO BET picks
+  // instead of calling them "thin lean / lean only".
+  const predictions = [
+    prediction(1, 'Value Away', 'Value Home', 66, 34, 'Value Away unggul jelas.', {
+      betDecision: { status: 'VALUE', edge: 5, teamName: 'Value Away' },
+      agentAnalysis: { pickTeamId: 11, confidence: 'high' }
+    }),
+    prediction(2, 'Nobet Away', 'Nobet Home', 54, 46, 'Edge tipis.', {
+      betDecision: { status: 'NO BET', edge: 0.5 }
+    }),
+    prediction(3, 'Skip Away', 'Skip Home', 53, 47, 'Edge tipis.', {
+      betDecision: { status: 'NO BET', edge: 0.5 }
+    })
+  ];
+
+  const answer = buildTopPicksAnswer(predictions, 'best 5 top pick for today');
+  const header = answer.split('\n').find((line) => line.includes('⚠️')) || '';
+  assert.match(header, /NO BET/);
+  assert.doesNotMatch(header, /thin lean/);
+});

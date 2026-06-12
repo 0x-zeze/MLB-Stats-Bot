@@ -23,6 +23,33 @@ class PredictionEvaluatorTests(unittest.TestCase):
         self.assertEqual(evaluation["result"], "win")
         self.assertTrue(any(item["impact"] == "positive" for item in attribution["attribution"]))
 
+    def test_missing_probability_is_not_flagged_underconfident(self):
+        # Moneyline win with NO probability field: _predicted_probability falls
+        # back to 0.5, which must not be read as a real "underconfident" signal.
+        trajectory = sample_trajectory(
+            market="moneyline",
+            prediction={"final_lean": "Cleveland Guardians"},
+        )
+        evaluation = evaluate_prediction(trajectory, final_result(home_score=5, away_score=2))
+
+        self.assertEqual(evaluation["result"], "win")
+        self.assertEqual(evaluation["predicted_probability"], 50.0)
+        self.assertFalse(evaluation["underconfidence"])
+        self.assertFalse(
+            any("underconfidence" in note.lower() for note in evaluation["evaluation_notes"])
+        )
+
+    def test_present_probability_still_flags_underconfidence(self):
+        # A genuine low-probability win (field present) must still be flagged.
+        trajectory = sample_trajectory(
+            market="moneyline",
+            prediction={"final_lean": "Cleveland Guardians", "moneyline_probability": 48},
+        )
+        evaluation = evaluate_prediction(trajectory, final_result(home_score=5, away_score=2))
+
+        self.assertEqual(evaluation["result"], "win")
+        self.assertTrue(evaluation["underconfidence"])
+
 
 if __name__ == "__main__":
     unittest.main()
