@@ -1070,6 +1070,18 @@ export class Storage {
       .map((row) => this.predictionFromRow(row));
   }
 
+  // Predictions stored on or after a date string. Used by closing-line capture,
+  // which must NOT scope to a single timezone-derived day: a game listed under
+  // date D can start after local midnight (stored date != local "today"), so a
+  // single-day query misses tonight's slate. Querying a small recent range and
+  // letting the start-time filter do the work avoids that rollover gap.
+  listPredictionsSinceDate(dateYmd) {
+    return this.db
+      .prepare('SELECT * FROM picks WHERE date_ymd >= ? ORDER BY date_ymd, game_pk')
+      .all(String(dateYmd || ''))
+      .map((row) => this.predictionFromRow(row));
+  }
+
   getLineSnapshot(gamePk, market) {
     const row = this.db
       .prepare(

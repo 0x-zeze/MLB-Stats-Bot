@@ -556,23 +556,27 @@ export async function captureClosingLines(games) {
     const gamePk = String(game.gamePk || game.game_id || '');
     if (!gamePk) continue;
 
-    const existing = state.storage.getLineSnapshot(gamePk, 'closing_home');
-    if (existing) continue;
-
+    // No skip-on-existing: the caller only passes pre-game games, so overwriting
+    // refreshes the line toward first pitch. The last write before the game
+    // starts is the closing proxy (setLineSnapshot upserts on game_pk+market).
     const event = findEventForGame(game, events);
     if (!event) continue;
 
     const snapshot = buildSnapshot(game, event);
+    let wrote = false;
     if (snapshot.homeMoneyline != null) {
       state.storage.setLineSnapshot(gamePk, 'closing_home', snapshot.homeMoneyline);
+      wrote = true;
     }
     if (snapshot.awayMoneyline != null) {
       state.storage.setLineSnapshot(gamePk, 'closing_away', snapshot.awayMoneyline);
+      wrote = true;
     }
     if (snapshot.totalLine != null) {
       state.storage.setLineSnapshot(gamePk, 'closing_total', snapshot.totalLine);
+      wrote = true;
     }
-    captured++;
+    if (wrote) captured++;
   }
 
   return { captured };

@@ -2108,26 +2108,46 @@ async function processWeeklyRecap(bot) {
   console.log(`Weekly recap sent: ${stats.correct}/${stats.totalPicks} accuracy.`);
 }
 
+// How early before first pitch we start capturing/refreshing the closing line.
+// Wide enough that the bot will catch every game's pre-game line across normal
+// poll cadence and restarts; narrow enough not to pull tomorrow's slate.
+const CLOSING_REFRESH_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours
+
+// Pure predicate: should this prediction's line be captured/refreshed now?
+// Eligible when the game has not started (startMs > now, the hard guard against
+// overwriting a frozen closing line) and starts within the pre-game window.
+function isClosingCaptureEligible(prediction, now = Date.now(), windowMs = CLOSING_REFRESH_WINDOW_MS) {
+  const start = prediction?.startTime || prediction?.start || prediction?.gameTime;
+  if (!start) return false;
+  const startMs = new Date(start).getTime();
+  if (!Number.isFinite(startMs) || startMs <= now) return false;
+  return startMs - now <= windowMs;
+}
+
 async function captureClosingLinesForUpcoming() {
-  const dateYmd = dateInTimezone(config.timezone);
-  const predictions = storage.listPredictionsByDate(dateYmd);
+  // Query a 2-day range (yesterday + today, local), not a single date: a game
+  // listed under one date_ymd can start after local midnight, so a single-day
+  // query scoped to local "today" silently misses tonight's slate (the games
+  // are stored under the prior date). The start-time predicate does the real
+  // filtering, so an over-broad range is safe.
+  const today = dateInTimezone(config.timezone);
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const sinceDate = today < yesterday ? today : yesterday;
+  const predictions = storage.listPredictionsSinceDate(sinceDate);
   if (!predictions.length) return;
 
   const now = Date.now();
-  const soonGames = predictions.filter((p) => {
-    if (storage.hasClosingLine(p.gamePk)) return false;
-    const start = p.startTime || p.start || p.gameTime;
-    if (!start) return false;
-    const startMs = new Date(start).getTime();
-    // Capture anytime within 30 min before first pitch (was 5 min, which
-    // rarely aligned with the 60s poll and left CLV uncomputable).
-    return Number.isFinite(startMs) && startMs - now <= 30 * 60_000 && startMs > now;
-  });
+  // Capture/refresh the line for ANY game that has not started yet and starts
+  // within the pre-game window. We deliberately do NOT skip games that already
+  // have a closing snapshot: refreshing on each poll means the LAST value before
+  // first pitch wins (the true closing proxy), and a missed poll or bot restart
+  // no longer permanently loses a game's closing line.
+  const soonGames = predictions.filter((p) => isClosingCaptureEligible(p, now));
 
   if (soonGames.length > 0) {
     const result = await captureClosingLines(soonGames);
     if (result.captured > 0) {
-      console.log(`Closing lines captured for ${result.captured} game(s).`);
+      console.log(`Closing lines captured/refreshed for ${result.captured} game(s).`);
     }
   }
 }
@@ -2208,7 +2228,7 @@ async function main() {
   await poll(bot);
 }
 
-export { formatEvolveResult, parseJsonOutput, predictionsHaveRawProbabilities };
+export { formatEvolveResult, parseJsonOutput, predictionsHaveRawProbabilities, isClosingCaptureEligible };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
