@@ -53,6 +53,9 @@ test('moneyline value can select lower-probability underdog when odds are mispri
   // implied (38.5%): 45 - 39.1 = 5.9.
   assert.equal(game.valuePick.fairProbability, 39.1);
   assert.equal(game.valuePick.edge, 5.9);
+  // Quarter-Kelly off the calibrated model prob (45%) and offered odds (+160):
+  // full = (1.6*0.45 - 0.55)/1.6 = 0.10625; quarter = 0.0265625 -> 2.7%.
+  assert.equal(game.valuePick.kellyStakePercent, 2.7);
 });
 
 test('record dominated favorite is downgraded to no bet even with positive value', () => {
@@ -88,6 +91,10 @@ test('record dominated favorite is downgraded to no bet even with positive value
   assert.equal(game.valuePick.teamName, 'Record Favorite');
   assert.equal(game.betDecision.status, 'NO BET');
   assert.match(game.betDecision.reason, /record\/H2H/);
+  // Record Favorite at -110 with model 60% has a positive raw edge, so a
+  // quarter-Kelly size is still computed on the value option; the NO BET
+  // downgrade is what suppresses it in /picks, not a null stake here.
+  assert.equal(typeof game.valuePick.kellyStakePercent, 'number');
 });
 
 test('approved audit guardrail can downgrade weak model edge to no bet', () => {

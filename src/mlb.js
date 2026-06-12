@@ -453,6 +453,32 @@ function round1(value) {
   return Math.round(toNumber(value, 0) * 10) / 10;
 }
 
+// American odds → net profit multiple per 1 unit staked (b in the Kelly formula).
+// -150 → 0.667 (risk 1 to win 0.667); +130 → 1.30.
+function americanProfitMultiple(value) {
+  const odds = Number(value);
+  if (!Number.isFinite(odds) || odds === 0) return null;
+  return odds > 0 ? odds / 100 : 100 / Math.abs(odds);
+}
+
+// Quarter-Kelly stake as a % of bankroll, computed from the CALIBRATED model
+// probability (winProbability, not winProbabilityRaw) and the offered American
+// odds. Calibration deliberately compresses model overconfidence; sizing off
+// raw conviction would re-inflate the edge and oversize bets. Quarter-Kelly
+// (fraction 0.25) matches the bot's risk_management.py default. Returns null
+// when there is no positive-EV stake.
+const KELLY_FRACTION = 0.25;
+function quarterKellyPercent(modelProbabilityPercent, odds) {
+  const b = americanProfitMultiple(odds);
+  if (b === null) return null;
+  const p = toNumber(modelProbabilityPercent, 0) / 100;
+  if (!(p > 0) || p >= 1) return null;
+  const q = 1 - p;
+  const fullKelly = (b * p - q) / b;
+  if (!(fullKelly > 0)) return null;
+  return round1(fullKelly * KELLY_FRACTION * 100);
+}
+
 function displayedProbabilityForSide(item, side) {
   if (side === 'away') {
     return toNumber(item.agentAnalysis?.awayProbability ?? item.away?.winProbability, 50);
@@ -487,7 +513,10 @@ function moneylineValueOption(item, side) {
     impliedProbability: round1(impliedProbability),
     fairProbability: round1(fairProbability),
     overround: devig ? round1(devig.overround) : null,
-    edge: round1(edge)
+    edge: round1(edge),
+    // Quarter-Kelly stake (% of bankroll) off the calibrated model probability
+    // and offered odds. null when there is no positive-EV stake.
+    kellyStakePercent: edge > 0 ? quarterKellyPercent(modelProbability, odds) : null
   };
 }
 

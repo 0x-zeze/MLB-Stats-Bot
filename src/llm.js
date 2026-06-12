@@ -707,6 +707,13 @@ function topPickCandidate(prediction) {
   const factors = supportingFactors(prediction, side);
   const score = probability - 50 + Math.max(edge, 0) * 0.8 + confidenceScore(confidence) + matchupEdge + statusBoost - warnings.length * 2.5 + lineupPenalty;
 
+  // Quarter-Kelly stake from mlb.js, but only when the value pick is the same
+  // side we're displaying — otherwise the stake belongs to the other team.
+  const valuePick = prediction.valuePick;
+  const kellyStake = valuePick && String(valuePick.teamId) === String(pick?.id)
+    ? valuePick.kellyStakePercent
+    : null;
+
   return {
     prediction,
     side,
@@ -717,6 +724,7 @@ function topPickCandidate(prediction) {
     confidence,
     edge,
     edgeInfo: calibratedEdgeInfo,
+    kellyStake,
     factors,
     score,
     status,
@@ -935,6 +943,11 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5, memor
     if (candidate.edgeInfo) {
       const oddsText = candidate.edgeInfo.odds != null ? `  @ ${candidate.edgeInfo.odds}` : '';
       lines.push(`     ${uiKV('📈', 'Edge', `${candidate.edge > 0 ? '+' : ''}${candidate.edge}%  vs  market ${candidate.edgeInfo.implied}%${oddsText}`)}`);
+    }
+    // Stake guidance only when this is a real bet (VALUE) with a positive
+    // quarter-Kelly size; NO BET / leans intentionally show no stake.
+    if (candidate.status === 'VALUE' && candidate.kellyStake > 0) {
+      lines.push(`     ${uiKV('💰', 'Stake', `${candidate.kellyStake}% bankroll (¼-Kelly)`)}`);
     }
 
     // Faktor & Keyakinan
