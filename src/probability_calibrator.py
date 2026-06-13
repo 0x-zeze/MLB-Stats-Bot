@@ -28,6 +28,15 @@ _MIN_SAMPLES = 50
 _BUCKET_SIZE = 0.03
 _MIN_BIN_COUNT = 3
 
+# Per-market overrides for low-volume markets. Moneyline has ~559 samples and
+# calibrates well with the tight defaults. Totals (~267) and yrfi (~192) are
+# thinner, so a wider bucket and a lower per-bin floor let them form >=3 stable
+# bins instead of collapsing to 1-2 points. Markets absent here use the defaults.
+_MARKET_PARAMS: dict[str, dict[str, float]] = {
+    "totals": {"min_samples": 40, "bucket_size": 0.05, "min_bin_count": 2},
+    "yrfi": {"min_samples": 40, "bucket_size": 0.05, "min_bin_count": 2},
+}
+
 _cached_maps: dict[str, list[tuple[float, float]]] | None = None
 
 
@@ -149,20 +158,26 @@ def _make_isotonic(points: list[tuple[float, float]]) -> list[tuple[float, float
     return result
 
 
-def _fit_market_map(rows: list[tuple[float, float]]) -> tuple[list[tuple[float, float]] | None, dict[str, Any]]:
+def _fit_market_map(
+    rows: list[tuple[float, float]],
+    *,
+    min_samples: int = _MIN_SAMPLES,
+    bucket_size: float = _BUCKET_SIZE,
+    min_bin_count: int = _MIN_BIN_COUNT,
+) -> tuple[list[tuple[float, float]] | None, dict[str, Any]]:
     """Bin (prob, outcome) pairs and fit an isotonic map for one market."""
-    if len(rows) < _MIN_SAMPLES:
-        return None, {"status": "skipped", "reason": f"only {len(rows)} samples (need {_MIN_SAMPLES})"}
+    if len(rows) < min_samples:
+        return None, {"status": "skipped", "reason": f"only {len(rows)} samples (need {min_samples})"}
 
     buckets: dict[int, list[tuple[float, float]]] = {}
     for prob, outcome in rows:
-        bucket_idx = int(prob / _BUCKET_SIZE)
+        bucket_idx = int(prob / bucket_size)
         buckets.setdefault(bucket_idx, []).append((prob, outcome))
 
     binned_points: list[tuple[float, float]] = []
     for bucket_idx in sorted(buckets):
         points = buckets[bucket_idx]
-        if len(points) < _MIN_BIN_COUNT:
+        if len(points) < min_bin_count:
             continue
         avg_prob = sum(p[0] for p in points) / len(points)
         avg_outcome = sum(p[1] for p in points) / len(points)
@@ -206,7 +221,13 @@ def retrain() -> dict[str, Any]:
     maps: dict[str, list[tuple[float, float]]] = {}
     per_market: dict[str, Any] = {}
     for market in _MARKETS:
-        calibration_map, info = _fit_market_map(rows_by_market[market])
+        params = _MARKET_PARAMS.get(market, {})
+        calibration_map, info = _fit_market_map(
+            rows_by_market[market],
+            min_samples=int(params.get("min_samples", _MIN_SAMPLES)),
+            bucket_size=float(params.get("bucket_size", _BUCKET_SIZE)),
+            min_bin_count=int(params.get("min_bin_count", _MIN_BIN_COUNT)),
+        )
         per_market[market] = info
         if calibration_map is not None:
             maps[market] = calibration_map

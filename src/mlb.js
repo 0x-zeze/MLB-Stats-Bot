@@ -1935,7 +1935,22 @@ function buildFirstInningProjection({
   // overconfident leans the data does not support.
   const baseRate = DEFAULTS.gameFirstInningRunRate;
   const shrunkProbability = blendedProbability * 0.4 + baseRate * 0.6;
-  const probability = clamp(shrunkProbability * 100, 35, 70);
+  let probability = clamp(shrunkProbability * 100, 35, 70);
+  // Calibrate at the source, mirroring moneyline/totals. The Python pipeline
+  // trains a 'yrfi' isotonic map the live path never applied. Analysis of 192
+  // graded YRFI outcomes found severe overconfidence at the high end (65-70%
+  // bucket won only 47%). `probability` is P(YES, a run scores); calibrate the
+  // favored side (YES vs NO) and derive YES back so the surfaced number reflects
+  // observed frequency instead of the raw, overconfident projection.
+  if (hasCalibrationMap('yrfi')) {
+    const yesProb = probability;
+    const noProb = 100 - probability;
+    if (yesProb >= noProb) {
+      probability = clamp(calibratePercent(yesProb, 'yrfi'), 35, 70);
+    } else {
+      probability = 100 - clamp(calibratePercent(noProb, 'yrfi'), 35, 70);
+    }
+  }
   // Break-even for a YRFI bet at typical -110/-120 juice is ~52-55%. Only lean
   // YES when the projection clears the base rate by a real margin, and NO only
   // when it falls well below it; otherwise there is no actionable edge.
@@ -2547,10 +2562,25 @@ export function applyTotalRunMarket(totalRuns, marketLine = DEFAULT_MARKET_TOTAL
 
   const safeLine = Number.isFinite(Number(marketLine)) ? Number(marketLine) : DEFAULT_MARKET_TOTAL;
   const key = String(safeLine);
-  const overProbability =
+  let overProbability =
     totalRuns.over?.[key] ?? totalRunProbability(totalRuns.projectedTotal, safeLine, 'over') * 100;
-  const underProbability =
+  let underProbability =
     totalRuns.under?.[key] ?? totalRunProbability(totalRuns.projectedTotal, safeLine, 'under') * 100;
+  // Calibrate at the source, mirroring moneyline (see predictGame). The Python
+  // evolution pipeline trains a 'totals' isotonic map but the live JS path never
+  // applied it, so /picks showed raw over/under probs. Analysis of 1018 graded
+  // outcomes found totals overconfident at the high end (70+ bucket predicted
+  // 76.8% but won 54.8%). Calibrate the favored side and complement the other so
+  // the two always sum to 100.
+  if (hasCalibrationMap('totals')) {
+    if (overProbability >= underProbability) {
+      overProbability = clamp(calibratePercent(overProbability, 'totals'), 30, 70);
+      underProbability = 100 - overProbability;
+    } else {
+      underProbability = clamp(calibratePercent(underProbability, 'totals'), 30, 70);
+      overProbability = 100 - underProbability;
+    }
+  }
   const lean =
     totalRuns.projectedTotal >= safeLine + 0.25 && overProbability >= underProbability
       ? `Over ${safeLine}`
@@ -2890,9 +2920,12 @@ function predictGame(
   const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent + weatherComponent;
 
   // Edge dampening: the model is systematically overconfident at higher edges.
-  // Analysis of 407 outcomes shows 60% predictions win only 50.7% (coin flip).
-  // Scale the edge down by 30% before sigmoid to reduce overconfidence.
-  // The calibration map handles the remaining gap.
+  // Analysis of 1018 graded outcomes confirms this holds: moneyline is the only
+  // calibrated, profitable market (ROI +8.6%, Brier lift +0.0016) precisely
+  // because it is both dampened here AND calibrated below. Totals/yrfi were
+  // overconfident only because they lacked the live calibration now added in
+  // applyTotalRunMarket / the YRFI path. Keep the 0.7 dampen; calibration maps
+  // handle the residual gap per market.
   const dampenedEdge = edge * 0.7;
 
   const rawHomeProbability = clamp(sigmoid(dampenedEdge) * 100, 30, 70);
