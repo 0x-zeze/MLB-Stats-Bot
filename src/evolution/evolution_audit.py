@@ -46,6 +46,13 @@ NON_ACTIONABLE_LOSS_TYPES = {
     "good_risk_handling",
     "good_data_quality_warning",
     "good_no_bet",
+    # Defensive boundary: legacy rows in language_losses.jsonl may still carry
+    # these outcome-conditioned loss types. They are (loss AND prob>0.65) /
+    # (win AND prob<0.55) by definition, so promoting them to root-cause patterns
+    # produces circular "0-N, 100% loss" advisories. New rows no longer use them
+    # (see language_loss.py); this keeps historical rows from re-poisoning memory.
+    "overconfidence",
+    "underconfidence",
 }
 
 SAFE_APPLY_MIN_SAMPLE = 5
@@ -247,10 +254,12 @@ def _segment_labels(row: dict[str, Any]) -> list[str]:
     clv = _bucket_clv(row)
     if clv:
         labels.append(clv)
-    if row.get("overconfidence"):
-        labels.append("calibration:overconfidence")
-    if row.get("underconfidence"):
-        labels.append("calibration:underconfidence")
+    # NOTE: do NOT add "calibration:overconfidence/underconfidence" segments here.
+    # Those per-row flags are defined as (loss AND prob>0.65) / (win AND prob<0.55),
+    # so grouping by them yields a segment that is 100% loss / 100% win by
+    # construction — a restatement of the outcome, not a predictive signal. The
+    # honest calibration signal is the predicted-vs-observed gap per probability
+    # bucket, measured in calibration_buckets() below (not outcome-conditioned).
     return labels
 
 

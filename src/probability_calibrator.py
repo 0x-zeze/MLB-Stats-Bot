@@ -29,12 +29,14 @@ _BUCKET_SIZE = 0.03
 _MIN_BIN_COUNT = 3
 
 # Per-market overrides for low-volume markets. Moneyline has ~559 samples and
-# calibrates well with the tight defaults. Totals (~267) and yrfi (~192) are
-# thinner, so a wider bucket and a lower per-bin floor let them form >=3 stable
-# bins instead of collapsing to 1-2 points. Markets absent here use the defaults.
+# calibrates well with the tight defaults. Totals (~286) and yrfi (~192) are
+# thinner: a wider bucket lets them form stable bins, but the per-bin floor is
+# kept at 4 (not 2) so a 3-sample tail bin that happens to go 3-0 cannot become
+# an extreme anchor (this is what produced the bogus totals 0.868->1.0 point).
+# Markets absent here use the defaults.
 _MARKET_PARAMS: dict[str, dict[str, float]] = {
-    "totals": {"min_samples": 40, "bucket_size": 0.05, "min_bin_count": 2},
-    "yrfi": {"min_samples": 40, "bucket_size": 0.05, "min_bin_count": 2},
+    "totals": {"min_samples": 40, "bucket_size": 0.05, "min_bin_count": 4},
+    "yrfi": {"min_samples": 40, "bucket_size": 0.05, "min_bin_count": 4},
 }
 
 _cached_maps: dict[str, list[tuple[float, float]]] | None = None
@@ -187,6 +189,22 @@ def _fit_market_map(
         return None, {"status": "skipped", "reason": "not enough bins with sufficient data"}
 
     calibration_map = _make_isotonic(binned_points)
+
+    # Degenerate guard: if pool-adjacent-violators collapsed everything to a single
+    # flat level (all y within 1e-6), the market has no monotonic signal — the
+    # mapping would just pull every probability to one constant (this is what
+    # happened to yrfi: a single [0.598 -> 0.406] point). Skip it and let
+    # calibrate() fall back to the raw probability, which is strictly safer than
+    # forcing a constant. A genuine calibration map needs >=2 distinct outputs.
+    distinct_y = {round(y, 6) for _, y in calibration_map}
+    if len(calibration_map) < 2 or len(distinct_y) < 2:
+        return None, {
+            "status": "skipped",
+            "reason": "degenerate map (no monotonic signal; falls back to raw)",
+            "samples": len(rows),
+            "bins": len(binned_points),
+        }
+
     return calibration_map, {
         "status": "success",
         "samples": len(rows),

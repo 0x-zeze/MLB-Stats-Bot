@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from .dashboard_service import (
     get_mock_backtest,
+    get_bet_ledger,
     get_evolution_dashboard,
     get_health_status,
     get_model_performance,
@@ -215,6 +216,12 @@ def api_history() -> dict[str, Any]:
 def api_performance() -> dict[str, Any]:
     """Return model performance and calibration summaries."""
     return get_model_performance()
+
+
+@app.get("/api/ledger", dependencies=API_DEPENDENCIES)
+def api_ledger() -> dict[str, Any]:
+    """Return the bet ledger: open + settled VALUE bets at quarter-Kelly stakes."""
+    return get_bet_ledger()
 
 
 @app.get("/api/evolution", dependencies=API_DEPENDENCIES)

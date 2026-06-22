@@ -8,14 +8,24 @@ function decisionBadge(decision) {
   return <Badge variant="nobet">NO BET</Badge>;
 }
 
+const BAND_LABEL = { tinggi: 'Tinggi', high: 'Tinggi', sedang: 'Sedang', medium: 'Sedang', rendah: 'Rendah', low: 'Rendah' };
+
 function ConfidenceColor({ confidence }) {
   const c = String(confidence || '').toLowerCase();
-  const colors = { high: 'bg-accent-green', medium: 'bg-accent-blue', low: 'bg-accent-yellow' };
+  const colors = { tinggi: 'bg-accent-green', high: 'bg-accent-green', sedang: 'bg-accent-blue', medium: 'bg-accent-blue', rendah: 'bg-accent-yellow', low: 'bg-accent-yellow' };
   return (
     <span className={`inline-flex rounded-md border-2 border-ink px-2 py-0.5 text-xs font-black uppercase text-ink ${colors[c] || 'bg-stone-200'}`}>
-      {confidence || '-'}
+      {BAND_LABEL[c] || confidence || '-'}
     </span>
   );
+}
+
+function fmtStake(game) {
+  const kelly = Number(game.kelly_stake_percent);
+  if (game.decision === 'BET' && Number.isFinite(kelly)) return `${kelly.toFixed(2)}u`;
+  const edge = Number(game.value?.edge ?? game.moneyline?.edge);
+  if (Number.isFinite(edge)) return `${edge >= 0 ? '+' : ''}${edge.toFixed(1)}%`;
+  return '-';
 }
 
 function QualityBar({ score }) {
@@ -89,7 +99,8 @@ export default function TodaySlate({ games = [], loading, error, onSelectGame })
                   <th className="hidden px-4 py-3 text-left text-[11px] font-black uppercase tracking-tight text-ink xl:table-cell">Venue</th>
                   <th className="px-4 py-3 text-left text-[11px] font-black uppercase tracking-tight text-ink">Pick</th>
                   <th className="px-4 py-3 text-left text-[11px] font-black uppercase tracking-tight text-ink">Confidence</th>
-                  <th className="hidden px-4 py-3 text-left text-[11px] font-black uppercase tracking-tight text-ink sm:table-cell">Quality</th>
+                  <th className="hidden px-4 py-3 text-left text-[11px] font-black uppercase tracking-tight text-ink sm:table-cell">Stake / Edge</th>
+                  <th className="hidden px-4 py-3 text-left text-[11px] font-black uppercase tracking-tight text-ink lg:table-cell">Quality</th>
                   <th className="px-4 py-3 text-left text-[11px] font-black uppercase tracking-tight text-ink">Signal</th>
                 </tr>
               </thead>
@@ -132,9 +143,12 @@ export default function TodaySlate({ games = [], loading, error, onSelectGame })
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <ConfidenceColor confidence={moneyline.confidence} />
+                        <ConfidenceColor confidence={game.confidence_band || moneyline.confidence} />
                       </td>
                       <td className="hidden px-4 py-3 sm:table-cell">
+                        <span className="text-xs font-black text-ink">{fmtStake(game)}</span>
+                      </td>
+                      <td className="hidden px-4 py-3 lg:table-cell">
                         <QualityBar score={quality.score} />
                       </td>
                       <td className="px-4 py-3">

@@ -124,40 +124,9 @@
       "status": "active",
       "target": "probability:65-70",
       "type": "confidence_cap"
-    },
-    {
-      "backtest_status": "audit_calibration_gate",
-      "candidate_id": "audit-safe-confidence-cap-probability-60-65",
-      "date_created": "2026-06-09T03:59:08.729787+00:00",
-      "evidence": {
-        "avg_predicted_probability": 61.6,
-        "bucket": "probability:60-65",
-        "calibration_error": -7.7,
-        "losses": 71,
-        "observed_win_rate": 53.9,
-        "sample_size": 154,
-        "verdict": "overconfident",
-        "weighted_observed_win_rate": 53.9,
-        "wins": 83
-      },
-      "parameters": {
-        "cap_one_level": true,
-        "probability_bucket": "probability:60-65"
-      },
-      "production_update_allowed": true,
-      "promotion_status": "approved_conservative_guardrail",
-      "reason": "Observed win rate 53.9% vs predicted 61.6%.",
-      "rollback_supported": true,
-      "rule": "Cap confidence one level lower for probability:60-65 until calibration improves.",
-      "rule_key": "audit:confidence_cap:probability-60-65",
-      "rule_version": "rules-v1.228",
-      "source": "evolution_audit",
-      "status": "active",
-      "target": "probability:60-65",
-      "type": "confidence_cap"
     }
   ],
-  "active_rule_version": "rules-v1.228",
+  "active_rule_version": "rules-v1.229",
   "approved": [
     {
       "candidate": {
@@ -323,7 +292,7 @@
         "candidate_id": "audit-safe-confidence-cap-probability-60-65",
         "reason": "Conservative audit guardrail only reduces risk; it does not increase confidence.",
         "release_reason": "Calibration bucket now within threshold.",
-        "released_at": "2026-06-03T08:23:05.590760+00:00",
+        "released_at": "2026-06-17T22:04:32.675308+00:00",
         "reported": true,
         "rule_version": "rules-v1.4",
         "sample_size": 5,
@@ -11213,9 +11182,12 @@
       "decision": {
         "candidate_id": "audit-safe-confidence-cap-probability-60-65",
         "reason": "Conservative audit guardrail only reduces risk; it does not increase confidence.",
+        "release_reason": "Calibration bucket now within threshold.",
+        "released_at": "2026-06-17T22:04:32.675397+00:00",
+        "reported": true,
         "rule_version": "rules-v1.228",
         "sample_size": 920,
-        "status": "approved"
+        "status": "released"
       },
       "rollback_supported": true
     }

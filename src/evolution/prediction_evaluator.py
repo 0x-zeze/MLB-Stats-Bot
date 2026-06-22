@@ -407,10 +407,13 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         "calibration_bucket": confidence,
         "edge": edge,
         "data_quality": data_quality,
-        # Overconfidence = model was >65% sure but lost → real calibration gap.
-        # Underconfidence = model was <55% sure but won → real calibration gap.
-        # has_probability guards against the 0.5 default standing in for a
-        # missing field, which is not a calibration signal.
+        # Per-row diagnostics ONLY — never aggregate these into a "pattern".
+        # By definition overconfidence = (loss AND prob>0.65) and
+        # underconfidence = (win AND prob<0.55), so any segment grouped on them is
+        # 100% loss / 100% win by construction (a restatement of the outcome, not a
+        # predictive signal). Authoritative calibration is the predicted-vs-observed
+        # gap per probability bucket in evolution_audit.calibration_buckets().
+        # These fields are kept for single-game inspection/notes, not for evolution.
         "overconfidence": has_probability and status == "loss" and probability_value > 0.65,
         "underconfidence": has_probability and status == "win" and probability_value < 0.55,
         "main_factors": trajectory.get("main_factors") or [],

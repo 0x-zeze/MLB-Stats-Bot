@@ -129,7 +129,10 @@ function buildNewsQuestion(args) {
 }
 
 function isAllowed(chatId) {
-  if (config.allowedChatIds.length === 0) return true;
+  // Fail closed: an empty allowlist denies everyone rather than opening the bot
+  // to any stranger who finds it (who could then burn paid LLM/Odds-API calls).
+  // /chatid runs before this gate so a new operator can still discover their ID.
+  if (config.allowedChatIds.length === 0) return false;
   return config.allowedChatIds.includes(String(chatId));
 }
 
@@ -170,7 +173,10 @@ async function attachMarketContext(predictions) {
 
   for (const prediction of predictions) {
     if (prediction.currentOdds?.totalLine && prediction.totalRuns) {
-      prediction.totalRuns = applyTotalRunMarket(prediction.totalRuns, prediction.currentOdds.totalLine);
+      prediction.totalRuns = applyTotalRunMarket(prediction.totalRuns, prediction.currentOdds.totalLine, {
+        overPrice: prediction.currentOdds.overPrice,
+        underPrice: prediction.currentOdds.underPrice
+      });
     }
 
     // Bayesian prior: blend model probability with market-implied probability.
@@ -792,7 +798,7 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
         uiKV('•', 'Expected runs', `${prediction.away.abbreviation || prediction.away.name} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${prediction.home.abbreviation || prediction.home.name} ${totalRuns.homeExpectedRuns.toFixed(1)}`),
         uiKV('•', 'Market total', `${totalRuns.marketLine} | ${signedRuns(totalRuns.marketDeltaRuns)} runs vs model`),
         uiKV('•', 'Best lean', `${totalRuns.bestLean} | ${totalRuns.confidence}`),
-        uiKV('•', 'Model edge', `${signedRuns(totalRuns.modelEdge)}% vs 50% baseline`),
+        uiKV('•', 'Model edge', `${signedRuns(totalRuns.modelEdge)}% vs ${totalRuns.hasMarketPrice ? `no-vig market ${totalRuns.marketProbability.toFixed(0)}%` : '50% baseline'}`),
         '',
         uiSection('📈', 'Over Probability'),
         ...totalProbabilityLines('Over', totalRuns.over),
@@ -897,8 +903,8 @@ async function handlePredictCallback(bot, callbackQuery) {
   }
 
   await attachOddsContext([prediction]);
-  await attachAgentAnalyses([prediction]);
   await attachMarketContext([prediction]);
+  await attachAgentAnalyses([prediction]);
   storage.savePredictions(dateYmd, [prediction]);
   await bot.sendMessage(chatId, formatLivePrediction(dateYmd, prediction, { marketLine }), {
     reply_markup: totalMarketKeyboard(dateYmd, gamePk)
@@ -2113,6 +2119,21 @@ async function processWeeklyRecap(bot) {
 // poll cadence and restarts; narrow enough not to pull tomorrow's slate.
 const CLOSING_REFRESH_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours
 
+// Credit-saving throttle for the BACKGROUND closing-line capture (does not touch
+// /picks freshness, which uses its own fetch). The Odds API free tier is only
+// 500 credits/month and each fetch costs 2 (h2h+totals), so refreshing every
+// poll for 3 hours burns the quota in days. Lines far from first pitch are not
+// the closing line anyway — what we want is the LAST price near first pitch. So:
+//   * within FINAL_WINDOW of first pitch: capture every cycle (nail the close),
+//   * otherwise: capture at most once per MIN_INTERVAL.
+// Both overridable via env for paid plans (set interval to 0 to disable throttle).
+const CLOSING_CAPTURE_FINAL_WINDOW_MS = 40 * 60 * 1000; // 40 min before first pitch
+function closingCaptureMinIntervalMs() {
+  const configured = Number(process.env.CLOSING_CAPTURE_INTERVAL_MIN);
+  if (Number.isFinite(configured) && configured >= 0) return configured * 60 * 1000;
+  return 15 * 60 * 1000; // 15 minutes
+}
+
 // Pure predicate: should this prediction's line be captured/refreshed now?
 // Eligible when the game has not started (startMs > now, the hard guard against
 // overwriting a frozen closing line) and starts within the pre-game window.
@@ -2123,6 +2144,29 @@ function isClosingCaptureEligible(prediction, now = Date.now(), windowMs = CLOSI
   if (!Number.isFinite(startMs) || startMs <= now) return false;
   return startMs - now <= windowMs;
 }
+
+// Pure predicate: given the eligible games, should we actually spend an API
+// fetch right now? True when (a) we haven't fetched within minIntervalMs, or
+// (b) any eligible game is inside the final window (where fresh closing matters).
+function shouldCaptureClosingNow(
+  soonGames,
+  now,
+  lastCaptureAt,
+  { minIntervalMs = closingCaptureMinIntervalMs(), finalWindowMs = CLOSING_CAPTURE_FINAL_WINDOW_MS } = {}
+) {
+  if (!Array.isArray(soonGames) || soonGames.length === 0) return false;
+  const anyNearFirstPitch = soonGames.some((game) => {
+    const start = game?.startTime || game?.start || game?.gameTime;
+    const startMs = new Date(start).getTime();
+    return Number.isFinite(startMs) && startMs - now <= finalWindowMs;
+  });
+  if (anyNearFirstPitch) return true;
+  if (minIntervalMs <= 0) return true;
+  return now - (lastCaptureAt || 0) >= minIntervalMs;
+}
+
+// Last wall-clock time the background capture actually spent an API fetch.
+let lastClosingCaptureAt = 0;
 
 async function captureClosingLinesForUpcoming() {
   // Query a 2-day range (yesterday + today, local), not a single date: a game
@@ -2144,7 +2188,13 @@ async function captureClosingLinesForUpcoming() {
   // no longer permanently loses a game's closing line.
   const soonGames = predictions.filter((p) => isClosingCaptureEligible(p, now));
 
+  // Throttle the actual API spend: skip the fetch unless enough time has passed
+  // OR a game is near first pitch (where the closing proxy matters). This is the
+  // main Odds API credit-saver — see shouldCaptureClosingNow.
+  if (!shouldCaptureClosingNow(soonGames, now, lastClosingCaptureAt)) return;
+
   if (soonGames.length > 0) {
+    lastClosingCaptureAt = now;
     const result = await captureClosingLines(soonGames);
     if (result.captured > 0) {
       console.log(`Closing lines captured/refreshed for ${result.captured} game(s).`);
@@ -2228,7 +2278,7 @@ async function main() {
   await poll(bot);
 }
 
-export { formatEvolveResult, parseJsonOutput, predictionsHaveRawProbabilities, isClosingCaptureEligible };
+export { formatEvolveResult, parseJsonOutput, predictionsHaveRawProbabilities, isClosingCaptureEligible, shouldCaptureClosingNow };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((error) => {

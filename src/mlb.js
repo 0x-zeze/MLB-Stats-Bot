@@ -18,6 +18,13 @@ const TOTAL_RUN_LINES = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
 const DEFAULT_MARKET_TOTAL = 8.5;
 const MONEYLINE_VALUE_EDGE_THRESHOLD = 3.0;
 const STRONG_VALUE_EDGE_THRESHOLD = 5.5;
+// Calibrated win-probability floor for a graded VALUE bet. On 598 graded
+// moneyline outcomes, "edge" (model% - fair%) had almost no rank power
+// (AUC ~0.53), but the calibrated probability itself did: betting only at
+// >=58% lifted win rate from 56.5% to ~58% and ROI from +9.8% to +13.4% while
+// keeping ~50% of volume. The model cannot reliably distinguish thin edges, so
+// selectivity on conviction (not on edge) is what sharpens the slate.
+const MIN_VALUE_PROBABILITY = 58.0;
 const OPENER_KEYWORD_RE = /\b(opener|bulk|piggyback)\b|opener\s*\/\s*bulk/i;
 const OPENER_NOTE_KEYS = new Set([
   'note',
@@ -313,9 +320,9 @@ function firstInningPickText(firstInning) {
   const pick = firstInning?.agent?.pick || firstInning?.baselinePick || 'NO';
   const probability = firstInning?.agent?.probability ?? firstInning?.baselineProbability ?? 50;
   if (String(pick).toUpperCase() === 'NO BET') {
-    // Advisory-only: show the lean as context but mark it not actionable.
+    // Advisory-only: show the lean as context, framed by confidence.
     const lean = firstInning?.baselineLean || (probability >= 52 ? 'YES' : 'NO');
-    return `NO BET (advisory: lean ${lean}) ${percent(probability)}`;
+    return `lean ${lean} ${percent(probability)} (advisory)`;
   }
   const label = pick === 'YES' ? 'YES / YRFI' : 'NO / NRFI';
   return `${label} ${percent(probability)}`;
@@ -449,6 +456,19 @@ function devigMoneylinePercent(awayOdds, homeOdds) {
   };
 }
 
+function devigTotalsPercent(overOdds, underOdds) {
+  const overImplied = americanImpliedProbabilityPercent(overOdds);
+  const underImplied = americanImpliedProbabilityPercent(underOdds);
+  if (overImplied === null || underImplied === null) return null;
+  const total = overImplied + underImplied;
+  if (!Number.isFinite(total) || total <= 0) return null;
+  return {
+    over: (overImplied / total) * 100,
+    under: (underImplied / total) * 100,
+    overround: total - 100
+  };
+}
+
 function round1(value) {
   return Math.round(toNumber(value, 0) * 10) / 10;
 }
@@ -526,6 +546,13 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
 
   if (option.edge < MONEYLINE_VALUE_EDGE_THRESHOLD) {
     reasons.push(`value edge hanya ${option.edge >= 0 ? '+' : ''}${option.edge.toFixed(1)}%`);
+  }
+
+  // Conviction floor: edge alone does not predict winners (AUC ~0.53), but the
+  // calibrated model probability does. Below this floor the pick is a coin-flip
+  // dressed up by a wide market price, so it stays a lean, never a graded bet.
+  if (toNumber(option.modelProbability, 0) < MIN_VALUE_PROBABILITY) {
+    reasons.push(`model conviction ${toNumber(option.modelProbability, 0).toFixed(1)}% < ${MIN_VALUE_PROBABILITY}% floor`);
   }
 
   const matchupEdge = Math.abs(toNumber(item.modelBreakdown?.matchupEdge, 0));
@@ -699,29 +726,53 @@ export function applyMoneylineValueMarket(item) {
   return item;
 }
 
+// Confidence band for the picked side, derived purely from the calibrated win
+// probability (the only signal shown to discriminate winners). Replaces the old
+// VALUE / NO BET / LEAN ONLY status labels in the user-facing output; the
+// internal betDecision.status is unchanged and still drives the ledger.
+export function confidenceBand(percent) {
+  if (percent >= 65) return 'tinggi';
+  if (percent >= MIN_VALUE_PROBABILITY) return 'sedang';
+  return 'rendah';
+}
+
+// The model's own favored side and its calibrated win probability — this is what
+// "confidence" means to the reader, independent of which side the edge-based
+// value option happens to land on.
+function modelPickSide(item) {
+  const away = toNumber(item?.away?.winProbability, 0);
+  const home = toNumber(item?.home?.winProbability, 0);
+  return home >= away
+    ? { team: item?.home, percent: home }
+    : { team: item?.away, percent: away };
+}
+
+function confidenceText(percent) {
+  return `${percent.toFixed(1)}% (${confidenceBand(percent)})`;
+}
+
 export function moneylineDecisionLines(item) {
   const decision = item?.betDecision;
   if (!decision) return [];
 
+  // A graded bet (cleared the conviction floor): show the actionable priced pick
+  // framed by its confidence. By construction the value side is >=58% here.
   if (decision.status === 'VALUE') {
     return [
-      uiKV('💰', 'Value Pick', `${decision.teamName} ${formatMoneylineOdds(decision.odds)} | ${decision.book}`),
-      uiKV('🎯', 'Bet Decision', `VALUE | model ${decision.modelProbability.toFixed(1)}% vs implied ${decision.impliedProbability.toFixed(1)}% | edge +${decision.edge.toFixed(1)}%`)
+      uiKV('💰', 'Pick', `${decision.teamName} ${formatMoneylineOdds(decision.odds)} | ${decision.book}`),
+      uiKV('🎚️', 'Confidence', `${confidenceText(toNumber(decision.modelProbability, 0))} | edge ${decision.edge >= 0 ? '+' : ''}${toNumber(decision.edge, 0).toFixed(1)}%`)
     ];
   }
 
-  if (decision.status === 'NO BET') {
-    const pick = item.valuePick;
-    const valueLine = pick
-      ? uiKV('🔎', 'Value Check', `${pick.teamName} ${formatMoneylineOdds(pick.odds)} | ${pick.book} | edge ${pick.edge >= 0 ? '+' : ''}${pick.edge.toFixed(1)}%`)
-      : null;
-    return [
-      valueLine,
-      uiKV('🛑', 'Bet Decision', `NO BET | ${decision.reason}`)
-    ].filter(Boolean);
-  }
-
-  return [uiKV('ℹ️', 'Bet Decision', `LEAN ONLY | ${decision.reason}`)];
+  // Below the floor or no odds: show the MODEL's favored side as an advisory
+  // lean with its confidence — never dressed up as a recommended bet.
+  const model = modelPickSide(item);
+  const oddsContext = item.valuePick && Number.isFinite(Number(item.valuePick.odds))
+    ? ` | best price ${formatMoneylineOdds(item.valuePick.odds)} ${item.valuePick.book}`
+    : '';
+  return [
+    uiKV('🎚️', 'Confidence', `${model.team?.name || 'lean'} ${confidenceText(model.percent)} (advisory)${oddsContext}`)
+  ];
 }
 
 function dataQualityText(item) {
@@ -742,22 +793,18 @@ function dataQualityText(item) {
 
 function bettingSafetyLines(item, pick) {
   const decision = item?.betDecision || {};
-  const modelProbability = Math.max(toNumber(item?.away?.winProbability, 0), toNumber(item?.home?.winProbability, 0));
-  const confidence = item?.agentAnalysis?.confidence
-    ? `agent ${item.agentAnalysis.confidence}`
-    : `model ${modelProbability.toFixed(1)}%`;
+  const model = modelPickSide(item);
+  const confidence = confidenceText(model.percent);
   const valueText =
     decision.status === 'VALUE'
       ? `${decision.teamName} ${formatMoneylineOdds(decision.odds)} | edge +${toNumber(decision.edge, 0).toFixed(1)}%`
       : 'none';
-  const noBetText = decision.status === 'NO BET' ? decision.reason : 'none';
   return [
     uiKV('🧭', 'Prediction', pick?.name || 'unavailable'),
     uiKV('📌', 'Lean', item?.totalRuns?.bestLean || pick?.name || 'none'),
     uiKV('💰', 'Value', valueText),
-    uiKV('🛑', 'No Bet', noBetText),
-    uiKV('🧪', 'Data Quality', dataQualityText(item)),
     uiKV('🎚️', 'Confidence', confidence),
+    uiKV('🧪', 'Data Quality', dataQualityText(item)),
     uiKV('⚠️', 'Risk Warning', 'Analysis only; probabilities are estimates, not guarantees')
   ];
 }
@@ -1533,7 +1580,22 @@ async function fetchStandings(season, dateYmd) {
   return getStandingMap(await fetchJson(`${MLB_BASE_URL}/standings?${params}`));
 }
 
+const firstInningProfileCache = new Map();
+
 async function fetchFirstInningProfiles(season, dateYmd) {
+  // Cutoff is always dateYmd-1 and only Final games are included, so the result
+  // is immutable per (season, date) — memoize to avoid refetching ~2 boxscore +
+  // live-feed calls per league game (~2000 MLB API calls) on every prediction.
+  const cacheKey = `${season}:${dateYmd}`;
+  const cached = firstInningProfileCache.get(cacheKey);
+  if (cached) return cached;
+
+  const result = await buildFirstInningProfiles(season, dateYmd);
+  firstInningProfileCache.set(cacheKey, result);
+  return result;
+}
+
+async function buildFirstInningProfiles(season, dateYmd) {
   const params = new URLSearchParams({
     sportId: '1',
     season: String(season),
@@ -2557,7 +2619,7 @@ function totalConfidence(probability) {
   return 'low';
 }
 
-export function applyTotalRunMarket(totalRuns, marketLine = DEFAULT_MARKET_TOTAL, marketProbability = 50) {
+export function applyTotalRunMarket(totalRuns, marketLine = DEFAULT_MARKET_TOTAL, marketOdds = null) {
   if (!totalRuns) return null;
 
   const safeLine = Number.isFinite(Number(marketLine)) ? Number(marketLine) : DEFAULT_MARKET_TOTAL;
@@ -2592,18 +2654,32 @@ export function applyTotalRunMarket(totalRuns, marketLine = DEFAULT_MARKET_TOTAL
     : lean.startsWith('Over')
       ? overProbability
       : Math.max(overProbability, underProbability);
-  const safeMarketProbability = Number.isFinite(Number(marketProbability))
-    ? Number(marketProbability)
-    : 50;
+
+  // Edge must be measured against the de-vigged market, not a flat 50% baseline.
+  // The book's over/under prices imply probabilities that sum to >100% (the vig);
+  // normalize them so the comparison is model-vs-fair-line for the leaning side.
+  // Without live prices (e.g. the projection-building path), fall back to 50.
+  const devig = marketOdds ? devigTotalsPercent(marketOdds.overPrice, marketOdds.underPrice) : null;
+  const hasMarketPrice = devig !== null;
+  const marketProbability = !hasMarketPrice
+    ? 50
+    : lean.startsWith('Under')
+      ? devig.under
+      : lean.startsWith('Over')
+        ? devig.over
+        : Math.max(devig.over, devig.under);
 
   return {
     ...totalRuns,
     marketLine: safeLine,
-    marketProbability: safeMarketProbability,
+    marketProbability,
+    hasMarketPrice,
     marketDeltaRuns: totalRuns.projectedTotal - safeLine,
     overMarketProbability: overProbability,
     underMarketProbability: underProbability,
-    modelEdge: leanProbability - safeMarketProbability,
+    overNoVigProbability: devig?.over ?? null,
+    underNoVigProbability: devig?.under ?? null,
+    modelEdge: leanProbability - marketProbability,
     bestLean: lean,
     confidence: totalConfidence(leanProbability / 100)
   };
@@ -2907,10 +2983,15 @@ function predictGame(
     lineupEdge * 0.85 +
     bullpenComponent +
     fatigueEdge * 0.7;
+  // Record signal uses ONLY the Log5 blend. winPctEdge and pythagoreanEdge were
+  // double-counted: homeReferenceBlend already folds in homeSeasonLog5 (season
+  // win%) and homePythagoreanLog5 (pythag), so the linear winPctEdge/
+  // pythagoreanEdge terms re-added the same information, over-weighting standings
+  // vs today's matchup. Log5 is the correct matchup-probability transform of two
+  // win rates; its weight is raised to carry the record signal the three
+  // correlated terms previously split. Calibration absorbs the residual scale.
   const recordContextEdge =
-    winPctEdge * 0.18 +
-    pythagoreanEdge * 0.14 +
-    log5Edge * 0.16 +
+    log5Edge * 0.34 +
     formComponent +
     h2hEdge * 0.025 +
     memoryEdge +
@@ -2958,9 +3039,9 @@ function predictGame(
     lineupEdge: lineupEdge * 0.85,
     bullpenEdge: bullpenComponent,
     fatigueEdge: fatigueEdge * 0.7,
-    winPctEdge: winPctEdge * 0.18,
-    pythagoreanEdge: pythagoreanEdge * 0.14,
-    log5Edge: log5Edge * 0.16,
+    winPctEdge,
+    pythagoreanEdge,
+    log5Edge: log5Edge * 0.34,
     formEdge: formComponent,
     h2hEdge: h2hEdge * 0.025,
     memoryEdge,
@@ -2989,6 +3070,7 @@ function predictGame(
     starterLine: homeOpenerSituation.isOpener
       ? 'Bulk pitcher TBD'
       : pitcherLabel(homeStarter, homePitcherStats),
+    starterEra: homePitcherStats ? statEra(homePitcherStats) : null,
     openerSituation: homeOpenerSituation,
     winProbability: homeProbability,
     winProbabilityRaw: rawHomeProbability
@@ -3002,6 +3084,7 @@ function predictGame(
     starterLine: awayOpenerSituation.isOpener
       ? 'Bulk pitcher TBD'
       : pitcherLabel(awayStarter, awayPitcherStats),
+    starterEra: awayPitcherStats ? statEra(awayPitcherStats) : null,
     openerSituation: awayOpenerSituation,
     winProbability: awayProbability,
     winProbabilityRaw: rawAwayProbability
@@ -3164,13 +3247,20 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
     ...new Set(games.flatMap((game) => [game.teams.away.team.id, game.teams.home.team.id]))
   ];
 
+  // Each fetch falls back to an empty Map so one transient API failure degrades
+  // that single signal (the model has DEFAULTS for missing data) instead of
+  // throwing out of getMlbPredictions and zeroing the entire slate.
+  const warnFetch = (label) => (error) => {
+    console.warn(`getMlbPredictions: ${label} fetch failed, using empty data:`, error.message);
+    return new Map();
+  };
   const [teamStats, standings, firstInningProfiles, bullpenProfiles, scheduleFatigueProfiles, injuryProfiles] = await Promise.all([
-    fetchTeamStats(season),
-    fetchStandings(season, dateYmd),
-    fetchFirstInningProfiles(season, dateYmd),
-    fetchBullpenProfiles(teamIds, dateYmd),
-    fetchScheduleFatigueProfiles(teamIds, dateYmd),
-    fetchInjuryProfiles(teamIds, dateYmd, season)
+    fetchTeamStats(season).catch(warnFetch('teamStats')),
+    fetchStandings(season, dateYmd).catch(warnFetch('standings')),
+    fetchFirstInningProfiles(season, dateYmd).catch(warnFetch('firstInningProfiles')),
+    fetchBullpenProfiles(teamIds, dateYmd).catch(warnFetch('bullpenProfiles')),
+    fetchScheduleFatigueProfiles(teamIds, dateYmd).catch(warnFetch('scheduleFatigueProfiles')),
+    fetchInjuryProfiles(teamIds, dateYmd, season).catch(warnFetch('injuryProfiles'))
   ]);
   const probablePitcherIds = [
     ...new Set(

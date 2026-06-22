@@ -5,7 +5,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from './config.js';
-import { getMlbPredictions } from './mlb.js';
+import { applyMoneylineValueMarket, confidenceBand, getMlbPredictions } from './mlb.js';
+import { attachCurrentOdds } from './lineMovement.js';
 import { Storage } from './storage.js';
 import { dateInTimezone, toNumber } from './utils.js';
 
@@ -50,6 +51,22 @@ function sendJson(response, statusCode, payload) {
 
 function sendError(response, statusCode, message, detail = '') {
   sendJson(response, statusCode, { error: message, detail });
+}
+
+function dashboardApiToken() {
+  return (process.env.DASHBOARD_API_TOKEN || '').trim();
+}
+
+function isLoopbackHost(value) {
+  return ['127.0.0.1', 'localhost', '::1', ''].includes(String(value || '').trim());
+}
+
+function isAuthorized(request) {
+  const expected = dashboardApiToken();
+  if (!expected) return true;
+  const authorization = request.headers.authorization || '';
+  const [scheme, supplied] = authorization.split(' ');
+  return scheme?.toLowerCase() === 'bearer' && supplied?.trim() === expected;
 }
 
 function safeBoolean(value) {
@@ -362,6 +379,38 @@ function summarizeTotalRuns(totalRuns, venue) {
   };
 }
 
+function summarizeValueDecision(prediction) {
+  const decision = prediction.betDecision;
+  if (!decision) return null;
+
+  // The model's favored side and its calibrated win probability drives the
+  // confidence band shown to the reader, independent of which side the
+  // edge-based value option lands on (mirrors mlb.js modelPickSide).
+  const awayProbability = toNumber(prediction.away?.winProbability, 0);
+  const homeProbability = toNumber(prediction.home?.winProbability, 0);
+  const modelSide = homeProbability >= awayProbability
+    ? { team: prediction.home?.name, percent: homeProbability }
+    : { team: prediction.away?.name, percent: awayProbability };
+  const valuePick = prediction.valuePick || null;
+
+  return {
+    status: decision.status,
+    teamName: decision.teamName ?? valuePick?.teamName ?? null,
+    teamAbbreviation: decision.teamAbbreviation ?? valuePick?.teamAbbreviation ?? null,
+    odds: decision.odds ?? valuePick?.odds ?? null,
+    book: decision.book ?? valuePick?.book ?? null,
+    modelProbability: decision.modelProbability ?? valuePick?.modelProbability ?? null,
+    impliedProbability: decision.impliedProbability ?? valuePick?.impliedProbability ?? null,
+    edge: decision.edge ?? valuePick?.edge ?? null,
+    kellyStakePercent: valuePick?.kellyStakePercent ?? null,
+    reason: decision.reason || '',
+    reasons: decision.reasons || [],
+    modelSide: modelSide.team,
+    modelSideProbability: Math.round(modelSide.percent),
+    confidenceBand: confidenceBand(modelSide.percent),
+  };
+}
+
 function summarizeLivePrediction(prediction, meta = {}) {
   const totalRuns = prediction.totalRuns || null;
   const probabilities = liveDisplayProbabilities(prediction);
@@ -397,9 +446,12 @@ function summarizeLivePrediction(prediction, meta = {}) {
       confidence: prediction.agentAnalysis?.confidence || 'model',
       source: agentActive ? 'Analyst Agent + deterministic model' : 'Deterministic model',
     },
+    value: summarizeValueDecision(prediction),
     starters: {
       away: prediction.away?.starterLine || 'TBD',
       home: prediction.home?.starterLine || 'TBD',
+      awayEra: prediction.away?.starterEra ?? null,
+      homeEra: prediction.home?.starterEra ?? null,
     },
     totalRuns: summarizeTotalRuns(totalRuns, prediction.venue),
     firstInning: prediction.firstInning
@@ -435,6 +487,25 @@ function summarizeLivePrediction(prediction, meta = {}) {
 export async function livePredictions(dateYmd) {
   ensureInitialized();
   const predictions = await getMlbPredictions(dateYmd, storage.getMemory());
+
+  // Mirror the bot's enrichment (see index.js buildAlertPayload): attach live
+  // odds, then run the moneyline value engine so each prediction carries
+  // betDecision / valuePick / kellyStakePercent. Odds may be unavailable (free
+  // tier quota exhausted) — degrade gracefully so the dashboard still shows the
+  // model's advisory confidence band instead of crashing or going blank.
+  try {
+    await attachCurrentOdds(predictions);
+  } catch (error) {
+    console.warn('Dashboard odds/value context unavailable:', error.message);
+  }
+  for (const prediction of predictions) {
+    try {
+      applyMoneylineValueMarket(prediction);
+    } catch (error) {
+      console.warn(`Value engine failed for game ${prediction.gamePk}:`, error.message);
+    }
+  }
+
   const fetchedAt = new Date().toISOString();
   return {
     date: dateYmd,
@@ -484,6 +555,10 @@ function statusPayload() {
 
 async function routeApi(request, response, url) {
   ensureInitialized();
+  if (!isAuthorized(request)) {
+    sendError(response, 401, 'Unauthorized', 'Set Authorization: Bearer <DASHBOARD_API_TOKEN>');
+    return true;
+  }
   try {
     if (url.pathname === '/api/status') {
       sendJson(response, 200, statusPayload());
@@ -570,6 +645,16 @@ export function startDashboard({ enabled } = {}) {
   }
 
   if (activeServer) return Promise.resolve(activeServer);
+
+  // The dashboard API has no auth unless DASHBOARD_API_TOKEN is set, and
+  // /api/backtest spawns Python. Refuse to expose it on a non-loopback host
+  // without a token — fall back to loopback so the bot keeps running locally.
+  if (!isLoopbackHost(host) && !dashboardApiToken()) {
+    console.warn(
+      `MLB dashboard: refusing to bind ${host} without DASHBOARD_API_TOKEN; using 127.0.0.1. Set a token to expose it.`
+    );
+    host = '127.0.0.1';
+  }
 
   activeServer = createDashboardServer();
   return new Promise((resolveStart, rejectStart) => {

@@ -262,6 +262,31 @@ def _winner_from_probabilities(game: dict[str, Any]) -> tuple[str | None, float 
     return game.get("away_team"), away_probability
 
 
+_VALUE_STATUS_TO_DECISION = {
+    "VALUE": "BET",
+    "LEAN ONLY": "LEAN",
+    "NO BET": "NO BET",
+}
+
+
+def _decision_from_value(value: dict[str, Any]) -> str:
+    """Map the bot's moneyline value-engine status to a dashboard decision.
+
+    The bot's betDecision.status (VALUE / LEAN ONLY / NO BET) already encodes the
+    58% conviction floor and safety guardrails, so the dashboard should mirror it
+    rather than recompute its own threshold logic.
+    """
+    return _VALUE_STATUS_TO_DECISION.get(str(value.get("status") or "").upper(), "NO BET")
+
+
+def _format_odds(odds: Any) -> str:
+    """Render American odds with an explicit sign, matching the bot's display."""
+    parsed = safe_float(odds, None)
+    if parsed is None:
+        return ""
+    return f"+{int(round(parsed))}" if parsed > 0 else f"{int(round(parsed))}"
+
+
 def _decision_from_game(game: dict[str, Any], settings: dict[str, Any]) -> tuple[str, str]:
     quality = safe_float(game.get("data_quality", {}).get("score"), 0.0)
     moneyline_edge = abs(safe_float(game.get("moneyline", {}).get("edge"), 0.0))
@@ -379,6 +404,8 @@ def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> d
         "probable_pitchers": {
             "away": game.get("starters", {}).get("away", "TBD"),
             "home": game.get("starters", {}).get("home", "TBD"),
+            "awayEra": game.get("starters", {}).get("awayEra"),
+            "homeEra": game.get("starters", {}).get("homeEra"),
             "status": quality["probable_pitchers"],
         },
         "lineup_status": quality["lineup"],
@@ -415,6 +442,29 @@ def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> d
     predicted_winner, predicted_probability = _winner_from_probabilities(dashboard_game)
     dashboard_game["predicted_winner"] = game.get("pick", {}).get("name") or predicted_winner
     dashboard_game["predicted_winner_probability"] = _as_percent(game.get("pick", {}).get("probability")) or predicted_probability
+
+    # Prefer the bot's own moneyline value engine output (betDecision) over the
+    # dashboard's legacy threshold logic, so live cards match the Telegram bot's
+    # confidence band + quarter-Kelly sizing instead of a diverged fork.
+    value = game.get("value") or None
+    if value:
+        decision = _decision_from_value(value)
+        dashboard_game["confidence_band"] = value.get("confidenceBand")
+        dashboard_game["kelly_stake_percent"] = safe_float(value.get("kellyStakePercent"), None)
+        dashboard_game["value_status"] = value.get("status")
+        dashboard_game["value_reason"] = value.get("reason") or ""
+        kelly = dashboard_game["kelly_stake_percent"]
+        dashboard_game["moneyline"]["edge"] = _as_edge_pct(value.get("edge"))
+        dashboard_game["moneyline"]["confidence"] = str(value.get("confidenceBand") or dashboard_game["moneyline"]["confidence"]).title()
+        dashboard_game["decision"] = decision
+        dashboard_game["no_bet_reason"] = value.get("reason") or "" if decision == "NO BET" else ""
+        dashboard_game["final_lean"] = (
+            f"{value.get('teamName')} {_format_odds(value.get('odds'))}".strip()
+            if decision != "NO BET" and value.get("teamName")
+            else dashboard_game["final_lean"]
+        )
+        return dashboard_game
+
     decision, reason = _decision_from_game(dashboard_game, settings)
     if dashboard_game["odds_status"] in {"Unavailable", "Missing"} and decision == "BET":
         decision = "LEAN"
@@ -547,6 +597,21 @@ def _sample_today(settings: dict[str, Any]) -> dict[str, Any]:
     return _summarize_today(games, "sample")
 
 
+# Short in-memory cache for the live dashboard payload. The live path runs the
+# full Node prediction pipeline (schedule + team/pitcher stats + odds + value
+# engine) which takes ~13s for a full slate, so without this every dashboard
+# open re-runs it from scratch. Keyed by date; TTL is short enough that odds and
+# lineups stay fresh. Override with DASHBOARD_LIVE_CACHE_SECONDS (0 disables).
+_LIVE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _live_cache_ttl_seconds() -> float:
+    try:
+        return float(os.environ.get("DASHBOARD_LIVE_CACHE_SECONDS", "90"))
+    except ValueError:
+        return 90.0
+
+
 def get_today_dashboard(date_ymd: str | None = None, source: str = "live") -> dict[str, Any]:
     """Return today's dashboard payload from live, sample, or mock data."""
     settings = load_dashboard_settings()
@@ -556,10 +621,20 @@ def get_today_dashboard(date_ymd: str | None = None, source: str = "live") -> di
         return _mock_today(settings)
     if source == "sample":
         return _sample_today(settings)
+
+    ttl = _live_cache_ttl_seconds()
+    now = datetime.now(timezone.utc).timestamp()
+    if ttl > 0:
+        cached = _LIVE_CACHE.get(target_date)
+        if cached and (now - cached[0]) < ttl:
+            return cached[1]
     try:
-        return _live_today(target_date, settings)
+        payload = _live_today(target_date, settings)
     except Exception as exc:
         return _mock_today(settings, warning=f"Live data unavailable; showing mock data. Detail: {exc}")
+    if ttl > 0:
+        _LIVE_CACHE[target_date] = (now, payload)
+    return payload
 
 
 def _telegram_learning_by_game(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -735,6 +810,97 @@ def get_telegram_model_performance() -> dict[str, Any] | None:
         "by_total_range": [],
         "calibration": calibration,
         "recent_log": (memory.get("learningLog") or [])[:10],
+    }
+
+
+def get_bet_ledger() -> dict[str, Any]:
+    """Return the bet ledger (open + settled bets) from state.sqlite.
+
+    Mirrors src/ledgerReport.js: fixed-notional bankroll where units_staked is a
+    percentage of bankroll that doubles as units, and ROI is stake-weighted
+    (total P/L over total staked). Read-only; returns an empty ledger when the
+    SQLite database or bet_ledger table is unavailable.
+    """
+    empty = {
+        "bankroll_units": 100,
+        "open": [],
+        "settled": [],
+        "summary": {
+            "open_count": 0,
+            "settled_count": 0,
+            "wins": 0,
+            "losses": 0,
+            "pushes": 0,
+            "record": "0-0",
+            "units_staked": 0.0,
+            "units_pl": 0.0,
+            "roi": 0.0,
+        },
+        "by_market": [],
+    }
+    if not _SQLITE_PATH.exists():
+        return empty
+
+    try:
+        conn = sqlite3.connect(str(_SQLITE_PATH))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = [dict(row) for row in conn.execute(
+                "SELECT * FROM bet_ledger ORDER BY date_ymd ASC, decision_id ASC"
+            )]
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        logging.warning("Failed to read bet ledger from SQLite: %s", exc)
+        return empty
+
+    open_rows = [r for r in rows if r.get("status") == "open"]
+    settled_rows = [r for r in rows if r.get("status") == "settled"]
+
+    wins = sum(1 for r in settled_rows if r.get("result") == "win")
+    losses = sum(1 for r in settled_rows if r.get("result") == "loss")
+    pushes = sum(1 for r in settled_rows if r.get("result") == "push")
+    staked = sum(safe_float(r.get("units_staked"), 0.0) for r in settled_rows)
+    units_pl = sum(safe_float(r.get("units_pl"), 0.0) for r in settled_rows)
+    roi = round((units_pl / staked) * 100.0, 1) if staked > 0 else 0.0
+
+    record = f"{wins}-{losses}" + (f"-{pushes}P" if pushes else "")
+
+    by_market: dict[str, dict[str, float]] = {}
+    for r in settled_rows:
+        market = str(r.get("market") or "moneyline")
+        bucket = by_market.setdefault(market, {"units_staked": 0.0, "units_pl": 0.0, "bets": 0})
+        bucket["units_staked"] += safe_float(r.get("units_staked"), 0.0)
+        bucket["units_pl"] += safe_float(r.get("units_pl"), 0.0)
+        bucket["bets"] += 1
+
+    return {
+        "bankroll_units": 100,
+        "open": open_rows,
+        "settled": settled_rows,
+        "summary": {
+            "open_count": len(open_rows),
+            "settled_count": len(settled_rows),
+            "wins": wins,
+            "losses": losses,
+            "pushes": pushes,
+            "record": record,
+            "units_staked": round(staked, 2),
+            "units_pl": round(units_pl, 2),
+            "roi": roi,
+        },
+        "by_market": [
+            {
+                "market": market,
+                "bets": int(bucket["bets"]),
+                "units_staked": round(bucket["units_staked"], 2),
+                "units_pl": round(bucket["units_pl"], 2),
+                "roi": round((bucket["units_pl"] / bucket["units_staked"]) * 100.0, 1)
+                if bucket["units_staked"] > 0
+                else 0.0,
+            }
+            for market, bucket in sorted(by_market.items())
+        ],
     }
 
 

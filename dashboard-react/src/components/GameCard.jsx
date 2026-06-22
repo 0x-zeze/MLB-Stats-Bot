@@ -19,6 +19,12 @@ function decisionTone(decision) {
   return 'border-ink bg-paper';
 }
 
+function fmtOdds(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return `${n > 0 ? '+' : ''}${Math.round(n)}`;
+}
+
 function Stat({ label, value, helper }) {
   return (
     <div className="min-w-0 rounded-md border-2 border-ink bg-paper px-3 py-2 shadow-neo-sm">
@@ -33,11 +39,16 @@ export default function GameCard({ game }) {
   const [open, setOpen] = useState(false);
   const moneyline = game.moneyline || {};
   const totals = game.totals || {};
+  const value = game.value || null;
   const predictedWinner = game.predicted_winner || (Number(moneyline.home_probability) >= Number(moneyline.away_probability) ? game.home_team : game.away_team);
   const predictedWinnerProbability = game.predicted_winner_probability || moneyline.model_probability || Math.max(Number(moneyline.away_probability) || 0, Number(moneyline.home_probability) || 0);
   const modelProbability = moneyline.model_probability || Math.max(Number(moneyline.away_probability) || 0, Number(moneyline.home_probability) || 0);
   const edge = Math.max(Math.abs(Number(moneyline.edge) || 0), Math.abs(Number(totals.edge) || 0));
   const quality = Number(game.data_quality?.score) || 0;
+  const confidenceBand = game.confidence_band || moneyline.confidence;
+  const kellyStake = game.kelly_stake_percent;
+  const isValueBet = game.decision === 'BET' && value?.teamName;
+  const odds = fmtOdds(value?.odds);
   return (
     <Card>
       <CardContent className="p-4">
@@ -45,22 +56,31 @@ export default function GameCard({ game }) {
           <div className="min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <PredictionBadge>{game.decision}</PredictionBadge>
-              <ConfidenceBadge value={moneyline.confidence} />
+              <ConfidenceBadge value={confidenceBand} />
               <DataQualityBadge score={quality} />
             </div>
             <h3 className="text-lg font-bold leading-tight text-ink">{game.away_team} @ {game.home_team}</h3>
             <p className="mt-1 text-sm font-semibold text-ink/50">{game.game_time} | {game.ballpark}</p>
           </div>
           <div className={cn('rounded-md border-2 px-4 py-3 shadow-neo-sm lg:min-w-56', decisionTone(game.decision))}>
-            <p className="text-xs font-black uppercase text-ink/50">Decision</p>
-            <p className="mt-1 text-base font-bold text-ink">{game.decision} - {game.final_lean}</p>
+            <p className="text-xs font-black uppercase text-ink/50">{isValueBet ? 'Value Pick' : 'Model Lean'}</p>
+            <p className="mt-1 text-base font-bold text-ink">
+              {isValueBet ? `${value.teamName}${odds ? ` ${odds}` : ''}` : (value?.modelSide || predictedWinner || game.final_lean)}
+            </p>
+            {isValueBet && Number.isFinite(Number(kellyStake)) ? (
+              <p className="mt-1 text-xs font-black uppercase text-ink/70">
+                ¼-Kelly {number(kellyStake, 2)}u{value?.book ? ` | ${value.book}` : ''}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs font-black uppercase text-ink/70">{percent(value?.modelSideProbability ?? predictedWinnerProbability)} win prob</p>
+            )}
           </div>
         </div>
 
         <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <Stat label="Predicted Winner" value={predictedWinner || '-'} helper={`${percent(predictedWinnerProbability)} win probability`} />
-          <Stat label="Moneyline" value={percent(modelProbability)} helper={`${game.away_team}: ${percent(moneyline.away_probability)} | ${game.home_team}: ${percent(moneyline.home_probability)}`} />
-          <Stat label="Edge" value={<EdgeIndicator value={edge} />} helper="largest edge" />
+          <Stat label="Confidence" value={percent(value?.modelSideProbability ?? modelProbability)} helper={`band: ${confidenceBand || '-'}`} />
+          <Stat label="Edge" value={<EdgeIndicator value={edge} />} helper={isValueBet && Number.isFinite(Number(kellyStake)) ? `¼-Kelly ${number(kellyStake, 2)}u` : 'largest edge'} />
           <Stat label="Total" value={totals.lean || '-'} helper={`Projected ${number(totals.projected_total)} / Market ${number(totals.market_total)}`} />
         </div>
 

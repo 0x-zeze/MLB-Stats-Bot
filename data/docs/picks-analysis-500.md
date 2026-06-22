@@ -1,6 +1,6 @@
 # Analisa Picks — Peningkatan Edge Prediksi
 
-Dataset: **1024 outcome tergradasi** dari `data/evolution/prediction_outcomes.csv` (seluruh riwayat, di-breakdown per market).
+Dataset: **1072 outcome tergradasi** dari `data/evolution/prediction_outcomes.csv` (seluruh riwayat, di-breakdown per market).
 
 > Catatan: user menyebut "500 picks"; jumlah riil dataset lebih besar. Analisa memakai SEMUA baris agar sinyal kalibrasi sekuat mungkin.
 
@@ -8,13 +8,13 @@ Dataset: **1024 outcome tergradasi** dari `data/evolution/prediction_outcomes.cs
 
 | Metrik | Nilai |
 |---|---|
-| Sample (decided) | 1018 / 1024 |
-| Win rate | 53.7% |
+| Sample (decided) | 1066 / 1072 |
+| Win rate | 53.8% |
 | ROI (per unit) | 6.2% |
-| Brier model | 0.2529 |
+| Brier model | 0.2528 |
 | Brier baseline (flat 50%) | 0.25 |
-| **Lift Brier (baseline − model)** | **-0.0029** |
-| Log-loss | 0.6999 |
+| **Lift Brier (baseline − model)** | **-0.0028** |
+| Log-loss | 0.6995 |
 
 Lift Brier positif = model lebih baik dari tebak koin; negatif = model lebih buruk dari sekadar 50%.
 
@@ -24,21 +24,21 @@ Lift Brier positif = model lebih baik dari tebak koin; negatif = model lebih bur
 
 | Metrik | Nilai |
 |---|---|
-| Sample (decided) | 559 / 559 |
-| Win rate | 55.5% |
-| ROI | 8.6% |
-| Brier model | 0.2484 |
+| Sample (decided) | 588 / 588 |
+| Win rate | 54.9% |
+| ROI | 7.5% |
+| Brier model | 0.2489 |
 | Brier baseline | 0.25 |
-| Lift Brier | 0.0016 |
-| Log-loss | 0.6903 |
+| Lift Brier | 0.0011 |
+| Log-loss | 0.6912 |
 
 Arah miscalibration: **1 bucket overconfident, 0 underconfident, 4 terkalibrasi.**
 
 | Bucket | n | Prob prediksi | Win rate observasi | Error | Verdict |
 |---|---|---|---|---|---|
-| 50-55 | 138 | 52.5% | 56.5% | +4.2 | calibrated |
-| 55-60 | 233 | 55.6% | 53.2% | -2.2 | calibrated |
-| 60-65 | 75 | 61.1% | 56.0% | -4.3 | calibrated |
+| 50-55 | 160 | 52.4% | 55.6% | +3.3 | calibrated |
+| 55-60 | 236 | 55.6% | 52.5% | -3.1 | calibrated |
+| 60-65 | 79 | 61.1% | 55.7% | -4.7 | calibrated |
 | 65-70 | 51 | 66.6% | 51.0% | -16.3 | overconfident |
 | 70+ | 62 | 70.0% | 64.5% | -5.4 | calibrated |
 
@@ -46,23 +46,23 @@ Arah miscalibration: **1 bucket overconfident, 0 underconfident, 4 terkalibrasi.
 
 | Metrik | Nilai |
 |---|---|
-| Sample (decided) | 267 / 273 |
-| Win rate | 53.9% |
-| ROI | 7.9% |
-| Brier model | 0.2546 |
+| Sample (decided) | 286 / 292 |
+| Win rate | 54.9% |
+| ROI | 9.8% |
+| Brier model | 0.2535 |
 | Brier baseline | 0.25 |
-| Lift Brier | -0.0046 |
-| Log-loss | 0.7044 |
+| Lift Brier | -0.0035 |
+| Log-loss | 0.7019 |
 
 Arah miscalibration: **2 bucket overconfident, 0 underconfident, 3 terkalibrasi.**
 
 | Bucket | n | Prob prediksi | Win rate observasi | Error | Verdict |
 |---|---|---|---|---|---|
-| 50-55 | 58 | 52.7% | 46.6% | -5.3 | calibrated |
-| 55-60 | 79 | 57.9% | 54.4% | -4.2 | calibrated |
-| 60-65 | 64 | 62.3% | 57.8% | -4.9 | calibrated |
-| 65-70 | 35 | 67.2% | 57.1% | -10.8 | overconfident |
-| 70+ | 31 | 76.8% | 54.8% | -21.7 | overconfident |
+| 50-55 | 60 | 52.7% | 48.3% | -3.2 | calibrated |
+| 55-60 | 86 | 57.9% | 55.8% | -2.5 | calibrated |
+| 60-65 | 68 | 62.4% | 58.8% | -3.8 | calibrated |
+| 65-70 | 38 | 67.1% | 55.3% | -12.8 | overconfident |
+| 70+ | 34 | 77.0% | 55.9% | -20.7 | overconfident |
 
 ### YRFI
 
@@ -90,27 +90,33 @@ Arah miscalibration: **3 bucket overconfident, 0 underconfident, 2 terkalibrasi.
 
 | Segmen | Sample | Win rate | Loss rate | Avg Brier |
 |---|---|---|---|---|
-| calibration:overconfidence | 128 | 0.0% | 100.0% | 0.3978 |
-| clv:flat | 17 | 37.5% | 62.5% | 0.2736 |
+| clv:flat | 18 | 35.3% | 64.7% | 0.2753 |
 | market:yrfi | 192 | 48.4% | 51.6% | 0.2635 |
 | data_quality:low | 192 | 48.4% | 51.6% | 0.2635 |
-| confidence:medium | 221 | 51.6% | 48.4% | 0.2605 |
-| side:under | 99 | 51.6% | 48.4% | 0.2656 |
-| edge:weak <2 | 549 | 51.9% | 48.1% | 0.2567 |
-| probability:50-55 | 267 | 51.9% | 48.1% | 0.2493 |
+| probability:65-70 | 109 | 51.9% | 48.1% | 0.2717 |
+| probability:50-55 | 291 | 52.1% | 47.9% | 0.2489 |
+| confidence:medium | 228 | 52.2% | 47.8% | 0.2595 |
+| edge:weak <2 | 573 | 52.4% | 47.6% | 0.256 |
+| side:under | 107 | 52.4% | 47.6% | 0.2631 |
 
 ## CLV (Closing Line Value)
 
-- Sample dengan CLV: **44** (status: tracking)
-- Rata-rata CLV: -0.1925
-- Positif/negatif/flat: 12/15/17
+- Sample dengan CLV: **46** (status: tracking)
+- Rata-rata CLV: -0.2059
+- Positif/negatif/flat: 12/16/18
 - Positive CLV means the market moved toward the agent's side after the pick.
+- Sampel masih tipis (46 < 50) — terlalu sedikit untuk menyimpulkan edge pasar; varians per-bet besar. Biarkan menumpuk dulu. Rata-rata CLV negatif (-0.2059) = harga rata-rata sedikit lebih buruk dari closing — pantau, jangan disimpulkan sampai sampel tebal.
+
+| Market | Sample CLV | Rata-rata | +/−/flat |
+|---|---|---|---|
+| moneyline | 20 | -0.4985 | 7/11/2 |
+| totals | 26 | 0.0192 | 5/5/16 |
 
 ## Temuan & Rekomendasi
 
 - **moneyline**: overconfidence dominan (1 vs 0 bucket). Pertahankan/perketat dampening.
-- **totals**: lift Brier -0.0046 ≤ 0 — model TIDAK mengalahkan tebak-50%. Kalibrasi/threshold market ini perlu perbaikan paling mendesak.
+- **totals**: lift Brier -0.0035 ≤ 0 — model TIDAK mengalahkan tebak-50%. Kalibrasi/threshold market ini perlu perbaikan paling mendesak.
 - **totals**: overconfidence dominan (2 vs 0 bucket). Pertahankan/perketat dampening.
 - **yrfi**: lift Brier -0.0135 ≤ 0 — model TIDAK mengalahkan tebak-50%. Kalibrasi/threshold market ini perlu perbaikan paling mendesak.
 - **yrfi**: overconfidence dominan (3 vs 0 bucket). Pertahankan/perketat dampening.
-- **CLV**: hanya 44 sampel — terlalu tipis untuk menilai edge pasar. Pastikan opening + closing odds tersimpan untuk setiap pick.
+- **CLV**: hanya 46 sampel — terlalu tipis untuk menilai edge pasar. Pastikan opening + closing odds tersimpan untuk setiap pick.

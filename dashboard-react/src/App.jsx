@@ -12,6 +12,7 @@ import DataQualitySection from './components/DataQualitySection.jsx';
 import MemorySection from './components/MemorySection.jsx';
 import EvolutionView from './components/EvolutionView.jsx';
 import HistorySection from './components/HistorySection.jsx';
+import LedgerSection from './components/LedgerSection.jsx';
 import BacktestSection from './components/BacktestSection.jsx';
 import TelegramSection from './components/TelegramSection.jsx';
 import SettingsSection from './components/SettingsSection.jsx';
@@ -191,6 +192,13 @@ export default function App() {
       {activeTab === 'history' && (
         <div className="space-y-6 animate-fade-in">
           <HistorySection />
+        </div>
+      )}
+
+      {activeTab === 'ledger' && (
+        <div className="space-y-6 animate-fade-in">
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Bet Ledger</h2>
+          <LedgerSection />
         </div>
       )}
 

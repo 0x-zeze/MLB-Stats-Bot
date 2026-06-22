@@ -72,6 +72,7 @@ export const api = {
   today: (params) => request(`/api/today${queryString(params)}`),
   history: () => request('/api/history'),
   performance: () => request('/api/performance'),
+  ledger: () => request('/api/ledger'),
   evolution: () => request('/api/evolution'),
   evolve: () => request('/api/evolve', { method: 'POST' }),
   // Backwards-compatible alias; the backend runs the same full pipeline.

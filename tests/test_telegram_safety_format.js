@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { formatPredictions } from '../src/mlb.js';
 
-test('advanced Telegram output separates prediction lean value no-bet quality confidence and risk warning', () => {
+test('advanced Telegram output separates prediction lean value quality confidence and risk warning', () => {
   const output = formatPredictions('2026-05-04', [
     {
       gamePk: 1,
@@ -73,8 +73,10 @@ test('advanced Telegram output separates prediction lean value no-bet quality co
   assert.match(output, /Prediction \| Home Team/);
   assert.match(output, /Lean \| No total lean/);
   assert.match(output, /Value \| none/);
-  assert.match(output, /No Bet \| odds are stale/);
   assert.match(output, /Data Quality \| 58\/100/);
-  assert.match(output, /Confidence \| model 54\.0%/);
+  // Status labels (NO BET / LEAN ONLY / VALUE) are replaced by a confidence
+  // percent + band; 54% conviction is below the 58% floor -> "rendah".
+  assert.match(output, /Confidence \| 54\.0% \(rendah\)/);
+  assert.doesNotMatch(output, /No Bet \|/);
   assert.match(output, /Risk Warning \| Analysis only/);
 });

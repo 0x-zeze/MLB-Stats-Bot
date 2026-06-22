@@ -5,7 +5,7 @@ export default function LoadingScreen() {
   const [showRetry, setShowRetry] = useState(false);
 
   useEffect(() => {
-    const timer = setTimeout(() => setShowRetry(true), 5000);
+    const timer = setTimeout(() => setShowRetry(true), 20000);
     return () => clearTimeout(timer);
   }, []);
 
@@ -25,7 +25,7 @@ export default function LoadingScreen() {
         <p className="mt-4 text-xs font-black uppercase text-ink/60">Loading today's slate...</p>
         {showRetry && (
           <p className="mt-3 text-xs font-semibold text-ink/60">
-            Taking longer than expected. Make sure the API server is running.
+            Still loading the live slate. The first load runs the full prediction pipeline and can take ~15s; if it persists, check the API server.
           </p>
         )}
       </div>

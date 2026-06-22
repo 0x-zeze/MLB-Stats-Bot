@@ -50,15 +50,13 @@ def calculate_language_loss(trajectory: dict[str, Any], final_result: dict[str, 
         severity = "medium"
         affected_factor = "record_context"
         summary = "The moneyline pick leaned too much on record, form, H2H, or previous-series context instead of game-specific matchup signals."
-    elif evaluation.get("overconfidence"):
-        loss_type = "overconfidence"
-        severity = "high" if confidence == "high" else "medium"
-        affected_factor = "confidence_calibration"
-        summary = f"The agent gave {confidence.title()} confidence to a losing {market} pick."
-    elif evaluation.get("underconfidence"):
-        loss_type = "underconfidence"
-        affected_factor = "confidence_calibration"
-        summary = "The agent had a winning pick but confidence was low."
+    # NOTE: the "overconfidence"/"underconfidence" evaluator flags are intentionally
+    # NOT used as a loss_type here. They are defined as (loss AND prob>0.65) /
+    # (win AND prob<0.55), so they merely restate the outcome and would train the
+    # language gradient on a circular signal. High-conviction losses fall through to
+    # the honest categorical branches below (weak_edge / bad_data_quality / etc.) or
+    # to the generic wrong_pick; low-conviction wins stay correct_pick. Calibration
+    # is measured at the bucket level in evolution_audit.calibration_buckets().
     elif evaluation.get("result") == "loss" and abs(edge) < 2.5:
         loss_type = "weak_edge"
         severity = "medium"

@@ -40,22 +40,45 @@ function sampleGame(overrides = {}) {
   };
 }
 
-test('moneyline value can select lower-probability underdog when odds are mispriced', () => {
+test('low-conviction underdog is downgraded to a lean, not a graded VALUE bet', () => {
+  // Pre-floor this was graded VALUE off a +5.9 edge. But on 598 graded
+  // outcomes, sub-58% conviction picks won ~54% (breakeven at -110), so the
+  // option math still selects the underdog while betDecision stays NO BET.
   const game = sampleGame();
 
   applyMoneylineValueMarket(game);
 
-  assert.equal(game.betDecision.status, 'VALUE');
+  // The value OPTION computation is unchanged — the underdog is still the best
+  // priced side, with the same edge and quarter-Kelly size.
   assert.equal(game.valuePick.teamName, 'Away Underdogs');
   assert.equal(game.valuePick.modelProbability, 45);
   assert.equal(game.valuePick.impliedProbability, 38.5);
-  // Edge is measured vs the no-vig fair line (38.46/98.46 = 39.1%), not raw
-  // implied (38.5%): 45 - 39.1 = 5.9.
   assert.equal(game.valuePick.fairProbability, 39.1);
   assert.equal(game.valuePick.edge, 5.9);
-  // Quarter-Kelly off the calibrated model prob (45%) and offered odds (+160):
-  // full = (1.6*0.45 - 0.55)/1.6 = 0.10625; quarter = 0.0265625 -> 2.7%.
   assert.equal(game.valuePick.kellyStakePercent, 2.7);
+  // ...but it is NOT graded as a bet: 45% conviction is below the 58% floor.
+  assert.equal(game.betDecision.status, 'NO BET');
+  assert.match(game.betDecision.reason, /conviction/);
+});
+
+test('high-conviction underdog with mispriced odds is graded VALUE', () => {
+  // The profitable niche the floor preserves: model rates the market underdog
+  // >=58% (on real data these went 5-1, +62% ROI). This must still grade VALUE.
+  const game = sampleGame({
+    away: {
+      id: 1,
+      name: 'Away Underdogs',
+      abbreviation: 'AWY',
+      winProbability: 60,
+      starter: { fullName: 'Away Starter' }
+    }
+  });
+
+  applyMoneylineValueMarket(game);
+
+  assert.equal(game.valuePick.teamName, 'Away Underdogs');
+  assert.equal(game.valuePick.modelProbability, 60);
+  assert.equal(game.betDecision.status, 'VALUE');
 });
 
 test('record dominated favorite is downgraded to no bet even with positive value', () => {
@@ -163,7 +186,9 @@ test('approved audit guardrail can downgrade weak model edge to no bet', () => {
 
     assert.equal(game.valuePick.teamName, 'Thin Favorite');
     assert.equal(game.betDecision.status, 'NO BET');
-    assert.match(game.betDecision.reason, /audit guardrail/);
+    // The conviction floor and the audit guardrail both fire on this thin
+    // favorite; assert the guardrail is among the reasons rather than first.
+    assert.ok(game.betDecision.reasons.some((r) => /audit guardrail/.test(r)));
     assert.deepEqual(game.activeEvolutionVersions, { rule: 'rules-v1.1', weights: 'weights-v1.0', memory: 'audit-memory-v1.0' });
   } finally {
     if (previousDir === undefined) {
@@ -205,6 +230,13 @@ test('audit memory adds caution notes without forcing a bet decision by itself',
     );
 
     const game = sampleGame({
+      away: {
+        id: 1,
+        name: 'Away Underdogs',
+        abbreviation: 'AWY',
+        winProbability: 60,
+        starter: { fullName: 'Away Starter' }
+      },
       modelBreakdown: {
         matchupEdge: 0.3,
         recordContextEdge: 0.02,

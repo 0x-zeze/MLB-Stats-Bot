@@ -108,6 +108,10 @@ def build_prediction_trajectory(game_context: dict[str, Any], prediction_output:
             "bullpen_status": context.get("bullpen_status") or data_quality.get("bullpen_usage"),
             "park_factor_status": context.get("park_factor_status") or data_quality.get("park_factor"),
             "data_quality": safe_float(data_quality.get("score"), safe_float(context.get("data_quality_score"), 0.0)),
+            # Structured starter ERAs feed _starter_tier(); without these it always
+            # fell through to "below_avg" (the segment was constant across the slate).
+            "home_pitcher_era": safe_float(_nested(context, "probable_pitchers", "homeEra"), None),
+            "away_pitcher_era": safe_float(_nested(context, "probable_pitchers", "awayEra"), None),
         },
         "input_data_snapshot": context,
         "tool_usage": _infer_tools(context),

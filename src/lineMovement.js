@@ -20,6 +20,32 @@ let oddsCache = {
   data: []
 };
 
+// Test seam: injectable fetch + cache reset so the key-rotation path in
+// fetchOdds can be unit-tested without real network or the 10-min cache TTL.
+let oddsFetchImpl = null;
+export function __setOddsFetchForTest(fn) {
+  oddsFetchImpl = fn;
+}
+export function __resetOddsCacheForTest() {
+  oddsCache = { fetchedAt: 0, data: [] };
+  missingKeyLogged = false;
+}
+export async function __fetchOddsForTest() {
+  return fetchOdds();
+}
+
+// How long a single odds fetch is reused before hitting the API again. The old
+// 30s value, combined with the 60s closing-capture scheduler, fired ~1 call per
+// tick: ~1440 calls/day x 2 credits (h2h,totals x us region) = ~2880 credits/day,
+// which exhausts an Odds API free-tier 500-credit MONTH in ~4 hours (the live
+// 401 OUT_OF_USAGE_CREDITS we hit). Closing lines move slowly, so a multi-minute
+// cache loses no real signal. Override with ODDS_CACHE_TTL_MS for a paid plan.
+function oddsCacheTtlMs() {
+  const configured = Number(process.env.ODDS_CACHE_TTL_MS);
+  if (Number.isFinite(configured) && configured >= 0) return configured;
+  return 10 * 60 * 1000; // 10 minutes
+}
+
 function intervalMinutes() {
   const configured = Number(state.config?.lineMonitor?.intervalMinutes);
   if (Number.isFinite(configured) && configured > 0) return configured;
@@ -60,13 +86,62 @@ function totalMoveThreshold() {
   return Number.isFinite(envValue) && envValue > 0 ? envValue : TOTAL_MOVE_THRESHOLD;
 }
 
+// Odds API key pool. Supports multiple keys so several free-tier accounts
+// (500 credits/month each) can be chained: when one returns OUT_OF_USAGE_CREDITS
+// the pool rotates to the next and remembers the exhausted one for a cooldown so
+// it isn't retried every cycle. Sources (all merged, de-duped, order preserved):
+//   * state.config.lineMonitor.oddsApiKey (may itself be comma-separated)
+//   * ODDS_API_KEY / THE_ODDS_API_KEY (each may be comma-separated)
+//   * ODDS_API_KEYS (comma-separated list, the canonical multi-key var)
+const EXHAUSTED_COOLDOWN_MS = 12 * 60 * 60 * 1000; // retry an exhausted key after 12h
+const exhaustedKeys = new Map(); // key -> timestamp when marked exhausted
+
+export function parseOddsApiKeys() {
+  const raw = [
+    state.config?.lineMonitor?.oddsApiKey,
+    process.env.ODDS_API_KEY,
+    process.env.THE_ODDS_API_KEY,
+    process.env.ODDS_API_KEYS
+  ];
+  const keys = [];
+  for (const value of raw) {
+    if (!value) continue;
+    for (const part of String(value).split(',')) {
+      const key = part.trim();
+      if (key && !keys.includes(key)) keys.push(key);
+    }
+  }
+  return keys;
+}
+
+// Keys not currently in cooldown, in priority order. Expired cooldowns are
+// cleared so a key becomes usable again after EXHAUSTED_COOLDOWN_MS (covers the
+// monthly quota reset without needing to know each account's exact reset date).
+function availableOddsApiKeys(now = Date.now()) {
+  return parseOddsApiKeys().filter((key) => {
+    const exhaustedAt = exhaustedKeys.get(key);
+    if (exhaustedAt === undefined) return true;
+    if (now - exhaustedAt >= EXHAUSTED_COOLDOWN_MS) {
+      exhaustedKeys.delete(key);
+      return true;
+    }
+    return false;
+  });
+}
+
+function markKeyExhausted(key, now = Date.now()) {
+  if (key) exhaustedKeys.set(key, now);
+}
+
+// Test/ops hook: clear cooldown state so all keys are considered available again.
+export function resetOddsApiKeyPool() {
+  exhaustedKeys.clear();
+}
+
+// Legacy single-key accessor (first available, or first configured). Kept so any
+// other caller/logging that referenced oddsApiKey() still works.
 function oddsApiKey() {
-  return (
-    state.config?.lineMonitor?.oddsApiKey ||
-    process.env.ODDS_API_KEY ||
-    process.env.THE_ODDS_API_KEY ||
-    ''
-  );
+  return availableOddsApiKeys()[0] || parseOddsApiKeys()[0] || '';
 }
 
 function monitorKey(games, chatId) {
@@ -89,8 +164,48 @@ function isFinalStatus(status) {
   );
 }
 
+// Canonical team tokens keyed by distinctive nickname/city words. Both the MLB
+// StatsAPI name and the Odds API name reduce to the same token, so matching no
+// longer depends on full-string substring equality (which silently dropped
+// relocated/aliased clubs like the Athletics and accented names). Each entry's
+// key is a word that appears in the team's name on BOTH feeds.
+const TEAM_TOKENS = {
+  diamondbacks: 'ari', dbacks: 'ari',
+  braves: 'atl',
+  orioles: 'bal',
+  red: 'bos', // "red sox"
+  cubs: 'chc',
+  sox: 'chw', // "white sox" — disambiguated below by "white"/"red"
+  reds: 'cin',
+  guardians: 'cle', indians: 'cle',
+  rockies: 'col',
+  tigers: 'det',
+  astros: 'hou',
+  royals: 'kc',
+  angels: 'laa',
+  dodgers: 'lad',
+  marlins: 'mia',
+  brewers: 'mil',
+  twins: 'min',
+  mets: 'nym',
+  yankees: 'nyy',
+  athletics: 'oak', // covers "Athletics", "Oakland Athletics", "Las Vegas Athletics"
+  phillies: 'phi',
+  pirates: 'pit',
+  padres: 'sd',
+  mariners: 'sea',
+  giants: 'sf',
+  cardinals: 'stl',
+  rays: 'tb',
+  rangers: 'tex',
+  jays: 'tor', // "blue jays"
+  nationals: 'was'
+};
+
 function normalizeName(value) {
   return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // strip combining accents (e.g. Pena, Jose)
     .toLowerCase()
     .replace(/&/g, 'and')
     .replace(/[^a-z0-9]+/g, ' ')
@@ -99,19 +214,59 @@ function normalizeName(value) {
     .trim();
 }
 
-function namesMatch(left, right) {
-  const a = normalizeName(left);
-  const b = normalizeName(right);
-  if (!a || !b) return false;
-  return a === b || a.includes(b) || b.includes(a);
+// Map a team name (from either feed) to a stable 2-3 letter token. Handles the
+// two Sox by requiring the qualifying word; falls back to the normalized name
+// when no token matches so unknown/new teams still compare by string.
+export function teamToken(value) {
+  const norm = normalizeName(value);
+  if (!norm) return '';
+  const words = new Set(norm.split(' '));
+  if (words.has('sox')) {
+    if (words.has('white')) return 'chw';
+    if (words.has('red')) return 'bos';
+  }
+  for (const word of words) {
+    if (TEAM_TOKENS[word]) return TEAM_TOKENS[word];
+  }
+  return norm;
 }
 
-function findEventForGame(game, events) {
-  return events.find((event) => {
+export function namesMatch(left, right) {
+  const a = teamToken(left);
+  const b = teamToken(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // Fall back to substring comparison only when neither side resolved to a
+  // known token (both are raw normalized names), preserving prior leniency.
+  const knownA = Object.values(TEAM_TOKENS).includes(a) || a === 'chw' || a === 'bos';
+  const knownB = Object.values(TEAM_TOKENS).includes(b) || b === 'chw' || b === 'bos';
+  if (knownA || knownB) return false;
+  return a.includes(b) || b.includes(a);
+}
+
+// Minutes between a game's scheduled first pitch and an odds event's commence
+// time. Used to disambiguate doubleheaders, where both games share team names
+// but the Odds API lists two events at different times. Returns Infinity when
+// either timestamp is missing/unparseable so name-only matches still work.
+function startTimeGapMinutes(game, event) {
+  const gameStart = Date.parse(game?.startTime || game?.gameDate || game?.gameTime || '');
+  const eventStart = Date.parse(event?.commence_time || '');
+  if (!Number.isFinite(gameStart) || !Number.isFinite(eventStart)) return Infinity;
+  return Math.abs(gameStart - eventStart) / 60000;
+}
+
+export function findEventForGame(game, events) {
+  const matches = (events || []).filter((event) => {
     const homeMatches = namesMatch(event.home_team, game.home?.name);
     const awayMatches = namesMatch(event.away_team, game.away?.name);
     return homeMatches && awayMatches;
   });
+  if (matches.length <= 1) return matches[0];
+  // Doubleheader (or duplicate listing): pick the event whose commence_time is
+  // closest to this game's scheduled start so each leg maps to its own line.
+  return matches.reduce((best, event) =>
+    startTimeGapMinutes(game, event) < startTimeGapMinutes(game, best) ? event : best
+  );
 }
 
 function findOutcome(outcomes, teamName) {
@@ -215,6 +370,8 @@ function buildSnapshot(game, event) {
     homeMoneylineBook: bestHome?.book || null,
     awayMoneylineBook: bestAway?.book || null,
     totalLine: toFiniteNumber(overOutcome?.point ?? underOutcome?.point),
+    overPrice: toFiniteNumber(overOutcome?.price),
+    underPrice: toFiniteNumber(underOutcome?.price),
     moneylineBook,
     totalBook: totals?.bookmaker?.title || totals?.bookmaker?.key || 'bookmaker',
     originalModelEdge: originalModelEdge(game)
@@ -222,57 +379,77 @@ function buildSnapshot(game, event) {
 }
 
 async function fetchOdds() {
-  if (Date.now() - oddsCache.fetchedAt < 30_000) {
+  if (Date.now() - oddsCache.fetchedAt < oddsCacheTtlMs()) {
     return oddsCache.data;
   }
 
-  const key = oddsApiKey();
-  if (!key) {
+  const keys = availableOddsApiKeys();
+  if (!keys.length) {
     if (!missingKeyLogged) {
-      console.warn('Odds API unavailable: ODDS_API_KEY/THE_ODDS_API_KEY belum diisi.');
+      const anyConfigured = parseOddsApiKeys().length > 0;
+      console.warn(
+        anyConfigured
+          ? 'Odds API unavailable: all keys are in cooldown (quota exhausted). Add more via ODDS_API_KEYS or wait for reset.'
+          : 'Odds API unavailable: ODDS_API_KEY/THE_ODDS_API_KEY/ODDS_API_KEYS belum diisi.'
+      );
       missingKeyLogged = true;
     }
-    return [];
+    return oddsCache.data.length ? oddsCache.data : [];
   }
+  missingKeyLogged = false;
 
-  const url = new URL(ODDS_API_URL);
-  url.searchParams.set('apiKey', key);
-  url.searchParams.set('regions', 'us');
-  url.searchParams.set('markets', 'h2h,totals');
-  url.searchParams.set('oddsFormat', 'american');
-  url.searchParams.set('dateFormat', 'iso');
+  let lastError = null;
+  for (const key of keys) {
+    const url = new URL(ODDS_API_URL);
+    url.searchParams.set('apiKey', key);
+    url.searchParams.set('regions', 'us');
+    url.searchParams.set('markets', 'h2h,totals');
+    url.searchParams.set('oddsFormat', 'american');
+    url.searchParams.set('dateFormat', 'iso');
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const doFetch = oddsFetchImpl || fetch;
+      const response = await doFetch(url, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'mlb-stats-bot/line-monitor' }
+      });
 
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'mlb-stats-bot/line-monitor'
+      if (!response.ok) {
+        // Distinguish quota-exhaustion (rotate to next key) from transient
+        // errors like 429/5xx (do NOT burn keys — just back off and retry later).
+        const bodyText = await response.text().catch(() => '');
+        const isQuota =
+          response.status === 401 && /OUT_OF_USAGE_CREDITS|usage quota/i.test(bodyText);
+        if (isQuota) {
+          markKeyExhausted(key);
+          console.warn(`Odds API key exhausted (quota); rotating. ${availableOddsApiKeys().length} key(s) left.`);
+          lastError = new Error(`${response.status} quota exhausted`);
+          continue; // try next key
+        }
+        throw new Error(`${response.status} ${response.statusText}`);
       }
-    });
 
-    if (!response.ok) {
-      throw new Error(`${response.status} ${response.statusText}`);
+      const data = await response.json();
+      oddsCache = { fetchedAt: Date.now(), data };
+      return data;
+    } catch (err) {
+      // Transient (network/timeout/non-quota HTTP): back off 1 cache cycle and
+      // surface the error. We do NOT rotate keys here — the key is likely fine.
+      oddsCache = { fetchedAt: Date.now(), data: oddsCache.data };
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-
-    const data = await response.json();
-    oddsCache = {
-      fetchedAt: Date.now(),
-      data
-    };
-    return data;
-  } catch (err) {
-    // Update cache timestamp on failure to prevent retry storm (backoff 60s)
-    oddsCache = {
-      fetchedAt: Date.now(),
-      data: oddsCache.data
-    };
-    throw err;
-  } finally {
-    clearTimeout(timer);
   }
+
+  // Every available key was quota-exhausted this pass. This is a steady state
+  // (not a transient error), so return cache-or-empty rather than throwing —
+  // callers treat [] as "no odds", and throwing would spam logs every cycle.
+  oddsCache = { fetchedAt: Date.now(), data: oddsCache.data };
+  void lastError;
+  return oddsCache.data.length ? oddsCache.data : [];
 }
 
 export async function attachCurrentOdds(games = []) {
@@ -301,6 +478,8 @@ export async function attachCurrentOdds(games = []) {
       awayMoneyline: snapshot.awayMoneyline,
       homeMoneyline: snapshot.homeMoneyline,
       totalLine: snapshot.totalLine,
+      overPrice: snapshot.overPrice,
+      underPrice: snapshot.underPrice,
       oddsFetchedAt: new Date().toISOString()
     };
     result.matchedGames += 1;
@@ -576,7 +755,33 @@ export async function captureClosingLines(games) {
       state.storage.setLineSnapshot(gamePk, 'closing_total', snapshot.totalLine);
       wrote = true;
     }
-    if (wrote) captured++;
+    if (wrote) {
+      captured++;
+      // Mirror the closing line into the feature store for LATER backtesting
+      // (the single strongest predictor in sports betting). overwrite:true so
+      // the last write before first pitch wins, matching the line_snapshots
+      // "closing proxy" design. Best-effort; never break capture on a store error.
+      if (state.storage.setFeatureSnapshot) {
+        const dateYmd = game.dateYmd || game.date || String(game.gameDate || '').slice(0, 10) || '';
+        try {
+          state.storage.setFeatureSnapshot(
+            gamePk,
+            'closing_line',
+            dateYmd,
+            {
+              homeMoneyline: snapshot.homeMoneyline ?? null,
+              awayMoneyline: snapshot.awayMoneyline ?? null,
+              totalLine: snapshot.totalLine ?? null,
+              moneylineBook: snapshot.moneylineBook ?? null,
+              capturedAt: new Date().toISOString()
+            },
+            { overwrite: true }
+          );
+        } catch {
+          // ignore: feature store is supplementary to line_snapshots
+        }
+      }
+    }
   }
 
   return { captured };

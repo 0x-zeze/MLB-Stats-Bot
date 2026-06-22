@@ -199,13 +199,23 @@ export function collectDoctorChecks(options = {}) {
     )
   );
 
+  const oddsKeyCount = [
+    envValue(env, 'ODDS_API_KEY'),
+    envValue(env, 'THE_ODDS_API_KEY'),
+    envValue(env, 'ODDS_API_KEYS')
+  ]
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(','))
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((key, index, all) => all.indexOf(key) === index).length;
   checks.push(
     check(
       'odds_api_key',
-      envValue(env, 'ODDS_API_KEY') || envValue(env, 'THE_ODDS_API_KEY') ? 'pass' : 'warn',
+      oddsKeyCount > 0 ? 'pass' : 'warn',
       'Odds API key',
-      envValue(env, 'ODDS_API_KEY') || envValue(env, 'THE_ODDS_API_KEY') ? 'set' : 'not set',
-      'Set ODDS_API_KEY or THE_ODDS_API_KEY to enable live odds and line movement.'
+      oddsKeyCount > 0 ? `${oddsKeyCount} key(s) set` : 'not set',
+      'Set ODDS_API_KEY or THE_ODDS_API_KEY (or ODDS_API_KEYS for a rotating pool) to enable live odds and line movement.'
     )
   );
 

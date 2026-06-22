@@ -496,6 +496,20 @@ export class Storage {
         timestamp TEXT NOT NULL
       );
 
+      -- Per-game raw feature snapshots: an append-on-first-write store for
+      -- discriminative inputs (umpire, platoon, statcast, closing line) captured
+      -- pre-game so they can be joined to outcomes and backtested LATER. Keyed by
+      -- (game_pk, feature_group); payload is JSON so new feature groups need no
+      -- schema change. date_ymd is denormalized for cheap date-range backtests.
+      CREATE TABLE IF NOT EXISTS feature_snapshots (
+        game_pk TEXT NOT NULL,
+        feature_group TEXT NOT NULL,
+        date_ymd TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        PRIMARY KEY (game_pk, feature_group)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_picks_date ON picks(date_ymd);
       CREATE INDEX IF NOT EXISTS idx_picks_post_game ON picks(post_game_processed);
       CREATE INDEX IF NOT EXISTS idx_yrfi_date ON yrfi_results(date_ymd);
@@ -503,6 +517,7 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_bet_ledger_status ON bet_ledger(status);
       CREATE INDEX IF NOT EXISTS idx_line_snapshots_timestamp ON line_snapshots(timestamp);
       CREATE INDEX IF NOT EXISTS idx_line_alerts_timestamp ON line_alerts(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_feature_snapshots_date ON feature_snapshots(date_ymd);
 
       CREATE TABLE IF NOT EXISTS chat_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1151,6 +1166,74 @@ export class Storage {
         )
         .run(String(gamePk), openingMarket, parsedValue, timestamp);
     }
+  }
+
+  // Write-once per (game_pk, feature_group): the first pre-game capture is the
+  // one we want to validate against later, so re-runs don't overwrite it. Pass
+  // overwrite=true only for features that legitimately refresh (e.g. closing
+  // line moving toward first pitch). payload is any JSON-serializable object.
+  setFeatureSnapshot(gamePk, featureGroup, dateYmd, payload, { overwrite = false, timestamp = new Date().toISOString() } = {}) {
+    const pk = String(gamePk || '');
+    const group = String(featureGroup || '');
+    if (!pk || !group) return false;
+    let serialized;
+    try {
+      serialized = JSON.stringify(payload ?? null);
+    } catch {
+      return false;
+    }
+    const sql = overwrite
+      ? `INSERT INTO feature_snapshots (game_pk, feature_group, date_ymd, payload, timestamp)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(game_pk, feature_group) DO UPDATE SET
+           date_ymd = excluded.date_ymd,
+           payload = excluded.payload,
+           timestamp = excluded.timestamp`
+      : `INSERT OR IGNORE INTO feature_snapshots (game_pk, feature_group, date_ymd, payload, timestamp)
+         VALUES (?, ?, ?, ?, ?)`;
+    const result = this.db.prepare(sql).run(pk, group, String(dateYmd || ''), serialized, timestamp);
+    return result.changes > 0;
+  }
+
+  getFeatureSnapshot(gamePk, featureGroup) {
+    const row = this.db
+      .prepare(
+        `SELECT game_pk AS gamePk, feature_group AS featureGroup, date_ymd AS dateYmd, payload, timestamp
+         FROM feature_snapshots
+         WHERE game_pk = ? AND feature_group = ?`
+      )
+      .get(String(gamePk), String(featureGroup));
+    if (!row) return null;
+    try {
+      row.payload = JSON.parse(row.payload);
+    } catch {
+      row.payload = null;
+    }
+    return row;
+  }
+
+  listFeatureSnapshotsByDate(dateYmd, featureGroup = null) {
+    const rows = featureGroup
+      ? this.db
+          .prepare(
+            `SELECT game_pk AS gamePk, feature_group AS featureGroup, date_ymd AS dateYmd, payload, timestamp
+             FROM feature_snapshots WHERE date_ymd = ? AND feature_group = ? ORDER BY game_pk`
+          )
+          .all(String(dateYmd), String(featureGroup))
+      : this.db
+          .prepare(
+            `SELECT game_pk AS gamePk, feature_group AS featureGroup, date_ymd AS dateYmd, payload, timestamp
+             FROM feature_snapshots WHERE date_ymd = ? ORDER BY game_pk`
+          )
+          .all(String(dateYmd));
+    for (const row of rows) {
+      try {
+        row.payload = JSON.parse(row.payload);
+      } catch {
+        row.payload = null;
+      }
+    }
+    return rows;
   }
 
   reserveLineAlert(alertKey, movement, chatId, timestamp = new Date().toISOString(), ttlHours = 18) {

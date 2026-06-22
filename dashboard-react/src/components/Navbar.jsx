@@ -6,6 +6,7 @@ const NAV_ITEMS = [
   { id: 'moneyline', label: 'Moneyline' },
   { id: 'totals', label: 'Totals' },
   { id: 'yrfi', label: 'YRFI / NRFI' },
+  { id: 'ledger', label: 'Ledger' },
   { id: 'backtest', label: 'Backtest' },
   { id: 'history', label: 'History' },
   { id: 'memory', label: 'Memory' },
@@ -80,10 +81,17 @@ export default function Navbar({ activeTab, onTabChange, onRefresh, date, onDate
           </div>
         </div>
 
-        <div className="flex items-center gap-2 overflow-x-auto pb-3 lg:hidden">
-          {NAV_ITEMS.map((item) => (
-            <NavButton key={item.id} item={item} activeTab={activeTab} onTabChange={onTabChange} />
-          ))}
+        <div className="lg:hidden pb-3">
+          <select
+            value={activeTab}
+            onChange={(e) => onTabChange(e.target.value)}
+            className="glass-input w-full px-3 py-2 text-xs font-black uppercase"
+            aria-label="Select section"
+          >
+            {NAV_ITEMS.map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
         </div>
       </div>
     </nav>

@@ -125,6 +125,7 @@ def analyze() -> dict[str, Any]:
             "metrics": _market_metrics(mrows),
             "calibration_buckets": buckets,
             "confidence_direction": _confidence_direction(buckets),
+            "clv": clv_report(mrows),
         }
     return report
 
@@ -208,11 +209,51 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append(f"- Sample dengan CLV: **{clv['sample_size']}** (status: {clv['status']})")
     lines.append(f"- Rata-rata CLV: {_fmt(clv['average_clv'])}")
     lines.append(f"- Positif/negatif/flat: {clv['positive']}/{clv['negative']}/{clv['flat']}")
-    lines.append(f"- {clv['note']}\n")
+    lines.append(f"- {clv['note']}")
+    lines.append(f"- {_clv_interpretation(clv)}\n")
+    market_clv = [
+        (mkt, data["clv"])
+        for mkt, data in report["markets"].items()
+        if data.get("clv", {}).get("sample_size", 0) > 0
+    ]
+    if market_clv:
+        lines.append("| Market | Sample CLV | Rata-rata | +/−/flat |")
+        lines.append("|---|---|---|---|")
+        for mkt, c in market_clv:
+            lines.append(
+                f"| {mkt} | {c['sample_size']} | {_fmt(c['average_clv'])} "
+                f"| {c['positive']}/{c['negative']}/{c['flat']} |"
+            )
+        lines.append("")
 
     lines.append("## Temuan & Rekomendasi\n")
     lines.extend(_recommendations(report))
     return "\n".join(lines) + "\n"
+
+
+def _clv_interpretation(clv: dict[str, Any]) -> str:
+    """Honest, sample-size-aware reading of the CLV aggregate."""
+    n = clv.get("sample_size", 0)
+    avg = clv.get("average_clv")
+    if not n:
+        return (
+            "Belum ada data closing line. Capture forward sudah jalan; CLV akan terisi "
+            "seiring slate baru di-grade."
+        )
+    if n < 50:
+        base = (
+            f"Sampel masih tipis ({n} < 50) — terlalu sedikit untuk menyimpulkan edge pasar; "
+            "varians per-bet besar. Biarkan menumpuk dulu."
+        )
+    else:
+        base = f"Sampel cukup ({n}) untuk mulai membaca arah edge pasar."
+    if avg is None:
+        return base
+    if avg < -0.05:
+        return base + f" Rata-rata CLV negatif ({avg}) = harga rata-rata sedikit lebih buruk dari closing — pantau, jangan disimpulkan sampai sampel tebal."
+    if avg > 0.05:
+        return base + f" Rata-rata CLV positif ({avg}) = beat the close (sinyal edge sehat)."
+    return base + f" Rata-rata CLV ~flat ({avg})."
 
 
 def _recommendations(report: dict[str, Any]) -> list[str]:
