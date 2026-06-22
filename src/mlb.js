@@ -16,6 +16,11 @@ const GAME_SEPARATOR = UI_LINE;
 const SECTION_SEPARATOR = UI_THIN_LINE;
 const TOTAL_RUN_LINES = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
 const DEFAULT_MARKET_TOTAL = 8.5;
+// Combined run totals are overdispersed (big innings give a variance above the
+// mean, ~1.4x empirically). A single Poisson assumes variance == mean and so
+// under-prices extreme overs/unders; model the total as a negative binomial
+// with this variance ratio instead. Reduces to Poisson as the ratio -> 1.
+const RUN_TOTAL_VARIANCE_RATIO = 1.4;
 const MONEYLINE_VALUE_EDGE_THRESHOLD = 3.0;
 const STRONG_VALUE_EDGE_THRESHOLD = 5.5;
 // Calibrated win-probability floor for a graded VALUE bet. On 598 graded
@@ -25,6 +30,13 @@ const STRONG_VALUE_EDGE_THRESHOLD = 5.5;
 // keeping ~50% of volume. The model cannot reliably distinguish thin edges, so
 // selectivity on conviction (not on edge) is what sharpens the slate.
 const MIN_VALUE_PROBABILITY = 58.0;
+// Totals staking thresholds. The totals model has no proven track record yet
+// (its calibration map is currently degenerate, so live over/under probs are
+// raw), so these gate conservatively while forward validation accumulates
+// graded outcomes that will train the 'totals' calibration map. Tune once the
+// ledger has enough settled totals bets to measure Brier/CLV.
+const TOTALS_VALUE_EDGE_THRESHOLD = 3.0;
+const MIN_TOTALS_VALUE_PROBABILITY = 57.0;
 const OPENER_KEYWORD_RE = /\b(opener|bulk|piggyback)\b|opener\s*\/\s*bulk/i;
 const OPENER_NOTE_KEYS = new Set([
   'note',
@@ -425,7 +437,7 @@ function lateUpdateLines(item, options = {}) {
   return warnings.length ? [uiKV('⚠️', 'Late Watch', warnings.join(' | '))] : [];
 }
 
-function formatMoneylineOdds(value) {
+export function formatMoneylineOdds(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed === 0) return '-';
   return parsed > 0 ? `+${parsed}` : String(parsed);
@@ -2607,8 +2619,32 @@ function poissonCdf(mean, maxRuns) {
   return clamp(cumulative, 0, 1);
 }
 
+// CDF of a negative binomial parameterized by mean and variance ratio phi
+// (variance = phi * mean). Success prob p = 1/phi and size r = mean/(phi-1)
+// recover that mean and variance; the PMF recurrence P(k) = P(k-1)*(k+r-1)/k*(1-p)
+// holds for real-valued r (the gamma-Poisson mixture). Falls back to Poisson when
+// phi <= 1, where the negative binomial is undefined.
+function negativeBinomialCdf(mean, maxRuns, varianceRatio = RUN_TOTAL_VARIANCE_RATIO) {
+  const safeMean = Math.max(0.01, toNumber(mean, 0.01));
+  const phi = toNumber(varianceRatio, 1);
+  if (!(phi > 1)) return poissonCdf(safeMean, maxRuns);
+
+  const p = 1 / phi;
+  const r = safeMean / (phi - 1);
+  const oneMinusP = 1 - p;
+
+  let probability = Math.pow(p, r);
+  let cumulative = probability;
+  for (let runs = 1; runs <= maxRuns; runs += 1) {
+    probability *= ((runs + r - 1) / runs) * oneMinusP;
+    cumulative += probability;
+  }
+
+  return clamp(cumulative, 0, 1);
+}
+
 function totalRunProbability(expectedTotal, line, side = 'over') {
-  const under = poissonCdf(expectedTotal, Math.floor(line));
+  const under = negativeBinomialCdf(expectedTotal, Math.floor(line));
   return side === 'over' ? 1 - under : under;
 }
 
@@ -2683,6 +2719,99 @@ export function applyTotalRunMarket(totalRuns, marketLine = DEFAULT_MARKET_TOTAL
     bestLean: lean,
     confidence: totalConfidence(leanProbability / 100)
   };
+}
+
+// Build the totals value option for the side the model leans, mirroring
+// moneylineValueOption. Requires live over/under prices (applyTotalRunMarket
+// must have run with marketOdds) so edge is model-vs-de-vigged-market.
+function totalsValueOption(item) {
+  const totalRuns = item?.totalRuns;
+  if (!totalRuns || !totalRuns.hasMarketPrice) return null;
+
+  const lean = String(totalRuns.bestLean || '');
+  const side = lean.startsWith('Over') ? 'over' : lean.startsWith('Under') ? 'under' : null;
+  if (!side) return null;
+
+  const odds = side === 'over' ? item.currentOdds?.overPrice : item.currentOdds?.underPrice;
+  const impliedProbability = americanImpliedProbabilityPercent(odds);
+  if (!Number.isFinite(Number(odds)) || impliedProbability === null) return null;
+
+  const modelProbability = side === 'over' ? totalRuns.overMarketProbability : totalRuns.underMarketProbability;
+  const fairProbability = toNumber(
+    side === 'over' ? totalRuns.overNoVigProbability : totalRuns.underNoVigProbability,
+    impliedProbability
+  );
+  const edge = toNumber(modelProbability, 0) - fairProbability;
+
+  return {
+    market: 'totals',
+    side,
+    line: totalRuns.marketLine,
+    odds,
+    book: item.currentOdds?.totalBook || 'market',
+    modelProbability: round1(modelProbability),
+    impliedProbability: round1(impliedProbability),
+    fairProbability: round1(fairProbability),
+    edge: round1(edge),
+    kellyStakePercent: edge > 0 ? quarterKellyPercent(modelProbability, odds) : null
+  };
+}
+
+function totalsValueSafetyReasons(item, option) {
+  const reasons = [];
+  if (!option) return ['odds totals belum tersedia'];
+
+  if (option.edge < TOTALS_VALUE_EDGE_THRESHOLD) {
+    reasons.push(`value edge hanya ${option.edge >= 0 ? '+' : ''}${option.edge.toFixed(1)}%`);
+  }
+
+  // Conviction floor: the calibrated over/under probability is clamped to
+  // [30,70], so a leaning side below this floor is a near-coin-flip dressed up
+  // by a wide price. Stays a lean, never a graded bet.
+  if (toNumber(option.modelProbability, 0) < MIN_TOTALS_VALUE_PROBABILITY) {
+    reasons.push(`model conviction ${toNumber(option.modelProbability, 0).toFixed(1)}% < ${MIN_TOTALS_VALUE_PROBABILITY}% floor`);
+  }
+
+  // An opener/bulk start makes the starter-ERA input to the run projection
+  // unreliable, which is a primary driver of the total.
+  const riskyOpener = [item.away, item.home].some((team) => team?.openerSituation?.isOpener);
+  if (riskyOpener) {
+    reasons.push('opener/bulk pitcher membuat proyeksi run tidak bersih');
+  }
+
+  return [...new Set(reasons)];
+}
+
+export function applyTotalsValueMarket(item) {
+  if (!item) return item;
+
+  const option = totalsValueOption(item);
+  const reasons = totalsValueSafetyReasons(item, option);
+
+  item.totalsValuePick = option;
+  item.totalsBetDecision = option
+    ? {
+        market: 'totals',
+        status: reasons.length ? 'NO BET' : 'VALUE',
+        side: option.side,
+        line: option.line,
+        odds: option.odds,
+        book: option.book,
+        modelProbability: option.modelProbability,
+        impliedProbability: option.impliedProbability,
+        fairProbability: option.fairProbability,
+        edge: option.edge,
+        reason: reasons[0] || `model ${option.modelProbability.toFixed(1)}% vs implied ${option.impliedProbability.toFixed(1)}%`,
+        reasons
+      }
+    : {
+        market: 'totals',
+        status: 'LEAN ONLY',
+        reason: 'odds totals belum tersedia',
+        reasons
+      };
+
+  return item;
 }
 
 function buildTotalRunProjection({
@@ -3235,7 +3364,10 @@ export const __mlbTestInternals = {
   buildFirstInningProjection,
   firstInningHistoryEndDate,
   firstInningRunsChargedToPitcher,
-  pitcherFirstInningRisk
+  negativeBinomialCdf,
+  pitcherFirstInningRisk,
+  poissonCdf,
+  totalRunProbability
 };
 
 export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta'), modelMemory = {}) {

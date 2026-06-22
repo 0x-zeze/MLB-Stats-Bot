@@ -464,6 +464,7 @@ export class Storage {
         market TEXT NOT NULL,
         team TEXT,
         side TEXT,
+        line REAL,
         odds REAL,
         fair_prob REAL,
         model_prob REAL,
@@ -539,6 +540,14 @@ export class Storage {
       this.db
         .prepare("ALTER TABLE memory_summary ADD COLUMN matchup_memory TEXT NOT NULL DEFAULT '{}'")
         .run();
+    }
+
+    const ledgerColumns = this.db
+      .prepare('PRAGMA table_info(bet_ledger)')
+      .all()
+      .map((column) => column.name);
+    if (!ledgerColumns.includes('line')) {
+      this.db.prepare('ALTER TABLE bet_ledger ADD COLUMN line REAL').run();
     }
 
     this.db
@@ -1577,6 +1586,106 @@ export class Storage {
       const odds = Number(row.odds);
       const profitMultiple = odds > 0 ? odds / 100 : 100 / Math.abs(odds);
       unitsPl = row.units_staked * profitMultiple;
+    }
+
+    this.db
+      .prepare(
+        `UPDATE bet_ledger
+         SET status = 'settled', result = ?, units_pl = ?, clv = ?, settled_at = ?
+         WHERE game_pk = ? AND market = ? AND status = 'open'`
+      )
+      .run(
+        outcome,
+        Math.round(unitsPl * 1000) / 1000,
+        clv,
+        new Date().toISOString(),
+        gamePk,
+        market
+      );
+    return true;
+  }
+
+  // Record a totals (over/under) VALUE bet at decision time. Mirrors recordBet
+  // but keyed on the 'totals' market and storing the line so settlement can grade
+  // the final combined total. Idempotent on (game_pk, 'totals').
+  recordTotalsBet(prediction) {
+    const decision = prediction?.totalsBetDecision;
+    const value = prediction?.totalsValuePick;
+    if (!decision || decision.status !== 'VALUE') return null;
+    if (!value || !(Number(value.kellyStakePercent) > 0)) return null;
+
+    const gamePk = String(prediction.gamePk || '');
+    const market = 'totals';
+    const dateYmd = prediction.dateYmd || '';
+    if (!gamePk) return null;
+
+    const count = this.db
+      .prepare('SELECT COUNT(*) AS count FROM bet_ledger WHERE date_ymd = ? AND market = ?')
+      .get(dateYmd, market).count;
+    const decisionId = `${dateYmd}-${market}-${String(count + 1).padStart(2, '0')}`;
+    const now = new Date().toISOString();
+
+    const info = this.db
+      .prepare(
+        `INSERT INTO bet_ledger (
+          decision_id, game_pk, date_ymd, market, team, side, line, odds,
+          fair_prob, model_prob, edge, units_staked, status, recommended_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+        ON CONFLICT(game_pk, market) DO NOTHING`
+      )
+      .run(
+        decisionId,
+        gamePk,
+        dateYmd,
+        market,
+        `${value.side === 'over' ? 'Over' : 'Under'} ${value.line}`,
+        value.side || null,
+        Number(value.line),
+        Number(value.odds),
+        Number(value.fairProbability),
+        Number(value.modelProbability),
+        Number(value.edge),
+        Number(value.kellyStakePercent),
+        now
+      );
+
+    return info.changes > 0 ? decisionId : null;
+  }
+
+  // Settle an open totals bet against the final combined run total. over wins
+  // when actual > line, under wins when actual < line, exact line is a push.
+  // Idempotent via the status='open' guard, mirroring settleBet.
+  settleTotalsBet(prediction, result, clv = null) {
+    const gamePk = String(prediction?.gamePk || '');
+    const market = 'totals';
+    if (!gamePk) return false;
+
+    const row = this.db
+      .prepare("SELECT * FROM bet_ledger WHERE game_pk = ? AND market = ? AND status = 'open'")
+      .get(gamePk, market);
+    if (!row) return false;
+
+    const awayScore = Number(result?.away?.score);
+    const homeScore = Number(result?.home?.score);
+    const line = Number(row.line);
+    if (!Number.isFinite(awayScore) || !Number.isFinite(homeScore) || !Number.isFinite(line)) {
+      return false;
+    }
+    const actualTotal = awayScore + homeScore;
+
+    let outcome = 'loss';
+    let unitsPl = -row.units_staked;
+    if (actualTotal === line) {
+      outcome = 'push';
+      unitsPl = 0;
+    } else {
+      const won = row.side === 'over' ? actualTotal > line : actualTotal < line;
+      if (won) {
+        outcome = 'win';
+        const odds = Number(row.odds);
+        const profitMultiple = odds > 0 ? odds / 100 : 100 / Math.abs(odds);
+        unitsPl = row.units_staked * profitMultiple;
+      }
     }
 
     this.db

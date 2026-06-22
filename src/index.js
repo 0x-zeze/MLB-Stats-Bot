@@ -12,6 +12,7 @@ import {
 import {
   applyMoneylineValueMarket,
   applyTotalRunMarket,
+  applyTotalsValueMarket,
   detectSharpMoneySignal,
   formatPredictions,
   getFinalGameResults,
@@ -218,6 +219,7 @@ async function attachMarketContext(predictions) {
     }
 
     applyMoneylineValueMarket(prediction);
+    applyTotalsValueMarket(prediction);
 
     // Sharp money detection: compare opening odds vs current odds
     // Now that odds are attached, we can detect line movement properly.
@@ -799,6 +801,9 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
         uiKV('•', 'Market total', `${totalRuns.marketLine} | ${signedRuns(totalRuns.marketDeltaRuns)} runs vs model`),
         uiKV('•', 'Best lean', `${totalRuns.bestLean} | ${totalRuns.confidence}`),
         uiKV('•', 'Model edge', `${signedRuns(totalRuns.modelEdge)}% vs ${totalRuns.hasMarketPrice ? `no-vig market ${totalRuns.marketProbability.toFixed(0)}%` : '50% baseline'}`),
+        ...(prediction.totalsBetDecision?.status === 'VALUE' && prediction.totalsValuePick
+          ? [uiKV('💰', 'Totals bet', `${prediction.totalsValuePick.side === 'over' ? 'Over' : 'Under'} ${prediction.totalsValuePick.line} ${formatMoneylineOdds(prediction.totalsValuePick.odds)} | stake ${Number(prediction.totalsValuePick.kellyStakePercent).toFixed(1)}u | edge ${prediction.totalsValuePick.edge >= 0 ? '+' : ''}${Number(prediction.totalsValuePick.edge).toFixed(1)}%`)]
+          : []),
         '',
         uiSection('📈', 'Over Probability'),
         ...totalProbabilityLines('Over', totalRuns.over),
@@ -1315,6 +1320,7 @@ async function handlePicksCommand(bot, chatId, question, dateYmd = dateInTimezon
   for (const prediction of predictions) {
     try {
       storage.recordBet(prediction);
+      storage.recordTotalsBet(prediction);
     } catch (error) {
       console.error('recordBet failed:', error.message);
     }
@@ -1444,6 +1450,7 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
       // Settle any open VALUE bet for this game into units P/L (idempotent).
       try {
         storage.settleBet(prediction, result, clv);
+        storage.settleTotalsBet(prediction, result);
       } catch (error) {
         console.error('settleBet failed:', error.message);
       }
