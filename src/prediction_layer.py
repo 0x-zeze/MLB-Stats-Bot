@@ -15,26 +15,31 @@ from .utils import clamp, confidence_label, logistic, safe_float
 def predict_moneyline_from_features(
     collected: dict[str, Any],
     features: dict[str, Any],
+    weight_overrides: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Produce deterministic moneyline probability from engineered features."""
-    # Compute situational weights
+    # Compute situational weights (or use overrides from dynamic_weights)
     moneyline_features = features["moneyline"]
-    park_factor = None
-    park_data = collected.get("park")
-    if park_data is not None:
-        park_factor = safe_float(getattr(park_data, "run_factor", None), None)
 
-    opener_flag = moneyline_features.get("opener_flag", False)
-    game = collected.get("game")
-    game_date_str = getattr(game, "date", None) if game else None
+    if weight_overrides:
+        weights = dict(weight_overrides)
+    else:
+        park_factor = None
+        park_data = collected.get("park")
+        if park_data is not None:
+            park_factor = safe_float(getattr(park_data, "run_factor", None), None)
 
-    engine = SituationalWeightEngine()
-    weights = engine.compute_weights_from_context(
-        park_run_factor=park_factor,
-        opener_detected=opener_flag,
-        short_start_projected=False,
-        game_date=game_date_str,
-    )
+        opener_flag = moneyline_features.get("opener_flag", False)
+        game = collected.get("game")
+        game_date_str = getattr(game, "date", None) if game else None
+
+        engine = SituationalWeightEngine()
+        weights = engine.compute_weights_from_context(
+            park_run_factor=park_factor,
+            opener_detected=opener_flag,
+            short_start_projected=False,
+            game_date=game_date_str,
+        )
 
     result = BaselinePredictionModel().predict(
         collected["home_team"],
@@ -190,10 +195,24 @@ def predict_first_inning_from_features(
     }
 
 
-def build_predictions(collected: dict[str, Any], features: dict[str, Any]) -> dict[str, Any]:
-    """Build all deterministic predictions for one game."""
+def build_predictions(
+    collected: dict[str, Any],
+    features: dict[str, Any],
+    weight_overrides: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Build all deterministic predictions for one game.
+
+    Parameters
+    ----------
+    weight_overrides : optional dict
+        If provided, these weights are passed to predict_moneyline_from_features
+        instead of the default SituationalWeightEngine weights.  Keys must match
+        the component names ("team_strength", "starting_pitcher", etc.).
+    """
     return {
-        "moneyline": predict_moneyline_from_features(collected, features),
+        "moneyline": predict_moneyline_from_features(
+            collected, features, weight_overrides=weight_overrides
+        ),
         "totals": predict_totals_from_features(collected, features),
         "first_inning": predict_first_inning_from_features(collected, features),
     }

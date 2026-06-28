@@ -56,20 +56,20 @@ test('low-conviction underdog is downgraded to a lean, not a graded VALUE bet', 
   assert.equal(game.valuePick.fairProbability, 39.1);
   assert.equal(game.valuePick.edge, 5.9);
   assert.equal(game.valuePick.kellyStakePercent, 2.7);
-  // ...but it is NOT graded as a bet: 45% conviction is below the 58% floor.
+  // ...but it is NOT graded as a bet: 45% conviction is below the 62% floor.
   assert.equal(game.betDecision.status, 'NO BET');
   assert.match(game.betDecision.reason, /conviction/);
 });
 
 test('high-conviction underdog with mispriced odds is graded VALUE', () => {
   // The profitable niche the floor preserves: model rates the market underdog
-  // >=58% (on real data these went 5-1, +62% ROI). This must still grade VALUE.
+  // >=62% (conviction must clear the raised floor). This must still grade VALUE.
   const game = sampleGame({
     away: {
       id: 1,
       name: 'Away Underdogs',
       abbreviation: 'AWY',
-      winProbability: 60,
+      winProbability: 64,
       starter: { fullName: 'Away Starter' }
     }
   });
@@ -77,7 +77,7 @@ test('high-conviction underdog with mispriced odds is graded VALUE', () => {
   applyMoneylineValueMarket(game);
 
   assert.equal(game.valuePick.teamName, 'Away Underdogs');
-  assert.equal(game.valuePick.modelProbability, 60);
+  assert.equal(game.valuePick.modelProbability, 64);
   assert.equal(game.betDecision.status, 'VALUE');
 });
 
@@ -87,14 +87,14 @@ test('record dominated favorite is downgraded to no bet even with positive value
       id: 1,
       name: 'Away Team',
       abbreviation: 'AWY',
-      winProbability: 40,
+      winProbability: 36,
       starter: { fullName: 'Away Starter' }
     },
     home: {
       id: 2,
       name: 'Record Favorite',
       abbreviation: 'REC',
-      winProbability: 60,
+      winProbability: 64,
       starter: { fullName: 'Home Starter' }
     },
     currentOdds: {
@@ -234,7 +234,7 @@ test('audit memory adds caution notes without forcing a bet decision by itself',
         id: 1,
         name: 'Away Underdogs',
         abbreviation: 'AWY',
-        winProbability: 60,
+        winProbability: 64,
         starter: { fullName: 'Away Starter' }
       },
       modelBreakdown: {

@@ -23,20 +23,21 @@ const DEFAULT_MARKET_TOTAL = 8.5;
 const RUN_TOTAL_VARIANCE_RATIO = 1.4;
 const MONEYLINE_VALUE_EDGE_THRESHOLD = 3.0;
 const STRONG_VALUE_EDGE_THRESHOLD = 5.5;
-// Calibrated win-probability floor for a graded VALUE bet. On 598 graded
-// moneyline outcomes, "edge" (model% - fair%) had almost no rank power
-// (AUC ~0.53), but the calibrated probability itself did: betting only at
-// >=58% lifted win rate from 56.5% to ~58% and ROI from +9.8% to +13.4% while
-// keeping ~50% of volume. The model cannot reliably distinguish thin edges, so
-// selectivity on conviction (not on edge) is what sharpens the slate.
-const MIN_VALUE_PROBABILITY = 58.0;
+// Calibrated win-probability floor for a graded VALUE bet. On 758 graded
+// moneyline outcomes, the 55-60% predicted bucket had only 52.5% actual WR
+// (gap -4.8pp) while the 65-70% bucket was 49.4% (gap -17.6pp). The model's
+// discrimination is weakest in the 55-67% range. Raising the floor from 58 to
+// 62% filters out the overconfident mid-range picks that drag overall WR.
+// Graded ML picks (with the old floor) were 57.2% WR; tightening the floor
+// should push this toward 59-60% by excluding low-conviction marginal bets.
+const MIN_VALUE_PROBABILITY = 62.0;
 // Totals staking thresholds. The totals model has no proven track record yet
 // (its calibration map is currently degenerate, so live over/under probs are
 // raw), so these gate conservatively while forward validation accumulates
 // graded outcomes that will train the 'totals' calibration map. Tune once the
 // ledger has enough settled totals bets to measure Brier/CLV.
-const TOTALS_VALUE_EDGE_THRESHOLD = 3.0;
-const MIN_TOTALS_VALUE_PROBABILITY = 57.0;
+const TOTALS_VALUE_EDGE_THRESHOLD = 3.5;
+const MIN_TOTALS_VALUE_PROBABILITY = 60.0;
 const OPENER_KEYWORD_RE = /\b(opener|bulk|piggyback)\b|opener\s*\/\s*bulk/i;
 const OPENER_NOTE_KEYS = new Set([
   'note',
@@ -567,6 +568,16 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
     reasons.push(`model conviction ${toNumber(option.modelProbability, 0).toFixed(1)}% < ${MIN_VALUE_PROBABILITY}% floor`);
   }
 
+  // Sharp money hard filter: when the closing line has moved significantly
+  // against the model's pick, sharp bettors are disagreeing with our side.
+  // CLV data shows picks with negative CLV (line moved against us) have lower WR
+  // (53.8% vs 56.0% for positive CLV). Aggressive reverse line movement (>=10
+  // cents against) is a strong contraindication — downgrade to NO BET.
+  const sharpMoney = item.modelBreakdown?.sharpMoney;
+  if (sharpMoney && sharpMoney.direction === 'against_model' && sharpMoney.magnitude >= 10) {
+    reasons.push(`sharp money contra: line moved ${sharpMoney.magnitude} cents against pick`);
+  }
+
   const matchupEdge = Math.abs(toNumber(item.modelBreakdown?.matchupEdge, 0));
   const recordContextEdge = Math.abs(toNumber(item.modelBreakdown?.recordContextEdge, 0));
   if (item.modelBreakdown?.recordDominated || (recordContextEdge > matchupEdge * 1.35 && matchupEdge < 0.2)) {
@@ -743,7 +754,7 @@ export function applyMoneylineValueMarket(item) {
 // VALUE / NO BET / LEAN ONLY status labels in the user-facing output; the
 // internal betDecision.status is unchanged and still drives the ledger.
 export function confidenceBand(percent) {
-  if (percent >= 65) return 'tinggi';
+  if (percent >= 66) return 'tinggi';
   if (percent >= MIN_VALUE_PROBABILITY) return 'sedang';
   return 'rendah';
 }
@@ -768,7 +779,7 @@ export function moneylineDecisionLines(item) {
   if (!decision) return [];
 
   // A graded bet (cleared the conviction floor): show the actionable priced pick
-  // framed by its confidence. By construction the value side is >=58% here.
+  // framed by its confidence. By construction the value side is >=62% here.
   if (decision.status === 'VALUE') {
     return [
       uiKV('💰', 'Pick', `${decision.teamName} ${formatMoneylineOdds(decision.odds)} | ${decision.book}`),
@@ -819,6 +830,61 @@ function bettingSafetyLines(item, pick) {
     uiKV('🧪', 'Data Quality', dataQualityText(item)),
     uiKV('⚠️', 'Risk Warning', 'Analysis only; probabilities are estimates, not guarantees')
   ];
+}
+
+function weightSummary(weights) {
+  if (!weights || typeof weights !== 'object') return '';
+  const labels = {
+    starting_pitcher: 'SP',
+    sp: 'SP',
+    team_strength: 'Log5',
+    log5: 'Log5',
+    offense: 'Off',
+    bullpen: 'BP',
+    recent_form: 'Form',
+    form: 'Form',
+    home_field: 'Home',
+    home: 'Home'
+  };
+  return Object.entries(weights)
+    .filter(([, value]) => Number.isFinite(Number(value)))
+    .map(([key, value]) => `${labels[key] || key} ${(Number(value) * 100).toFixed(0)}%`)
+    .join(' | ');
+}
+
+function playerEntryText(entry, valueKey = 'contribution') {
+  if (!entry || typeof entry !== 'object') return '';
+  const name = entry.name || entry.player || 'Player';
+  const value = Number(entry[valueKey]);
+  const scoreText = Number.isFinite(value) ? ` ${value >= 0 ? '+' : ''}${value.toFixed(3)}` : '';
+  const reason = entry.reason ? ` — ${entry.reason}` : '';
+  return `${name}${scoreText}${reason}`;
+}
+
+function playerImpactLines(item) {
+  const gameMode = item?.game_mode || item?.gameMode || item?.dynamicWeights?.mode;
+  const weights = item?.weights_used || item?.weightsUsed || item?.dynamicWeights?.weights;
+  const narrative = item?.player_narrative || item?.playerNarrative || item?.player_scores?.narrative || item?.playerScores?.narrative;
+  const homeContributors = item?.key_contributors_home || item?.keyContributorsHome || item?.player_scores?.home?.key_contributors || item?.playerScores?.home?.keyContributors || [];
+  const awayContributors = item?.key_contributors_away || item?.keyContributorsAway || item?.player_scores?.away?.key_contributors || item?.playerScores?.away?.keyContributors || [];
+  const risks = item?.key_risks || item?.keyRisks || [];
+  const lines = [];
+
+  if (gameMode) lines.push(uiKV('🎛️', 'Game mode', gameMode));
+  const weightText = weightSummary(weights);
+  if (weightText) lines.push(uiKV('⚖️', 'Weights', weightText));
+  if (Array.isArray(awayContributors) && awayContributors.length) {
+    lines.push(uiKV('🧢', item?.away?.abbreviation || item?.away?.name || 'Away', awayContributors.slice(0, 2).map((entry) => playerEntryText(entry)).filter(Boolean).join(' | ')));
+  }
+  if (Array.isArray(homeContributors) && homeContributors.length) {
+    lines.push(uiKV('🏠', item?.home?.abbreviation || item?.home?.name || 'Home', homeContributors.slice(0, 2).map((entry) => playerEntryText(entry)).filter(Boolean).join(' | ')));
+  }
+  if (Array.isArray(risks) && risks.length) {
+    lines.push(uiKV('⚠️', 'Player risks', risks.slice(0, 3).map((entry) => playerEntryText(entry, 'risk')).filter(Boolean).join(' | ')));
+  }
+  if (narrative) lines.push(uiBullet('•', narrative));
+
+  return lines;
 }
 
 function compactPredictionBlock(item) {
@@ -3129,14 +3195,18 @@ function predictGame(
     Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
   const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent + weatherComponent;
 
-  // Edge dampening: the model is systematically overconfident at higher edges.
-  // Analysis of 1018 graded outcomes confirms this holds: moneyline is the only
-  // calibrated, profitable market (ROI +8.6%, Brier lift +0.0016) precisely
-  // because it is both dampened here AND calibrated below. Totals/yrfi were
-  // overconfident only because they lacked the live calibration now added in
-  // applyTotalRunMarket / the YRFI path. Keep the 0.7 dampen; calibration maps
-  // handle the residual gap per market.
-  const dampenedEdge = edge * 0.7;
+  // Edge dampening: the model is systematically overconfident at higher edges
+  // but UNDERCONFIDENT at low edges. Analysis of 758 moneyline outcomes:
+  //   50-55% predicted → 56.4% actual (underconfident by +4.0pp)
+  //   55-60% predicted → 52.5% actual (overconfident by -4.8pp)
+  //   65-70% predicted → 49.4% actual (overconfident by -17.6pp)
+  // Tiered dampening: less aggressive at low edge (preserve underconfident
+  // signal), more aggressive at high edge (squash overconfidence).
+  const absEdge = Math.abs(edge);
+  const dampeningFactor = absEdge < 0.25 ? 0.82
+    : absEdge < 0.50 ? 0.70
+    : 0.58;
+  const dampenedEdge = edge * dampeningFactor;
 
   const rawHomeProbability = clamp(sigmoid(dampenedEdge) * 100, 30, 70);
   const rawAwayProbability = 100 - rawHomeProbability;
@@ -3159,7 +3229,7 @@ function predictGame(
   const modelBreakdown = {
     rawEdge: edge,
     dampenedEdge,
-    dampeningFactor: 0.7,
+    dampeningFactor,
     matchupEdge,
     recordContextEdge,
     offenseEdge: offenseComponent,
@@ -3625,6 +3695,9 @@ export function formatPredictions(
         uiSection('🏥', 'Injury Report'),
         ...injuryLines,
         '',
+        ...(playerImpactLines(item).length
+          ? [uiSection('🧩', 'Player Impact'), ...playerImpactLines(item), '']
+          : []),
         uiSection('📈', 'SP Recent'),
         ...pitcherRecentLines,
         includeAdvanced ? '' : null,
