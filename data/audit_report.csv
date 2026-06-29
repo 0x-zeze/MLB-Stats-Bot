@@ -1,0 +1,9 @@
+group_type,group_label,count,win_rate_pct,roi
+edge,edge_neg,0,0.0,0.0
+edge,edge_0_3,3,33.3,1.67
+edge,edge_3_6,0,0.0,0.0
+edge,edge_6_10,0,0.0,0.0
+edge,edge_10plus,0,0.0,0.0
+confidence,low,0,0.0,0.0
+confidence,medium,3,33.3,1.67
+confidence,high,0,0.0,0.0
