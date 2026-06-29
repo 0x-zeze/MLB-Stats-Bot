@@ -155,12 +155,12 @@ async function sampleAnalysis(gameId) {
   return runPythonJson(
     [
       'import json, sys',
-      'from src.agent_tools import get_game_context, predict_moneyline, predict_total_runs, explain_prediction',
+      'from src.agent_tools import get_game_context, predict_moneyline, explain_prediction',
       'gid = sys.argv[1]',
       'payload = {',
       '  "context": get_game_context(gid),',
       '  "moneyline": predict_moneyline(gid),',
-      '  "totals": predict_total_runs(gid),',
+      '  "yrfi": predict_yrfi(gid),',
       '  "full_text": explain_prediction(gid),',
       '}',
       'print(json.dumps(payload, default=str))',
@@ -200,7 +200,7 @@ async function evaluationReport() {
 }
 
 async function runBacktest(body) {
-  const market = ['moneyline', 'totals'].includes(body.market) ? body.market : 'totals';
+  const market = ['moneyline', 'yrfi'].includes(body.market) ? body.market : 'moneyline';
   const season = Number.isFinite(Number(body.season)) ? String(Number(body.season)) : '2025';
   const output = await runPython(['-m', 'src.backtest', '--season', season, '--market', market], {
     timeoutMs: 60000,
@@ -258,10 +258,10 @@ function liveQualityReport(prediction, fetchedAt) {
     awayStarter && homeStarter && !awayStarter.includes('TBD') && !homeStarter.includes('TBD');
   const lineupConfirmed = awayLineup?.confirmed && homeLineup?.confirmed;
   const lineupPartial = Boolean(awayLineup || homeLineup);
-  const weatherAvailable = prediction.totalRuns?.detail?.weather !== undefined;
+  const weatherAvailable = prediction.weather_detail !== undefined;
   const bullpenAvailable = Boolean(prediction.bullpenLine);
-  const parkAvailable = Boolean(prediction.totalRuns?.detail?.park);
-  const marketTotalAvailable = Boolean(prediction.totalRuns?.marketLine);
+  const parkAvailable = Boolean(prediction.park_detail);
+  const marketOddsAvailable = Boolean(prediction.moneyline?.current_odds);
   const injuryAvailable = Boolean(prediction.injuryDetailLines?.length || prediction.injuryLine);
   const missingFields = [];
   const confidenceAdjustments = [];
@@ -287,8 +287,8 @@ function liveQualityReport(prediction, fetchedAt) {
   else missingFields.push('bullpen usage');
   if (parkAvailable) score += 10;
   else missingFields.push('park factor');
-  if (marketTotalAvailable) score += 10;
-  else missingFields.push('market total');
+  if (marketOddsAvailable) score += 10;
+  else missingFields.push('market odds');
   if (injuryAvailable) score += 5;
   else missingFields.push('injury context');
 
@@ -308,7 +308,7 @@ function liveQualityReport(prediction, fetchedAt) {
     weather: fieldStatus(
       'Weather',
       weatherAvailable ? 'Available' : 'Missing',
-      weatherAvailable ? `Run adjustment ${prediction.totalRuns.detail.weather}` : 'No weather adjustment found'
+      weatherAvailable ? 'Weather data available' : 'No weather adjustment found'
     ),
     odds: fieldStatus(
       'Market odds',
@@ -319,15 +319,13 @@ function liveQualityReport(prediction, fetchedAt) {
     park: fieldStatus(
       'Park factor',
       parkAvailable ? 'Available' : 'Missing',
-      prediction.totalRuns?.detail?.park
-        ? `${prediction.totalRuns.detail.park.label} Run PF ${prediction.totalRuns.detail.park.runFactorPct}`
-        : ''
+      prediction.park_detail || ''
     ),
-    marketTotal: fieldStatus(
-      'Market total',
-      marketTotalAvailable ? 'Default/model line' : 'Missing',
-      marketTotalAvailable
-        ? `${prediction.totalRuns.marketLine} used until live sportsbook odds are configured`
+    marketOdds: fieldStatus(
+      'Market odds',
+      marketOddsAvailable ? 'Available' : 'Missing',
+      marketOddsAvailable
+        ? `Current moneyline odds: ${prediction.moneyline?.current_odds || 'N/A'}`
         : ''
     ),
   };
@@ -341,41 +339,6 @@ function liveQualityReport(prediction, fetchedAt) {
     staleFields: [],
     confidenceAdjustments,
     fetchedAt,
-  };
-}
-
-function summarizeTotalRuns(totalRuns, venue) {
-  if (!totalRuns) return null;
-  const detail = totalRuns.detail || {};
-  const park = detail.park || null;
-  return {
-    projectedTotal: totalRuns.projectedTotal,
-    marketLine: totalRuns.marketLine,
-    marketSource: 'Default baseline unless Odds API is configured',
-    marketDeltaRuns: totalRuns.marketDeltaRuns,
-    modelEdge: totalRuns.modelEdge,
-    bestLean: totalRuns.bestLean,
-    confidence: totalRuns.confidence,
-    over: totalRuns.over,
-    under: totalRuns.under,
-    homeExpectedRuns: totalRuns.homeExpectedRuns,
-    awayExpectedRuns: totalRuns.awayExpectedRuns,
-    factors: totalRuns.factors || [],
-    drivers: {
-      offense: toNumber(detail.homeOffense, 0) + toNumber(detail.awayOffense, 0),
-      startingPitcher: toNumber(detail.homeStarterAllowed, 0) + toNumber(detail.awayStarterAllowed, 0),
-      bullpen: toNumber(detail.homeBullpenAllowed, 0) + toNumber(detail.awayBullpenAllowed, 0),
-      weather: toNumber(detail.weather, 0),
-      lineup: toNumber(detail.homeLineupAdj, 0) + toNumber(detail.awayLineupAdj, 0),
-      injuries: toNumber(detail.homeInjuryAdj, 0) + toNumber(detail.awayInjuryAdj, 0),
-    },
-    park: park
-      ? {
-          label: park.label || venue,
-          runFactorPct: park.runFactorPct,
-          homeRunFactorPct: park.homeRunFactorPct,
-        }
-      : null,
   };
 }
 
@@ -412,7 +375,6 @@ function summarizeValueDecision(prediction) {
 }
 
 function summarizeLivePrediction(prediction, meta = {}) {
-  const totalRuns = prediction.totalRuns || null;
   const probabilities = liveDisplayProbabilities(prediction);
   const pick = livePick(prediction, probabilities);
   const pickProbability = pick?.id === prediction.away?.id ? probabilities.away : probabilities.home;
@@ -453,7 +415,6 @@ function summarizeLivePrediction(prediction, meta = {}) {
       awayEra: prediction.away?.starterEra ?? null,
       homeEra: prediction.home?.starterEra ?? null,
     },
-    totalRuns: summarizeTotalRuns(totalRuns, prediction.venue),
     firstInning: prediction.firstInning
       ? {
           pick: firstInningPick === 'YES' ? 'YES / YRFI' : 'NO / NRFI',

@@ -62,21 +62,17 @@ class ClvTrackingTests(unittest.TestCase):
             "moneyline_home": -120.0,
             "closing_away": 130.0,
             "moneyline_away": 110.0,
-            "closing_total": 8.5,
-            "total": 9.0,
         }
         mapped = _closing_odds_from_snapshots(snapshots)
         self.assertEqual(mapped["closing_home_moneyline"], -150.0)
         self.assertEqual(mapped["closing_away_moneyline"], 130.0)
-        self.assertEqual(mapped["closing_total"], 8.5)
 
     def test_snapshot_mapping_falls_back_to_live_lines(self):
         # No dedicated closing_* captured; use last-seen live monitor snapshot.
-        snapshots = {"moneyline_home": -120.0, "moneyline_away": 110.0, "total": 9.0}
+        snapshots = {"moneyline_home": -120.0, "moneyline_away": 110.0}
         mapped = _closing_odds_from_snapshots(snapshots)
         self.assertEqual(mapped["closing_home_moneyline"], -120.0)
         self.assertEqual(mapped["closing_away_moneyline"], 110.0)
-        self.assertEqual(mapped["closing_total"], 9.0)
 
     def test_snapshot_mapping_empty_returns_empty(self):
         self.assertEqual(_closing_odds_from_snapshots({}), {})
@@ -84,16 +80,16 @@ class ClvTrackingTests(unittest.TestCase):
     def test_snapshot_mapping_rejects_in_game_garbage(self):
         # Stale/in-game prices (-20000, +3300) and an inflated total must be
         # dropped so CLV stays null rather than being corrupted.
-        snapshots = {"moneyline_home": 3300.0, "moneyline_away": -20000.0, "total": 16.5}
+        snapshots = {"moneyline_home": 3300.0, "moneyline_away": -20000.0}
         self.assertEqual(_closing_odds_from_snapshots(snapshots), {})
 
     def test_snapshot_mapping_rejects_dead_zone_moneyline(self):
         # American odds inside (-100, 100) are impossible pre-game.
-        snapshots = {"moneyline_home": 50.0, "moneyline_away": -80.0, "total": 8.5}
+        snapshots = {"moneyline_home": 50.0, "moneyline_away": -80.0}
         mapped = _closing_odds_from_snapshots(snapshots)
         self.assertNotIn("closing_home_moneyline", mapped)
         self.assertNotIn("closing_away_moneyline", mapped)
-        self.assertEqual(mapped["closing_total"], 8.5)
+        self.assertEqual(mapped, {})
 
 
 if __name__ == "__main__":

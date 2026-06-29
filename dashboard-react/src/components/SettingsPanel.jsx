@@ -5,7 +5,6 @@ import { Field, Input, Switch } from './ui/form.jsx';
 
 const numericFields = [
   ['minimum_moneyline_edge', 'Minimum moneyline edge', 'Minimum edge before highlighting a moneyline.', 0.01],
-  ['minimum_total_edge', 'Minimum total edge', 'Minimum edge before highlighting an over/under.', 0.01],
   ['minimum_projected_total_difference', 'Minimum projected total difference', 'NO BET if model vs market total is too close.', 0.1],
   ['minimum_data_quality_score', 'Minimum data quality score', 'NO BET below this quality score.', 1],
   ['odds_stale_minutes', 'Odds stale threshold minutes', 'Warn when odds are older than this.', 1],

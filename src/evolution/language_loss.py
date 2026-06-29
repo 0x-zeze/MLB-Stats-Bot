@@ -23,8 +23,6 @@ def calculate_language_loss(trajectory: dict[str, Any], final_result: dict[str, 
     market = str(evaluation.get("market") or trajectory.get("market") or "moneyline").lower()
     confidence = str(evaluation.get("confidence") or "").lower()
     edge = safe_float(prediction.get("model_edge"), safe_float(evaluation.get("edge"), 0.0))
-    projected_total = safe_float(prediction.get("projected_total") or prediction.get("projected_total_runs"), 0.0)
-    market_total = safe_float(prediction.get("market_total"), 0.0)
     actual_total = safe_float(evaluation.get("actual_total"), 0.0)
     data_quality = safe_float(evaluation.get("data_quality"), safe_float((trajectory.get("input_snapshot") or {}).get("data_quality"), 0.0))
     lineup_status = str((trajectory.get("input_snapshot") or {}).get("lineup_status") or "").lower()
@@ -72,16 +70,6 @@ def calculate_language_loss(trajectory: dict[str, Any], final_result: dict[str, 
         severity = "medium"
         affected_factor = "lineup"
         summary = "The pick did not sufficiently respect lineup uncertainty."
-    elif evaluation.get("result") == "loss" and "missing" in weather_status and market == "totals":
-        loss_type = "weather_misread"
-        severity = "medium"
-        affected_factor = "weather"
-        summary = "The totals pick was made with missing weather context."
-    elif market == "totals" and evaluation.get("result") == "loss" and abs(projected_total - actual_total) >= 2.0:
-        loss_type = "totals_projection_error"
-        severity = "medium"
-        affected_factor = "totals_model"
-        summary = "Projected total runs missed the final total by at least two runs."
     elif evaluation.get("result") == "win" and data_quality < 65:
         loss_type = "good_data_quality_warning"
         affected_factor = "data_quality"
@@ -98,8 +86,6 @@ def calculate_language_loss(trajectory: dict[str, Any], final_result: dict[str, 
         "severity": severity,
         "affected_factor": affected_factor,
         "numeric_context": {
-            "projected_total": projected_total,
-            "market_total": market_total,
             "actual_total": actual_total,
             "edge": edge,
             "data_quality": data_quality,

@@ -22,7 +22,7 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertIn(payload["games"][0]["decision"], {"BET", "LEAN", "NO BET"})
         self.assertIn("data_quality", payload["games"][0])
         self.assertIn("moneyline", payload["games"][0])
-        self.assertIn("totals", payload["games"][0])
+        self.assertIn("yrfi", payload["games"][0])
 
     def test_history_and_performance_available(self):
         history = get_prediction_history()
@@ -47,25 +47,24 @@ class DashboardServiceTests(unittest.TestCase):
             "data_quality": {"score": 90},
             "probable_pitchers": {"status": "Confirmed"},
             "moneyline": {"edge": 3.0, "confidence": "Medium"},
-            "totals": {"edge": 0.0, "difference": 1.0},
+            "yrfi": {"edge": 0.0, "difference": 1.0},
         }
 
         decision, reason = _decision_from_game(game, settings)
 
         self.assertEqual("NO BET", decision)
-        self.assertEqual("Model edge below minimum threshold", reason)
+        self.assertEqual("Moneyline edge below minimum threshold", reason)
 
-    def test_total_edge_uses_total_threshold(self):
+    def test_yrfi_edge_does_not_override_moneyline_decision(self):
         settings = {
             **DEFAULT_DASHBOARD_SETTINGS,
             "minimum_moneyline_edge": 0.05,
-            "minimum_total_edge": 0.02,
         }
         game = {
             "data_quality": {"score": 90},
             "probable_pitchers": {"status": "Confirmed"},
-            "moneyline": {"edge": 0.0, "confidence": "Medium"},
-            "totals": {"edge": 3.0, "difference": 1.0},
+            "moneyline": {"edge": 6.0, "confidence": "Medium"},
+            "yrfi": {"edge": 5.0, "difference": 1.0},
         }
 
         decision, reason = _decision_from_game(game, settings)
@@ -179,7 +178,7 @@ class DashboardServiceTests(unittest.TestCase):
 
         history = [
             outcome("2026-05-04", "moneyline", "Home", "win", 5.0, 1.0, "Home"),
-            outcome("2026-05-04", "totals", "Over 8.5", "loss", 2.0, -1.0, None),
+            outcome("2026-05-04", "yrfi", "YES", "loss", 2.0, -1.0, None),
             # Outside the requested window — must be filtered out.
             outcome("2026-05-30", "moneyline", "Away", "win", 4.0, 1.0, "Away"),
         ]
@@ -191,10 +190,10 @@ class DashboardServiceTests(unittest.TestCase):
 
         # Only the two 2026-05-04 rows fall in the window; 2026-05-30 is excluded.
         self.assertEqual(2, payload["summary"]["totalBets"])
-        self.assertEqual(["Moneyline", "Totals", "Yrfi"], [row["market"] for row in payload["byMarket"]])
+        self.assertEqual(["Moneyline", "Yrfi"], [row["market"] for row in payload["byMarket"]])
         self.assertIn("winRate", payload["byMarket"][0])
         self.assertIn("predicted", payload["calibration"][0])
-        self.assertEqual({"moneyline", "totals"}, {row["market"] for row in payload["rows"]})
+        self.assertEqual({"moneyline", "yrfi"}, {row["market"] for row in payload["rows"]})
 
     def test_run_dashboard_backtest_different_windows_differ(self):
         import json as _json

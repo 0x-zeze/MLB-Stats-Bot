@@ -408,7 +408,6 @@ def build_total_features(collected: dict[str, Any]) -> dict[str, Any]:
         "away_bullpen_fatigue": bullpen_fatigue_adjustment(context.away_bullpen),
         "home_recent_form_score": _recent_feature(home_team),
         "away_recent_form_score": _recent_feature(away_team),
-        "market_total": collected["market"].get("market_total") if collected["market"].get("available") else None,
         "signal_priority": SIGNAL_PRIORITY,
         "umpire_adjustment": umpire_adj,
         "travel_fatigue": {
@@ -426,6 +425,5 @@ def build_game_features(collected: dict[str, Any]) -> dict[str, Any]:
     """Build all deterministic features for one game."""
     return {
         "moneyline": build_moneyline_features(collected),
-        "totals": build_total_features(collected),
         "signal_priority": SIGNAL_PRIORITY,
     }

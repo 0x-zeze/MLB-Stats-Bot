@@ -31,7 +31,7 @@ class PromotionGateTests(unittest.TestCase):
         self.assertEqual(approved["active_rule_version"], "rules-v1.1")
 
     def test_no_bet_protections_cannot_be_removed_automatically(self):
-        result = run_promotion_gate({"candidate_id": "cand-unsafe", "rule": "Remove NO BET protections for totals."}, self.metrics(), self.metrics(roi=0.08, log_loss=0.58), persist=False)
+        result = run_promotion_gate({"candidate_id": "cand-unsafe", "rule": "Remove NO BET protections for yrfi."}, self.metrics(), self.metrics(roi=0.08, log_loss=0.58), persist=False)
 
         self.assertEqual(result["status"], "rejected")
         self.assertIn("NO BET", result["reason"])

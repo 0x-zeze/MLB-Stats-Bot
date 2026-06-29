@@ -11,8 +11,6 @@ import {
 } from './llm.js';
 import {
   applyMoneylineValueMarket,
-  applyTotalRunMarket,
-  applyTotalsValueMarket,
   detectSharpMoneySignal,
   formatPredictions,
   getFinalGameResults,
@@ -51,7 +49,6 @@ let autoUpdateCheckRunning = false;
 const predictionCache = new Map();
 const PREDICT_CALLBACK_PREFIX = 'predict_live:';
 const LEGACY_PREDICT_CALLBACK_PREFIX = 'predict:';
-const TOTAL_MARKET_BUTTONS = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
 // Legacy inline buttons from older /evolve messages still carry this prefix.
 const EVOLVE_CALLBACK_PREFIX = 'evolve:';
 const AUDIT_COMMAND = {
@@ -173,13 +170,6 @@ async function attachMarketContext(predictions) {
   const marketOddsMultiplier = moneylineWeightMultiplier(evolutionControls, 'market_odds');
 
   for (const prediction of predictions) {
-    if (prediction.currentOdds?.totalLine && prediction.totalRuns) {
-      prediction.totalRuns = applyTotalRunMarket(prediction.totalRuns, prediction.currentOdds.totalLine, {
-        overPrice: prediction.currentOdds.overPrice,
-        underPrice: prediction.currentOdds.underPrice
-      });
-    }
-
     // Bayesian prior: blend model probability with market-implied probability.
     // Market odds are the single best predictor; even a small blend (10-15%)
     // improves calibration and reduces overconfidence.
@@ -219,7 +209,6 @@ async function attachMarketContext(predictions) {
     }
 
     applyMoneylineValueMarket(prediction);
-    applyTotalsValueMarket(prediction);
 
     // Sharp money detection: compare opening odds vs current odds
     // Now that odds are attached, we can detect line movement properly.
@@ -360,7 +349,7 @@ function predictionHelpText() {
     uiCommand('/predict Los Angeles Dodgers | New York Yankees | -120', 'manual + American odds'),
     uiCommand('/predict Los Angeles Dodgers | New York Yankees | decimal 1.91', 'manual + decimal odds'),
     '',
-    uiBullet('⚠️', '/predict tanpa matchup memakai schedule MLB live. Tombol Total 6.5-11.5 dipakai untuk cek market total.')
+    uiBullet('⚠️', '/predict tanpa matchup memakai schedule MLB live. Tombol memilih game dari schedule MLB.')
   ].join('\n');
 }
 
@@ -372,27 +361,6 @@ function predictionKeyboard(dateYmd, games) {
         callback_data: `${PREDICT_CALLBACK_PREFIX}${dateYmd}:${game.gamePk}`
       }
     ])
-  };
-}
-
-function totalMarketKeyboard(dateYmd, gamePk) {
-  return {
-    inline_keyboard: [
-      TOTAL_MARKET_BUTTONS.slice(0, 3).map((line) => ({
-        text: `Total ${line}`,
-        callback_data: `${PREDICT_CALLBACK_PREFIX}${dateYmd}:${gamePk}:${line}`
-      })),
-      TOTAL_MARKET_BUTTONS.slice(3).map((line) => ({
-        text: `Total ${line}`,
-        callback_data: `${PREDICT_CALLBACK_PREFIX}${dateYmd}:${gamePk}:${line}`
-      })),
-      [
-        {
-          text: 'Refresh',
-          callback_data: `${PREDICT_CALLBACK_PREFIX}${dateYmd}:${gamePk}`
-        }
-      ]
-    ]
   };
 }
 
@@ -624,7 +592,7 @@ function formatEvolveResult(payload) {
     '',
     uiSection('🩹', 'Backfill data flat'),
     uiKV('🔧', 'Baris diperbaiki', backfill.updated ?? 0),
-    uiKV('📈', 'Totals/YRFI', `${backfill.totals_fixed ?? 0}/${backfill.yrfi_fixed ?? 0}`),
+    uiKV('📈', 'YRFI', backfill.yrfi_fixed ?? 0),
     '',
     uiSection('📥', 'Ingest'),
     uiKV('📊', 'Evaluasi baru/run ini', ingestedNew),
@@ -726,35 +694,6 @@ function predictionPick(prediction) {
   return prediction.winner;
 }
 
-function signedRuns(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return '-';
-  return `${parsed >= 0 ? '+' : ''}${parsed.toFixed(1)}`;
-}
-
-function sumNumberValues(...values) {
-  return values.reduce((sum, value) => {
-    const parsed = Number(value);
-    return sum + (Number.isFinite(parsed) ? parsed : 0);
-  }, 0);
-}
-
-function totalProbabilityLines(label, probabilities) {
-  return TOTAL_MARKET_BUTTONS.map(
-    (line) => uiKV('•', `${label} ${line}`, percent(probabilities[String(line)] || 0))
-  );
-}
-
-function totalDriverLines(totalDetail) {
-  return [
-    uiKV('•', 'Offense', signedRuns(sumNumberValues(totalDetail.homeOffense, totalDetail.awayOffense))),
-    uiKV('•', 'Starting pitcher', signedRuns(sumNumberValues(totalDetail.homeStarterAllowed, totalDetail.awayStarterAllowed))),
-    uiKV('•', 'Bullpen', signedRuns(sumNumberValues(totalDetail.homeBullpenAllowed, totalDetail.awayBullpenAllowed))),
-    uiKV('•', 'Weather', signedRuns(totalDetail.weather)),
-    uiKV('•', 'Lineup', signedRuns(sumNumberValues(totalDetail.homeLineupAdj, totalDetail.awayLineupAdj)))
-  ];
-}
-
 function lineupContextLines(lineupLine) {
   const lines = String(lineupLine || '')
     .split(' | ')
@@ -790,38 +729,7 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
   const modelReferenceLines = prediction.modelReferenceLines?.length
     ? prediction.modelReferenceLines.map((line) => `• ${line}`)
     : [`• ${prediction.modelReferenceLine}`];
-  const totalMarketLine = options.marketLine ?? prediction.currentOdds?.totalLine ?? prediction.totalRuns?.marketLine;
-  const totalRuns = applyTotalRunMarket(prediction.totalRuns, totalMarketLine);
-  const totalDetail = totalRuns?.detail || {};
-  const totalRunLines = totalRuns
-    ? [
-        uiSection('📌', 'Projection'),
-        uiKV('•', 'Projected total', `${totalRuns.projectedTotal.toFixed(1)} runs`),
-        uiKV('•', 'Expected runs', `${prediction.away.abbreviation || prediction.away.name} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${prediction.home.abbreviation || prediction.home.name} ${totalRuns.homeExpectedRuns.toFixed(1)}`),
-        uiKV('•', 'Market total', `${totalRuns.marketLine} | ${signedRuns(totalRuns.marketDeltaRuns)} runs vs model`),
-        uiKV('•', 'Best lean', `${totalRuns.bestLean} | ${totalRuns.confidence}`),
-        uiKV('•', 'Model edge', `${signedRuns(totalRuns.modelEdge)}% vs ${totalRuns.hasMarketPrice ? `no-vig market ${totalRuns.marketProbability.toFixed(0)}%` : '50% baseline'}`),
-        ...(prediction.totalsBetDecision?.status === 'VALUE' && prediction.totalsValuePick
-          ? [uiKV('💰', 'Totals bet', `${prediction.totalsValuePick.side === 'over' ? 'Over' : 'Under'} ${prediction.totalsValuePick.line} ${formatMoneylineOdds(prediction.totalsValuePick.odds)} | stake ${Number(prediction.totalsValuePick.kellyStakePercent).toFixed(1)}u | edge ${prediction.totalsValuePick.edge >= 0 ? '+' : ''}${Number(prediction.totalsValuePick.edge).toFixed(1)}%`)]
-          : []),
-        '',
-        uiSection('📈', 'Over Probability'),
-        ...totalProbabilityLines('Over', totalRuns.over),
-        '',
-        uiSection('📉', 'Under Probability'),
-        ...totalProbabilityLines('Under', totalRuns.under),
-        '',
-        uiSection('⚙️', 'Run Drivers'),
-        ...totalDriverLines(totalDetail),
-        '',
-        uiSection('🏟️', 'Context'),
-        uiKV('•', 'Park', `${totalRuns.detail?.park?.label || prediction.venue} | Run PF ${totalRuns.detail?.park?.runFactorPct || 100} | HR PF ${totalRuns.detail?.park?.homeRunFactorPct || 100}`),
-        ...lineupContextLines(prediction.lineupLine),
-        '',
-        uiSection('🧾', 'Main Factors'),
-        ...totalRuns.factors.slice(0, 4).map((factor) => `• ${factor}`)
-      ]
-    : ['Data total runs tidak tersedia.'];
+
 
   return [
     uiTitle('📊', 'MLB Prediction'),
@@ -860,9 +768,6 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
     uiSection('🏁', 'First Inning'),
     uiKV('🏁', 'Run in 1st', `${firstLabel} | ${percent(firstProbability)}`),
     '',
-    uiSection('🏃', 'Total Runs / Over-Under'),
-    ...totalRunLines,
-    '',
     uiSection('💡', 'Alasan'),
     ...reasons.slice(0, 3).map((reason) => `• ${reason}`),
     agentActive ? uiKV('⚠️', 'Risk', prediction.agentAnalysis.risk) : null,
@@ -885,14 +790,13 @@ async function sendPythonPrediction(bot, chatId, text) {
 async function handlePredictCallback(bot, callbackQuery) {
   const chatId = callbackQuery.message?.chat?.id;
   const data = callbackQuery.data || '';
-  const [dateYmd, rawGamePk, rawMarketLine] = data.slice(PREDICT_CALLBACK_PREFIX.length).split(':');
+  const [dateYmd, rawGamePk] = data.slice(PREDICT_CALLBACK_PREFIX.length).split(':');
   const gamePk = Number.parseInt(rawGamePk, 10);
-  const marketLine = rawMarketLine ? Number.parseFloat(rawMarketLine) : undefined;
 
   await bot.answerCallbackQuery(callbackQuery.id, { text: 'Mengambil prediksi...' }).catch(() => {});
 
   if (!chatId) return;
-  if (!isValidDateYmd(dateYmd) || !Number.isFinite(gamePk) || (rawMarketLine && !Number.isFinite(marketLine))) {
+  if (!isValidDateYmd(dateYmd) || !Number.isFinite(gamePk)) {
     await bot.sendMessage(chatId, uiBullet('⚠️', 'Data tombol tidak valid. Coba kirim /predict lagi untuk refresh daftar.'));
     return;
   }
@@ -911,9 +815,7 @@ async function handlePredictCallback(bot, callbackQuery) {
   await attachMarketContext([prediction]);
   await attachAgentAnalyses([prediction]);
   storage.savePredictions(dateYmd, [prediction]);
-  await bot.sendMessage(chatId, formatLivePrediction(dateYmd, prediction, { marketLine }), {
-    reply_markup: totalMarketKeyboard(dateYmd, gamePk)
-  });
+  await bot.sendMessage(chatId, formatLivePrediction(dateYmd, prediction));
   console.log(
     `Live prediction callback handled for ${chatId}: ${prediction.away.name} @ ${prediction.home.name}.`
   );
@@ -942,14 +844,8 @@ async function sendAlertToAll(bot, dateYmd) {
 }
 
 function formatLineCheckMovement(movement) {
-  const market =
-    movement.storageMarket === 'total'
-      ? 'Total'
-      : `Moneyline ${movement.teamLabel || ''}`.trim();
-  const delta =
-    movement.unit === 'runs'
-      ? `${movement.delta >= 0 ? '+' : ''}${movement.delta.toFixed(1)}`
-      : `${movement.delta >= 0 ? '+' : ''}${Math.round(movement.delta)}`;
+  const market = `Moneyline ${movement.teamLabel || ''}`.trim();
+  const delta = `${movement.delta >= 0 ? '+' : ''}${Math.round(movement.delta)}`;
 
   return uiBullet('•', `${movement.matchup} | ${market} | ${movement.oldText} -> ${movement.newText} | ${delta} ${movement.unit}`);
 }
@@ -980,7 +876,7 @@ function formatLineCheckSummary(dateYmd, result, { source = 'stored predictions'
     uiKV('📅', 'Tanggal', dateYmd),
     uiKV('📡', 'Sumber game', source),
     uiKV('🎯', 'Matched odds', `${result.matchedGames}/${result.checkedGames}`),
-    uiKV('📏', 'Threshold', `ML ${settings.moneylineThreshold} cents | Total ${settings.totalThreshold} runs`),
+    uiKV('📏', 'Threshold', `ML ${settings.moneylineThreshold} cents`),
     result.initializedSnapshots > 0
       ? uiKV('💾', 'Baseline odds tersimpan', `${result.initializedSnapshots} market`)
       : null,
@@ -1183,7 +1079,6 @@ function formatLineAlertsStatus(chatId, stoppedCount = null) {
     uiKV('🌐', 'Status global env', settings.enabled ? 'aktif' : 'mati'),
     uiKV('⏱️', 'Interval cek', `${settings.intervalMinutes} menit`),
     uiKV('📏', 'Threshold ML', `${settings.moneylineThreshold} cents`),
-    uiKV('📏', 'Threshold total', `${settings.totalThreshold} runs`),
     uiKV('🔑', 'Odds API', settings.hasOddsApiKey ? 'tersedia' : 'belum diisi')
   ];
 
@@ -1320,7 +1215,6 @@ async function handlePicksCommand(bot, chatId, question, dateYmd = dateInTimezon
   for (const prediction of predictions) {
     try {
       storage.recordBet(prediction);
-      storage.recordTotalsBet(prediction);
     } catch (error) {
       console.error('recordBet failed:', error.message);
     }
@@ -1450,7 +1344,6 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
       // Settle any open VALUE bet for this game into units P/L (idempotent).
       try {
         storage.settleBet(prediction, result, clv);
-        storage.settleTotalsBet(prediction, result);
       } catch (error) {
         console.error('settleBet failed:', error.message);
       }

@@ -119,13 +119,8 @@ class TestExplainMarketDisagreement:
         )
         assert result["magnitude"] == "small"
 
-    def test_totals_market(self):
-        result = explain_market_disagreement(
-            model_probability=0.60,
-            market_implied_probability=0.52,
-            market_type="totals",
-        )
-        assert "totals" in result["explanation"].lower() or "over" in result["explanation"].lower() or "total" in result["explanation"].lower()
+    def test_totals_market_old(self):
+        pass  # totals market removed
 
 
 class TestDetectSteamMove:
@@ -142,16 +137,8 @@ class TestDetectSteamMove:
         assert result["direction"] == "toward_favorite"
         assert result["magnitude"] in ("moderate", "heavy")
 
-    def test_steam_detected_totals(self):
-        result = detect_steam_move(
-            opening_line=None,
-            current_line=None,
-            opening_total=8.5,
-            current_total=9.5,
-        )
-        assert result["steam_detected"] is True
-        assert result["direction"] == "over"
-        assert result["magnitude"] == "heavy"
+    def test_steam_detected_totals_old(self):
+        pass  # totals market removed
 
     def test_no_steam(self):
         result = detect_steam_move(

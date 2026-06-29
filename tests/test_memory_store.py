@@ -12,12 +12,12 @@ class MemoryStoreTests(unittest.TestCase):
                 "lessons",
                 {
                     "lesson_id": "lesson-1",
-                    "market": "totals",
+                    "market": "yrfi",
                     "lesson_type": "overconfidence",
                     "supporting_data": {"market_total": 8.5, "projected_total_difference": 0.4, "data_quality": 74, "lineup_status": "projected"},
                 },
             )
-            result = retrieve_similar_lessons({"market": "totals", "market_total": 8.5, "projected_total_difference": 0.3, "data_quality": 72, "lineup_status": "projected"})
+            result = retrieve_similar_lessons({"market": "yrfi", "park_factor": "hitter-friendly", "data_quality": 72, "lineup_status": "projected"})
 
             self.assertTrue(path_for("prediction_outcomes").exists())
 

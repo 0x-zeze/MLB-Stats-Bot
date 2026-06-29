@@ -16,21 +16,6 @@ def market_implied_probability(odds: Any) -> float | None:
     return american_odds_to_implied_probability(str(odds))
 
 
-def detect_line_movement(market: dict[str, Any]) -> dict[str, Any]:
-    """Detect simple total line movement from opening to current number."""
-    opening = safe_float(market.get("opening_total"), 0.0)
-    current = safe_float(market.get("current_total"), 0.0) or safe_float(
-        market.get("market_total"), 0.0
-    )
-    movement = current - opening if opening > 0 and current > 0 else 0.0
-    return {
-        "opening_total": opening or None,
-        "current_total": current or None,
-        "movement": movement,
-        "moved_heavily": abs(movement) >= 0.75,
-    }
-
-
 def compare_moneyline_market(
     prediction: dict[str, Any],
     market: dict[str, Any],
@@ -59,24 +44,6 @@ def compare_moneyline_market(
         "home_edge": home_edge,
         "away_edge": away_edge,
         "pick_edge": pick_edge,
-        "line_movement": detect_line_movement(market),
-    }
-
-
-def compare_total_market(
-    prediction: dict[str, Any],
-    market: dict[str, Any],
-) -> dict[str, Any]:
-    """Compare deterministic total projection against market total."""
-    market_total = safe_float(market.get("market_total"), 0.0)
-    projected_total = safe_float(prediction.get("projected_total_runs"), 0.0)
-    total_difference = projected_total - market_total if market_total > 0 else None
-    return {
-        "market_total": market_total or None,
-        "projected_total": projected_total,
-        "total_difference": total_difference,
-        "model_edge": prediction.get("model_edge"),
-        "line_movement": detect_line_movement(market),
     }
 
 
@@ -90,14 +57,10 @@ def compare_markets(
         return {
             "available": False,
             "moneyline": {},
-            "totals": {},
-            "line_movement": detect_line_movement(market),
             "sharp_money": None,
         }
 
     moneyline_comparison = compare_moneyline_market(predictions["moneyline"], market)
-    totals_comparison = compare_total_market(predictions["totals"], market)
-
     model_pick = predictions["moneyline"].get("predicted_winner", "")
     model_prob = predictions["moneyline"].get("home_win_probability", 0.5)
     opening_odds = {
@@ -118,8 +81,6 @@ def compare_markets(
     return {
         "available": True,
         "moneyline": moneyline_comparison,
-        "totals": totals_comparison,
-        "line_movement": detect_line_movement(market),
         "sharp_money": {
             "direction": sharp_signal.sharp_money_direction,
             "movement_magnitude": sharp_signal.movement_magnitude,

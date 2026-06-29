@@ -180,7 +180,7 @@ class EvolutionAuditTests(unittest.TestCase):
             second_audit = build_evolution_audit(min_segment_sample=3, persist=False, apply_safe=True)
 
         active_rule_keys = {rule["rule_key"] for rule in approved["active_controls"]}
-        self.assertIn("audit:no_bet:weak_edge", active_rule_keys)
+        self.assertIn("audit:moneyline:no_bet:weak_edge", active_rule_keys)
         self.assertNotEqual(approved["active_rule_version"], "rules-v1.0")
         self.assertTrue(audit["applied_updates"]["rules_added"])
         self.assertTrue(audit["applied_updates"]["weight_versions_added"])

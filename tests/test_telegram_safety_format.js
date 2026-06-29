@@ -71,12 +71,11 @@ test('advanced Telegram output separates prediction lean value quality confidenc
   ]);
 
   assert.match(output, /Prediction \| Home Team/);
-  assert.match(output, /Lean \| No total lean/);
   assert.match(output, /Value \| none/);
   assert.match(output, /Data Quality \| 58\/100/);
   // Status labels (NO BET / LEAN ONLY / VALUE) are replaced by a confidence
-  // percent + band; 54% conviction is below the 58% floor -> "rendah".
-  assert.match(output, /Confidence \| 54\.0% \(rendah\)/);
+  // percent + band; 54% conviction is in the 52-58% range -> "sedang".
+  assert.match(output, /Confidence \| 54\.0% \(sedang\)/);
   assert.doesNotMatch(output, /No Bet \|/);
   assert.match(output, /Risk Warning \| Analysis only/);
 });

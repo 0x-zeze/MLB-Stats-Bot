@@ -5,7 +5,6 @@ import HeroSection from './components/HeroSection.jsx';
 import TodaySlate from './components/TodaySlate.jsx';
 import PredictionDetail from './components/PredictionDetail.jsx';
 import MoneylineSection from './components/MoneylineSection.jsx';
-import TotalsSection from './components/TotalsSection.jsx';
 import YrfiSection from './components/YrfiSection.jsx';
 import TeamAnalytics from './components/TeamAnalytics.jsx';
 import DataQualitySection from './components/DataQualitySection.jsx';
@@ -146,9 +145,8 @@ export default function App() {
           {selectedGame && <PredictionDetail game={selectedGame} onClose={() => setSelectedGame(null)} />}
           <div className="grid lg:grid-cols-2 gap-6">
             <MoneylineSection games={games} />
-            <TotalsSection games={games} />
+            <YrfiSection games={games} />
           </div>
-          <YrfiSection games={games} />
         </div>
       )}
 
@@ -168,12 +166,6 @@ export default function App() {
         </div>
       )}
 
-      {activeTab === 'totals' && (
-        <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Totals Analysis</h2>
-          <TotalsSection games={games} />
-        </div>
-      )}
 
       {activeTab === 'yrfi' && (
         <div className="space-y-6 animate-fade-in">

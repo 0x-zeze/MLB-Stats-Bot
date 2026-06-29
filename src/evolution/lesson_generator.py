@@ -19,9 +19,8 @@ LESSON_CATEGORIES = {
     "good_data_quality_warning": "data_quality",
     "bad_no_bet": "no_bet",
     "good_no_bet": "no_bet",
-    "totals_projection_error": "totals",
-    "correct_pick": "moneyline",
-    "wrong_pick": "moneyline",
+    "correct_pick": "market",
+    "wrong_pick": "market",
     # New lesson types for enhanced analysis
     "pitching_misread": "pitching",
     "bullpen_fatigue_miss": "bullpen",
@@ -52,14 +51,6 @@ def generate_self_questions(evaluation_context: dict[str, Any]) -> list[dict[str
         "Was the data quality score too generous?",
         "Did the explanation communicate risk clearly?",
     ]
-    if market == "totals":
-        questions.extend(
-            [
-                "Did lineup uncertainty matter?",
-                "Did weather adjustment help or hurt?",
-                "Did the model perform differently on this total line range?",
-            ]
-        )
     if result == "loss":
         questions.extend(
             [
@@ -76,6 +67,7 @@ def generate_self_questions(evaluation_context: dict[str, Any]) -> list[dict[str
 
 def attribute_prediction_result(trajectory: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
     result = str(evaluation.get("result") or "").lower()
+    market = str(evaluation.get("market") or trajectory.get("market") or "moneyline").lower()
     prediction = trajectory.get("prediction") or {}
     snapshot = trajectory.get("input_snapshot") or {}
     factors: list[dict[str, str]] = []
@@ -112,8 +104,6 @@ def attribute_prediction_result(trajectory: dict[str, Any], evaluation: dict[str
     )
     if "projected" in lineup_status or "missing" in lineup_status:
         factors.append({"factor": "lineup", "impact": "negative", "reason": "Lineup was not confirmed before the prediction."})
-    if "missing" in weather_status and str(evaluation.get("market")) == "totals":
-        factors.append({"factor": "weather", "impact": "negative", "reason": "Weather context was missing for a totals decision."})
     if "missing" in bullpen_status or "stale" in bullpen_status:
         factors.append({"factor": "bullpen", "impact": "negative", "reason": "Bullpen context was missing or stale."})
     if data_quality < 65:
@@ -160,7 +150,7 @@ def attribute_prediction_result(trajectory: dict[str, Any], evaluation: dict[str
         )
     return {
         "game_id": evaluation.get("game_id"),
-        "market": evaluation.get("market"),
+        "market": market,
         "result": result,
         "attribution": factors,
     }
@@ -168,23 +158,22 @@ def attribute_prediction_result(trajectory: dict[str, Any], evaluation: dict[str
 
 def generate_lesson(evaluation: dict[str, Any], language_loss: dict[str, Any], language_gradient: dict[str, Any]) -> dict[str, Any]:
     lesson_type = str(language_loss.get("loss_type") or "general")
+    market = str(evaluation.get("market") or language_loss.get("market") or "moneyline").lower()
     numeric = language_loss.get("numeric_context") or {}
     suggested_adjustment = language_gradient.get("gradient") or "Review this segment before changing production behavior."
+    category = market if lesson_type in {"correct_pick", "wrong_pick"} else LESSON_CATEGORIES.get(lesson_type, "tool_usage")
     return {
         "lesson_id": _lesson_id(evaluation, language_loss),
         "date": evaluation.get("date"),
         "game_id": evaluation.get("game_id"),
-        "market": evaluation.get("market"),
+        "market": market,
         "prediction": evaluation.get("prediction"),
         "result": evaluation.get("result"),
         "lesson_type": lesson_type,
-        "category": LESSON_CATEGORIES.get(lesson_type, "tool_usage"),
+        "category": category,
         "summary": language_loss.get("loss_summary"),
         "suggested_adjustment": suggested_adjustment,
         "supporting_data": {
-            "projected_total": numeric.get("projected_total"),
-            "market_total": numeric.get("market_total"),
-            "actual_total": numeric.get("actual_total"),
             "edge": numeric.get("edge"),
             "data_quality": numeric.get("data_quality"),
             "confidence": evaluation.get("confidence"),

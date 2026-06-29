@@ -50,10 +50,10 @@ def _apply_market_to_moneyline(
     return output
 
 
-def _supporting_factors(moneyline: dict[str, Any], totals: dict[str, Any]) -> list[str]:
+def _supporting_factors(moneyline: dict[str, Any], first_inning: dict[str, Any]) -> list[str]:
     factors = []
     factors.extend(moneyline.get("main_factors", []))
-    factors.extend(totals.get("main_factors", []))
+    factors.extend(first_inning.get("main_factors", []))
     unique: list[str] = []
     for factor in factors:
         if factor not in unique:
@@ -340,8 +340,6 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
     if conf_mod < 1.0:
         moneyline["dynamic_confidence_modifier"] = conf_mod
 
-    totals = apply_confidence_downgrade(raw_predictions["totals"], quality_report)
-
     first_inning_raw = deepcopy(raw_predictions["first_inning"])
     first_inning_raw["model_edge"] = abs(first_inning_raw.get("yrfi_probability", 0.5) - 0.5)
     first_inning_raw["market_type"] = "yrfi"
@@ -349,7 +347,6 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
 
     # Apply tier confidence cap
     moneyline["confidence"] = apply_tier_confidence_cap(moneyline["confidence"], tier)
-    totals["confidence"] = apply_tier_confidence_cap(totals["confidence"], tier)
     first_inning["confidence"] = apply_tier_confidence_cap(first_inning["confidence"], tier)
 
     market = collected.get("market") or {}
@@ -362,16 +359,6 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
         if moneyline.get("predicted_winner") == getattr(collected["game"], "home_team", None)
         else market.get("away_moneyline")
     )
-    over_values = list((totals.get("over_probabilities") or {}).values())
-    under_values = list((totals.get("under_probabilities") or {}).values())
-    totals["model_probability"] = calibrate(
-        max(over_values + under_values + [0.0]), market="totals"
-    )
-    totals["american_odds"] = (
-        market.get("over_odds")
-        if str(totals.get("raw_lean", "")).lower().startswith("over")
-        else market.get("under_odds")
-    )
     first_inning["model_probability"] = calibrate(
         max(
             first_inning.get("yrfi_probability", 0.0),
@@ -381,10 +368,9 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
     )
 
     moneyline = apply_risk_framework(moneyline, quality_report)
-    totals = apply_risk_framework(totals, quality_report)
     first_inning = apply_risk_framework(first_inning, quality_report)
 
-    supporting_factors = _supporting_factors(moneyline, totals)
+    supporting_factors = _supporting_factors(moneyline, first_inning)
 
     result = {
         "stages": {
@@ -403,7 +389,7 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
         "features": features,
         "raw_predictions": raw_predictions,
         "market_comparison": market_comparison,
-        "quality_report": totals.get("quality_report", quality_report),
+        "quality_report": moneyline.get("quality_report", quality_report),
         "prediction_tier": {
             "tier": tier.tier,
             "label": tier.label,
@@ -413,7 +399,6 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
             "refresh_recommended": tier.refresh_recommended,
         },
         "moneyline": moneyline,
-        "totals": totals,
         "first_inning": first_inning,
         "supporting_factors": supporting_factors,
         # --- New outputs from dynamic weights & player contribution -----------

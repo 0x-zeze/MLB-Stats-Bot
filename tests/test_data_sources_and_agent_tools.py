@@ -5,13 +5,13 @@ from src.agent_tools import (
     explain_prediction,
     get_team_offense_splits,
     predict_moneyline,
-    predict_total_runs,
+    predict_yrfi,
 )
 from src.data_sources.odds_client import extract_market_snapshot
 from src.data_sources.retrosheet_loader import load_game_logs, team_recent_form
 from src.data_sources.statcast_loader import load_statcast_csv, summarize_statcast
 from src.knowledge.baseball_knowledge import answer_baseball_question
-from src.telegram_agent_bridge import list_games, moneyline, total_runs
+from src.telegram_agent_bridge import list_games, moneyline, yrfi
 
 
 class KnowledgeLayerTests(unittest.TestCase):
@@ -50,22 +50,19 @@ class DataSourceLoaderTests(unittest.TestCase):
         }
         snapshot = extract_market_snapshot(event)
         self.assertEqual(snapshot["moneyline"]["Los Angeles Dodgers"], -120)
-        self.assertEqual(snapshot["totals"]["over"]["point"], 8.5)
 
 
 class AgentToolTests(unittest.TestCase):
     def test_agent_predictions_from_sample_data(self) -> None:
-        moneyline = predict_moneyline(0)
-        totals = predict_total_runs(0)
-        self.assertIn("home_win_probability", moneyline)
-        self.assertIn("projected_total_runs", totals)
-        self.assertIn(8.5, totals["over_probabilities"])
+        moneyline_result = predict_moneyline(0)
+        yrfi_result = predict_yrfi(0)
+        self.assertIn("home_win_probability", moneyline_result)
+        self.assertIn("yrfi_probability", yrfi_result)
 
     def test_explain_prediction_output_contract(self) -> None:
         output = explain_prediction(0)
         self.assertIn("MLB Game Analysis:", output)
         self.assertIn("Moneyline prediction:", output)
-        self.assertIn("Total runs prediction:", output)
         self.assertIn("No-bet flag:", output)
 
     def test_market_value_edge(self) -> None:
@@ -81,7 +78,7 @@ class AgentToolTests(unittest.TestCase):
         games = list_games()
         self.assertGreaterEqual(len(games["games"]), 1)
         self.assertIn("Pick:", moneyline("0")["text"])
-        self.assertIn("Over:", total_runs("0")["text"])
+        self.assertIn("YRFI", yrfi("0")["text"])
 
 
 if __name__ == "__main__":

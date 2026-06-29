@@ -1,5 +1,5 @@
 import EdgeIndicator from './EdgeIndicator.jsx';
-import { number, percent, signed } from '../utils.js';
+import { percent } from '../utils.js';
 
 function Row({ label, children }) {
   return (
@@ -12,9 +12,8 @@ function Row({ label, children }) {
 
 export default function MarketComparison({ game }) {
   const moneyline = game.moneyline || {};
-  const totals = game.totals || {};
   return (
-    <div className="grid gap-3 md:grid-cols-2">
+    <div className="grid gap-3">
       <section className="rounded-lg border border-line bg-white p-4">
         <h4 className="mb-2 text-sm font-bold text-ink">Moneyline Market</h4>
         <Row label="Model probability">{percent(moneyline.model_probability)}</Row>
@@ -22,14 +21,7 @@ export default function MarketComparison({ game }) {
         <Row label="Difference / edge"><EdgeIndicator value={moneyline.edge} /></Row>
         <Row label="Current odds">{moneyline.current_odds || 'Unavailable'}</Row>
       </section>
-      <section className="rounded-lg border border-line bg-white p-4">
-        <h4 className="mb-2 text-sm font-bold text-ink">Totals Market</h4>
-        <Row label="Model total">{number(totals.projected_total)}</Row>
-        <Row label="Market total">{number(totals.market_total)}</Row>
-        <Row label="Difference">{signed(totals.difference, ' runs')}</Row>
-        <Row label="Over / Under">{percent(totals.over_probability)} / {percent(totals.under_probability)}</Row>
-        <Row label="Total edge"><EdgeIndicator value={totals.edge} /></Row>
-      </section>
+
     </div>
   );
 }

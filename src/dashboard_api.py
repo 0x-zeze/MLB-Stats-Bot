@@ -149,7 +149,7 @@ API_DEPENDENCIES = [Depends(verify_token)]
 app = FastAPI(
     title="MLB Stats Bot Dashboard API",
     version="0.2.0",
-    description="Prediction control-center API for MLB moneyline, totals, quality, and performance.",
+    description="Prediction control-center API for MLB moneyline, yrfi, quality, and performance.",
 )
 
 app.add_middleware(

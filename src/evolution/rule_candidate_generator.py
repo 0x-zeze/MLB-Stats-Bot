@@ -43,10 +43,12 @@ def generate_rule_candidates(
         }
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for lesson in lessons:
-        key = f"{lesson.get('lesson_type')}|{lesson.get('suggested_adjustment')}"
+        market = str(lesson.get('market') or 'moneyline').lower()
+        key = f"{market}|{lesson.get('lesson_type')}|{lesson.get('suggested_adjustment')}"
         grouped[key].append(lesson)
     for gradient in language_gradients:
-        key = f"{gradient.get('target')}|{gradient.get('gradient')}"
+        market = str(gradient.get('market') or 'moneyline').lower()
+        key = f"{market}|{gradient.get('target')}|{gradient.get('gradient')}"
         grouped[key].append(gradient)
 
     candidates = []
@@ -56,9 +58,11 @@ def generate_rule_candidates(
         first = records[0]
         target = str(first.get("target") or first.get("category") or "")
         lesson_type = str(first.get("lesson_type") or first.get("suggested_update_type") or "")
+        market = str(first.get("market") or "moneyline").lower()
         update_text = first.get("gradient") or first.get("suggested_adjustment")
         candidate = {
             "candidate_id": _candidate_id("rule", key),
+            "market": market,
             "type": _candidate_type(target, lesson_type),
             "rule": update_text,
             "reason": f"Repeated pattern appeared {len(records)} times.",

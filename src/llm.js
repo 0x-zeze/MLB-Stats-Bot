@@ -142,14 +142,13 @@ function compactGameForAgent(item, evolutionData) {
       pickTeamName: item.winner.name,
       awayProbability: Math.round(item.away.winProbability),
       homeProbability: Math.round(item.home.winProbability),
-      totalRuns: item.totalRuns,
       modelBreakdown: item.modelBreakdown,
       modelBreakdownLine: item.modelBreakdownLine,
       currentOdds: item.currentOdds,
       valuePick: item.valuePick,
       betDecision: item.betDecision,
       auditMemoryNotes: item.auditMemoryNotes,
-      rule: 'LLM may explain and flag risk, but must not invent probabilities or totals.'
+      rule: 'LLM may explain and flag risk, but must not invent probabilities.'
     },
     signalPriority: {
       tier1: ['probable pitchers', 'confirmed lineup/player availability', 'team offense', 'bullpen usage', 'park factor', 'market odds/value'],
@@ -189,7 +188,6 @@ function compactGameForAgent(item, evolutionData) {
     moneylineValueOptions: item.moneylineValueOptions,
     betDecision: item.betDecision,
     auditMemoryNotes: item.auditMemoryNotes,
-    totalRuns: item.totalRuns,
     baselineReasons: item.reasons,
     firstInning: item.firstInning
       ? {
@@ -234,7 +232,7 @@ function compactGameForAgent(item, evolutionData) {
     dataQualityIndicators: {
       pitchersConfirmed: Boolean(item.away?.starter && item.home?.starter),
       lineupsConfirmed: Boolean(item.lineups?.away?.confirmed && item.lineups?.home?.confirmed),
-      weatherAvailable: item.totalRuns?.detail?.weather !== undefined,
+      weatherAvailable: item.weather !== undefined,
       oddsAvailable: Boolean(item.currentOdds?.awayMoneyline || item.currentOdds?.homeMoneyline)
     },
     evolutionContext: evolutionData && typeof evolutionData.calibrationForProbability === 'function'

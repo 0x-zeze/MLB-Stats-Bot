@@ -1,7 +1,7 @@
 """Isotonic regression calibrator for model probabilities.
 
 Maps raw model probabilities to calibrated probabilities using historical
-prediction outcomes, per market (moneyline, totals, yrfi). Uses
+prediction outcomes, per active market (moneyline, yrfi). Uses
 piecewise-linear interpolation from binned averages (no sklearn dependency).
 """
 
@@ -19,23 +19,20 @@ _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _OUTCOMES_PATH = _DATA_DIR / "evolution" / "prediction_outcomes.csv"
 # Legacy single-market (moneyline) map; kept for backward compatibility.
 _CALIBRATION_MAP_PATH = _DATA_DIR / "calibration_map.json"
-# Per-market maps: {"moneyline": [[x,y],...], "totals": [...], "yrfi": [...]}.
+# Per-market maps: {"moneyline": [[x,y],...], "yrfi": [...]}.
 _CALIBRATION_MAPS_PATH = _DATA_DIR / "calibration_maps.json"
 
-_MARKETS = ("moneyline", "totals", "yrfi")
+_MARKETS = ("moneyline", "yrfi")
 
 _MIN_SAMPLES = 50
 _BUCKET_SIZE = 0.03
 _MIN_BIN_COUNT = 3
 
-# Per-market overrides for low-volume markets. Moneyline has ~559 samples and
-# calibrates well with the tight defaults. Totals (~286) and yrfi (~192) are
-# thinner: a wider bucket lets them form stable bins, but the per-bin floor is
-# kept at 4 (not 2) so a 3-sample tail bin that happens to go 3-0 cannot become
-# an extreme anchor (this is what produced the bogus totals 0.868->1.0 point).
+# Per-market overrides for low-volume markets. Moneyline has enough samples for
+# tight defaults. YRFI is thinner: a wider bucket lets it form stable bins, but
+# the per-bin floor stays at 4 so a tiny tail bin cannot become an extreme anchor.
 # Markets absent here use the defaults.
 _MARKET_PARAMS: dict[str, dict[str, float]] = {
-    "totals": {"min_samples": 40, "bucket_size": 0.05, "min_bin_count": 4},
     "yrfi": {"min_samples": 40, "bucket_size": 0.05, "min_bin_count": 4},
 }
 
@@ -110,8 +107,8 @@ def _extract_predicted_probability(row: dict[str, Any]) -> float | None:
         try:
             data = json.loads(eval_json)
             # The evaluator stores the authoritative per-market win probability
-            # for the picked side here (moneyline, totals, and yrfi alike). Prefer
-            # it so every market calibrates, not just moneyline.
+            # for the picked side here (moneyline and yrfi alike). Prefer
+            # it so every active market calibrates, not just moneyline.
             predicted = safe_float(data.get("predicted_probability"), None)
             if predicted is not None:
                 val = predicted / 100.0 if predicted > 1.0 else predicted

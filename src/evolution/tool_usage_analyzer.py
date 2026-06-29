@@ -15,15 +15,13 @@ def analyze_tool_usage(trajectory: dict[str, Any]) -> dict[str, Any]:
     unnecessary_tools: list[str] = []
 
     required = {"get_today_games", "generate_quality_report", "get_probable_pitchers"}
-    if market == "totals":
-        required.update({"predict_total_runs", "get_weather_context", "get_bullpen_usage"})
     if market == "moneyline":
         required.add("predict_moneyline")
     missing_tools.extend(sorted(required - tools))
 
-    if market == "moneyline" and "predict_total_runs" in tools and "predict_moneyline" not in tools:
-        unnecessary_tools.append("predict_total_runs")
-    if str(snapshot.get("weather_status") or "").lower() in {"missing", "unavailable"} and market == "totals":
+    if market == "moneyline" and "predict_yrfi" in tools and "predict_moneyline" not in tools:
+        unnecessary_tools.append("predict_yrfi")
+    if str(snapshot.get("weather_status") or "").lower() in {"missing", "unavailable"} and market in {"moneyline", "yrfi"}:
         if "get_weather_context" not in missing_tools:
             missing_tools.append("get_weather_context")
     if str(snapshot.get("odds_status") or "").lower() in {"missing", "stale", "unavailable"}:
@@ -35,7 +33,7 @@ def analyze_tool_usage(trajectory: dict[str, Any]) -> dict[str, Any]:
     score = max(0, 100 - len(unique_missing) * 8 - len(unnecessary_tools) * 3)
     recommendation = "Tool usage looked complete."
     if "get_weather_context" in unique_missing:
-        recommendation = "Weather should be checked before totals prediction for outdoor stadiums."
+        recommendation = "Weather should be checked before prediction for outdoor stadiums."
     elif unique_missing:
         recommendation = f"Review missing tool calls: {', '.join(unique_missing[:3])}."
 

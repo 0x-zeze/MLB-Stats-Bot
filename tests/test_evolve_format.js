@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 
 import { formatEvolveResult, predictionsHaveRawProbabilities } from '../src/index.js';
 
-test('/evolve formatter shows stored totals when no new rows are ingested', () => {
+test('/evolve formatter shows stored data when no new rows are ingested', () => {
   const text = formatEvolveResult({
     postgame: { dates_checked: 1, learned_games: 0 },
     cycle: {
       ingest: { evaluated: 0, skipped_duplicates: 12 },
-      backfill: { updated: 0, totals_fixed: 0, yrfi_fixed: 0 },
+      backfill: { updated: 0, yrfi_fixed: 0 },
       symbolic_candidates: 0,
       rule_candidates: 0,
       total_symbolic_candidates: 913,

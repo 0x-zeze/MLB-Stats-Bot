@@ -31,8 +31,6 @@ from .utils import data_path, safe_float
 
 DEFAULT_DASHBOARD_SETTINGS: dict[str, Any] = {
     "minimum_moneyline_edge": 0.02,
-    "minimum_total_edge": 0.02,
-    "minimum_projected_total_difference": 0.4,
     "minimum_data_quality_score": 60,
     "odds_stale_minutes": 15,
     "weather_stale_minutes": 60,
@@ -290,29 +288,21 @@ def _format_odds(odds: Any) -> str:
 def _decision_from_game(game: dict[str, Any], settings: dict[str, Any]) -> tuple[str, str]:
     quality = safe_float(game.get("data_quality", {}).get("score"), 0.0)
     moneyline_edge = abs(safe_float(game.get("moneyline", {}).get("edge"), 0.0))
-    total_edge = abs(safe_float(game.get("totals", {}).get("edge"), 0.0))
-    total_diff = abs(safe_float(game.get("totals", {}).get("difference"), 0.0))
     confidence = str(game.get("moneyline", {}).get("confidence") or "Low").lower()
     no_bet_reason = game.get("no_bet_reason") or ""
-    minimum_moneyline_edge = safe_float(settings["minimum_moneyline_edge"], 0.02) * 100
-    minimum_total_edge = safe_float(settings["minimum_total_edge"], 0.02) * 100
+    minimum_moneyline_edge = safe_float(settings.get("minimum_moneyline_edge", 0.02), 0.02) * 100
 
     if no_bet_reason:
         return "NO BET", no_bet_reason
-    if quality < safe_float(settings["minimum_data_quality_score"], 60.0):
+    if quality < safe_float(settings.get("minimum_data_quality_score", 60.0), 60.0):
         return "NO BET", "Data quality score below minimum threshold"
     if game.get("probable_pitchers", {}).get("status") in {"Missing", "TBD"}:
         return "NO BET", "Missing probable pitcher"
-    if total_diff and total_diff < safe_float(settings["minimum_projected_total_difference"], 0.4):
-        if moneyline_edge < minimum_moneyline_edge:
-            return "NO BET", "Projected total difference below 0.4 runs and moneyline edge is small"
-
-    if quality >= 85 and confidence == "high" and max(moneyline_edge, total_edge) >= 4.0:
+    if quality >= 85 and confidence == "high" and moneyline_edge >= 4.0:
         return "BET", ""
-    if moneyline_edge >= minimum_moneyline_edge or total_edge >= minimum_total_edge:
+    if moneyline_edge >= minimum_moneyline_edge:
         return "LEAN", ""
-    return "NO BET", "Model edge below minimum threshold"
-
+    return "NO BET", "Moneyline edge below minimum threshold"
 
 def _summarize_today(games: list[dict[str, Any]], source: str, warning: str | None = None) -> dict[str, Any]:
     if source == "live":
@@ -384,15 +374,6 @@ def _quality_from_live(game: dict[str, Any]) -> dict[str, Any]:
 
 
 def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-    total_runs = game.get("totalRuns") or {}
-    over = total_runs.get("over") or {}
-    under = total_runs.get("under") or {}
-    market_total = safe_float(total_runs.get("marketLine"), 8.5)
-    line_key = str(market_total)
-    over_probability = _as_percent(over.get(line_key) or over.get("8.5"))
-    under_probability = _as_percent(under.get(line_key) or under.get("8.5"))
-    quality = _quality_from_live(game)
-    projected_total = safe_float(total_runs.get("projectedTotal"), 0.0)
     dashboard_game = {
         "id": game.get("game_id"),
         "date": game.get("date"),
@@ -413,7 +394,7 @@ def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> d
         "weather_summary": "Weather adjustment included when available",
         "odds_status": quality["odds"],
         "freshness_status": "Fresh",
-        "final_lean": total_runs.get("bestLean") or game.get("pick", {}).get("name") or "NO BET",
+        "final_lean": game.get("pick", {}).get("name") or "NO BET",
         "no_bet_reason": "",
         "moneyline": {
             "away_probability": _as_percent(game.get("probabilities", {}).get("away")),
@@ -424,19 +405,8 @@ def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> d
             "current_odds": "Unavailable",
             "confidence": _status(game.get("pick", {}).get("confidence"), "Low").title(),
         },
-        "totals": {
-            "projected_total": round(projected_total, 1) if projected_total else None,
-            "market_total": market_total,
-            "difference": round(safe_float(total_runs.get("marketDeltaRuns"), projected_total - market_total), 1),
-            "over_probability": over_probability,
-            "under_probability": under_probability,
-            "edge": _as_edge_pct(total_runs.get("modelEdge")),
-            "lean": total_runs.get("bestLean") or "No total lean",
-            "over_odds": "Unavailable",
-            "under_odds": "Unavailable",
-        },
         "data_quality": quality,
-        "main_factors": game.get("reasons") or total_runs.get("factors") or [],
+        "main_factors": game.get("reasons")  or [],
         "risk_factors": [game.get("risk")] if game.get("risk") else quality.get("issues", []),
     }
     predicted_winner, predicted_probability = _winner_from_probabilities(dashboard_game)
@@ -525,15 +495,9 @@ def _quality_from_sample(quality: dict[str, Any]) -> dict[str, Any]:
 def _sample_game_to_dashboard(game_id: int, pipeline: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
     game = pipeline["game"]
     moneyline = pipeline["moneyline"]
-    totals = pipeline["totals"]
     quality = _quality_from_sample(pipeline.get("quality_report", {}))
     context = pipeline.get("context", {})
     market = pipeline.get("market", {})
-    market_line = safe_float(totals.get("market_total"), 8.5)
-    over = totals.get("over_probabilities") or {}
-    under = totals.get("under_probabilities") or {}
-    line_key = market_line if market_line in over else min(over.keys(), key=lambda item: abs(float(item) - market_line)) if over else 8.5
-    projected_total = safe_float(totals.get("projected_total_runs"), 0.0)
     dashboard_game = {
         "id": str(game_id),
         "date": game.date,
@@ -552,8 +516,8 @@ def _sample_game_to_dashboard(game_id: int, pipeline: dict[str, Any], settings: 
         "weather_summary": context.get("weather", {}).get("condition", "Sample weather context"),
         "odds_status": quality["odds"],
         "freshness_status": "Sample",
-        "final_lean": totals.get("final_lean") or moneyline.get("final_lean"),
-        "no_bet_reason": moneyline.get("decision_reason") or totals.get("decision_reason") or "",
+        "final_lean": moneyline.get("final_lean"),
+        "no_bet_reason": moneyline.get("decision_reason") or "",
         "moneyline": {
             "away_probability": _as_percent(moneyline.get("away_win_probability")),
             "home_probability": _as_percent(moneyline.get("home_win_probability")),
@@ -562,17 +526,6 @@ def _sample_game_to_dashboard(game_id: int, pipeline: dict[str, Any], settings: 
             "edge": _as_edge_pct(moneyline.get("model_edge")),
             "current_odds": market.get("home_moneyline") or "Unavailable",
             "confidence": str(moneyline.get("confidence", "Low")).title(),
-        },
-        "totals": {
-            "projected_total": round(projected_total, 1),
-            "market_total": market_line,
-            "difference": round(projected_total - market_line, 1),
-            "over_probability": _as_percent(over.get(line_key)),
-            "under_probability": _as_percent(under.get(line_key)),
-            "edge": _as_edge_pct(totals.get("model_edge")),
-            "lean": totals.get("best_total_lean") or totals.get("raw_lean") or "No total lean",
-            "over_odds": market.get("over_odds") or "Unavailable",
-            "under_odds": market.get("under_odds") or "Unavailable",
         },
         "data_quality": quality,
         "main_factors": pipeline.get("supporting_factors") or moneyline.get("main_factors") or [],
@@ -920,7 +873,7 @@ def get_prediction_history() -> list[dict[str, Any]]:
             {
                 "date": row.get("date"),
                 "matchup": f"{row.get('away_team')} @ {row.get('home_team')}",
-                "market_type": "totals" if str(prediction).startswith(("Over", "Under")) else "moneyline",
+                "market_type": "yrfi" if str(prediction).upper() in ("YES", "NO") else "moneyline",
                 "prediction": prediction,
                 "decision": "NO BET" if prediction == "NO BET" else "BET",
                 "confidence": str(row.get("confidence", "")).title(),
@@ -966,8 +919,7 @@ def get_model_performance() -> dict[str, Any]:
         },
         "by_market": [
             {"market": "moneyline", "bets": metrics.get("bets", 0), "win_rate": _as_percent(metrics.get("win_rate")) or 0.0, "roi": _as_edge_pct(metrics.get("roi")) or 0.0},
-            {"market": "totals", "bets": metrics.get("bets", 0), "win_rate": _as_percent(metrics.get("win_rate")) or 0.0, "roi": _as_edge_pct(metrics.get("roi")) or 0.0},
-        ],
+                    ],
         "by_total_range": [
             {"range": key, "bets": value.get("bets", 0), "win_rate": _as_percent(value.get("win_rate")) or 0.0, "roi": _as_edge_pct(value.get("roi")) or 0.0}
             for key, value in by_total_range.items()
@@ -1138,9 +1090,8 @@ def run_dashboard_backtest(params: dict[str, Any]) -> dict[str, Any]:
     requested_market = params.get("market_type") or params.get("market") or "moneyline"
     market_map = {
         "moneyline": ["moneyline"],
-        "totals": ["totals"],
-        "yrfi": ["yrfi"],
-        "all": ["moneyline", "totals", "yrfi"],
+                "yrfi": ["yrfi"],
+        "all": ["moneyline", "yrfi"],
     }
     markets = market_map.get(requested_market)
     if not markets:

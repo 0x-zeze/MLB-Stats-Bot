@@ -3,7 +3,6 @@ import { uiBullet, uiKV, uiTitle } from './telegramFormat.js';
 const ODDS_API_URL = 'https://api.the-odds-api.com/v4/sports/baseball_mlb/odds';
 const DEFAULT_INTERVAL_MINUTES = 10;
 const MONEYLINE_MOVE_THRESHOLD = 15;
-const TOTAL_MOVE_THRESHOLD = 0.5;
 const MONITOR_TTL_HOURS = 18;
 const ALERT_DEDUPE_TTL_HOURS = 18;
 
@@ -36,7 +35,7 @@ export async function __fetchOddsForTest() {
 
 // How long a single odds fetch is reused before hitting the API again. The old
 // 30s value, combined with the 60s closing-capture scheduler, fired ~1 call per
-// tick: ~1440 calls/day x 2 credits (h2h,totals x us region) = ~2880 credits/day,
+// tick: ~1440 calls/day x 1 credit (h2h x us region) = ~1440 credits/day,
 // which exhausts an Odds API free-tier 500-credit MONTH in ~4 hours (the live
 // 401 OUT_OF_USAGE_CREDITS we hit). Closing lines move slowly, so a multi-minute
 // cache loses no real signal. Override with ODDS_CACHE_TTL_MS for a paid plan.
@@ -76,14 +75,6 @@ function moneylineMoveThreshold() {
 
   const envValue = Number(process.env.LINE_MOVEMENT_THRESHOLD_ML || '');
   return Number.isFinite(envValue) && envValue > 0 ? envValue : MONEYLINE_MOVE_THRESHOLD;
-}
-
-function totalMoveThreshold() {
-  const configured = Number(state.config?.lineMonitor?.totalThreshold);
-  if (Number.isFinite(configured) && configured > 0) return configured;
-
-  const envValue = Number(process.env.LINE_MOVEMENT_THRESHOLD_TOTAL || '');
-  return Number.isFinite(envValue) && envValue > 0 ? envValue : TOTAL_MOVE_THRESHOLD;
 }
 
 // Odds API key pool. Supports multiple keys so several free-tier accounts
@@ -319,9 +310,6 @@ function toFiniteNumber(value) {
 }
 
 function originalModelEdge(game) {
-  const totalEdge = Number(game.totalRuns?.modelEdge);
-  if (Number.isFinite(totalEdge)) return totalEdge;
-
   const agentPickId = game.agentAnalysis?.pickTeamId;
   const isAwayAgentPick = String(agentPickId) === String(game.away?.id);
   const isHomeAgentPick = String(agentPickId) === String(game.home?.id);
@@ -344,14 +332,6 @@ function originalModelEdge(game) {
 
 function buildSnapshot(game, event) {
   const h2h = firstMarket(event.bookmakers, 'h2h');
-  const totals = firstMarket(event.bookmakers, 'totals');
-  const overOutcome = totals?.market.outcomes.find((outcome) =>
-    String(outcome.name || '').toLowerCase().includes('over')
-  );
-  const underOutcome = totals?.market.outcomes.find((outcome) =>
-    String(outcome.name || '').toLowerCase().includes('under')
-  );
-
   // Line shopping: take the best moneyline price for each side across ALL books,
   // not just the first book that lists the market.
   const bestHome = bestMoneylineForTeam(event.bookmakers, game.home?.name);
@@ -369,11 +349,7 @@ function buildSnapshot(game, event) {
     awayMoneyline: bestAway ? bestAway.price : null,
     homeMoneylineBook: bestHome?.book || null,
     awayMoneylineBook: bestAway?.book || null,
-    totalLine: toFiniteNumber(overOutcome?.point ?? underOutcome?.point),
-    overPrice: toFiniteNumber(overOutcome?.price),
-    underPrice: toFiniteNumber(underOutcome?.price),
     moneylineBook,
-    totalBook: totals?.bookmaker?.title || totals?.bookmaker?.key || 'bookmaker',
     originalModelEdge: originalModelEdge(game)
   };
 }
@@ -403,7 +379,7 @@ async function fetchOdds() {
     const url = new URL(ODDS_API_URL);
     url.searchParams.set('apiKey', key);
     url.searchParams.set('regions', 'us');
-    url.searchParams.set('markets', 'h2h,totals');
+    url.searchParams.set('markets', 'h2h');
     url.searchParams.set('oddsFormat', 'american');
     url.searchParams.set('dateFormat', 'iso');
 
@@ -474,12 +450,8 @@ export async function attachCurrentOdds(games = []) {
       moneylineBook: snapshot.moneylineBook,
       awayMoneylineBook: snapshot.awayMoneylineBook,
       homeMoneylineBook: snapshot.homeMoneylineBook,
-      totalBook: snapshot.totalBook,
       awayMoneyline: snapshot.awayMoneyline,
       homeMoneyline: snapshot.homeMoneyline,
-      totalLine: snapshot.totalLine,
-      overPrice: snapshot.overPrice,
-      underPrice: snapshot.underPrice,
       oddsFetchedAt: new Date().toISOString()
     };
     result.matchedGames += 1;
@@ -507,8 +479,6 @@ export function americanImpliedProbability(value) {
 }
 
 function movementArrow(movement) {
-  if (movement.market === 'total') return movement.delta > 0 ? '↗️' : '↘️';
-
   const previous = americanImpliedProbability(movement.previousValue);
   const current = americanImpliedProbability(movement.currentValue);
   if (!Number.isFinite(previous) || !Number.isFinite(current)) {
@@ -526,11 +496,6 @@ function formatOriginalModelEdge(value) {
 
 function formatMovementLine(movement) {
   const arrow = movementArrow(movement);
-  if (movement.market === 'total') {
-    const action = movement.delta > 0 ? 'sharp over action' : 'sharp under action';
-    return uiKV('📊', 'Total', `${movement.oldText} -> ${movement.newText} ${arrow} | ${action}`);
-  }
-
   return uiKV('💰', 'Moneyline', `${movement.teamLabel} | ${movement.oldText} -> ${movement.newText} ${arrow}`);
 }
 
@@ -592,16 +557,7 @@ function snapshotFields(snapshot) {
       unit: 'cents',
       formatter: formatOdds,
       bookmaker: snapshot.moneylineBook
-    },
-    {
-      market: 'total',
-      type: 'total',
-      teamLabel: 'Total',
-      value: snapshot.totalLine,
-      threshold: totalMoveThreshold(),
-      unit: 'runs',
-      formatter: (value) => Number(value).toFixed(1),
-      bookmaker: snapshot.totalBook
+
     }
   ].filter((field) => Number.isFinite(field.value));
 }
@@ -708,9 +664,6 @@ async function pollMonitor(key) {
       if (snapshot.awayMoneyline !== null) {
         state.storage.setLineSnapshot(gamePk, 'closing_away', snapshot.awayMoneyline);
       }
-      if (snapshot.totalLine !== null) {
-        state.storage.setLineSnapshot(gamePk, 'closing_total', snapshot.totalLine);
-      }
     }
 
     await compareSnapshot(snapshot, monitor.chatId, { sendAlerts: true });
@@ -751,10 +704,6 @@ export async function captureClosingLines(games) {
       state.storage.setLineSnapshot(gamePk, 'closing_away', snapshot.awayMoneyline);
       wrote = true;
     }
-    if (snapshot.totalLine != null) {
-      state.storage.setLineSnapshot(gamePk, 'closing_total', snapshot.totalLine);
-      wrote = true;
-    }
     if (wrote) {
       captured++;
       // Mirror the closing line into the feature store for LATER backtesting
@@ -771,7 +720,6 @@ export async function captureClosingLines(games) {
             {
               homeMoneyline: snapshot.homeMoneyline ?? null,
               awayMoneyline: snapshot.awayMoneyline ?? null,
-              totalLine: snapshot.totalLine ?? null,
               moneylineBook: snapshot.moneylineBook ?? null,
               capturedAt: new Date().toISOString()
             },
@@ -789,16 +737,10 @@ export async function captureClosingLines(games) {
 
 export function resolveClosingLine(gamePk, side) {
   if (!state.storage || !gamePk) return null;
-  const isTotal = side === 'total';
-  const markets = isTotal
-    ? ['closing_total', 'total']
-    : side === 'home'
-      ? ['closing_home', 'moneyline_home']
-      : ['closing_away', 'moneyline_away'];
-  const isPlausible = (value) =>
-    isTotal
-      ? value >= 4 && value <= 14
-      : Math.abs(value) >= 100 && Math.abs(value) <= 1000;
+  const markets = side === 'home'
+    ? ['closing_home', 'moneyline_home']
+    : ['closing_away', 'moneyline_away'];
+  const isPlausible = (value) => Math.abs(value) >= 100 && Math.abs(value) <= 1000;
   for (const market of markets) {
     const snapshot = state.storage.getLineSnapshot(gamePk, market);
     const value = snapshot ? Number(snapshot.value) : NaN;
@@ -913,7 +855,6 @@ export function lineMonitorSettings() {
     enabled: lineAlertsEnabled(),
     intervalMinutes: intervalMinutes(),
     moneylineThreshold: moneylineMoveThreshold(),
-    totalThreshold: totalMoveThreshold(),
     hasOddsApiKey: Boolean(oddsApiKey())
   };
 }

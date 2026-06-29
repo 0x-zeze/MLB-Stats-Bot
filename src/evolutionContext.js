@@ -387,9 +387,12 @@ function buildEvolutionSummary(calibration, factorReliability, lessons, sampleSi
 export function buildEvolutionContext() {
   if (isCacheValid()) return _cache;
 
-  const outcomes = readPredictionOutcomes();
-  const losses = readJsonlFile('language_losses');
-  const allLessons = readJsonlFile('lessons');
+  const activeMarket = 'moneyline';
+  const activeMarkets = new Set(['moneyline', 'yrfi']);
+  const allOutcomes = readPredictionOutcomes().filter((row) => activeMarkets.has(String(row.market || 'moneyline').toLowerCase()));
+  const outcomes = allOutcomes.filter((row) => String(row.market || 'moneyline').toLowerCase() === activeMarket);
+  const losses = readJsonlFile('language_losses').filter((row) => String(row.market || 'moneyline').toLowerCase() === activeMarket);
+  const allLessons = readJsonlFile('lessons').filter((row) => String(row.market || 'moneyline').toLowerCase() === activeMarket);
   const lessons = loadRecentLessons(allLessons, 5);
   const auditMemory = loadAuditMemoryContext();
   const calibration = loadCalibrationSummary(outcomes, auditMemory);
@@ -399,6 +402,8 @@ export function buildEvolutionContext() {
 
   const sampleSize = {
     totalEvaluated: outcomes.length,
+    activeMarkets: ['moneyline', 'yrfi'],
+    contextMarket: activeMarket,
     totalLessons: allLessons.length,
     totalLosses: losses.length
   };

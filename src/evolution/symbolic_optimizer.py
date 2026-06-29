@@ -14,7 +14,6 @@ TYPE_BY_TARGET = {
     "no_bet_rules": "no_bet_rule",
     "confidence_rules": "confidence_cap",
     "data_quality_scoring": "data_quality_update",
-    "totals_model": "weighting_update",
     "moneyline_model": "weighting_update",
     "market_edge_threshold": "threshold_update",
     "weather_adjustment": "tool_order_update",

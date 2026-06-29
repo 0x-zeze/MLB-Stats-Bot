@@ -13,14 +13,16 @@ function sampleGame(overrides = {}) {
       name: 'Away Underdogs',
       abbreviation: 'AWY',
       winProbability: 45,
-      starter: { fullName: 'Away Starter' }
+      starter: { fullName: 'Away Starter' },
+      record: { wins: 40, losses: 35, pct: '.533' }
     },
     home: {
       id: 2,
       name: 'Home Favorites',
       abbreviation: 'HOM',
       winProbability: 55,
-      starter: { fullName: 'Home Starter' }
+      starter: { fullName: 'Home Starter' },
+      record: { wins: 42, losses: 33, pct: '.560' }
     },
     currentOdds: {
       awayMoneyline: 160,
@@ -41,9 +43,9 @@ function sampleGame(overrides = {}) {
 }
 
 test('low-conviction underdog is downgraded to a lean, not a graded VALUE bet', () => {
-  // Pre-floor this was graded VALUE off a +5.9 edge. But on 598 graded
-  // outcomes, sub-58% conviction picks won ~54% (breakeven at -110), so the
-  // option math still selects the underdog while betDecision stays NO BET.
+  // Pre-floor this was graded VALUE off a +5.9 edge. But on 773 outcomes,
+  // sub-52% conviction picks are coin flips, so betDecision stays NO BET.
+  // Additionally, away team at +160 exceeds the +115 away underdog limit.
   const game = sampleGame();
 
   applyMoneylineValueMarket(game);
@@ -56,21 +58,29 @@ test('low-conviction underdog is downgraded to a lean, not a graded VALUE bet', 
   assert.equal(game.valuePick.fairProbability, 39.1);
   assert.equal(game.valuePick.edge, 5.9);
   assert.equal(game.valuePick.kellyStakePercent, 2.7);
-  // ...but it is NOT graded as a bet: 45% conviction is below the 62% floor.
+  // ...but it is NOT graded as a bet: 45% conviction is below the 52% floor,
+  // and the away underdog +160 exceeds the +115 limit.
   assert.equal(game.betDecision.status, 'NO BET');
-  assert.match(game.betDecision.reason, /conviction/);
 });
 
-test('high-conviction underdog with mispriced odds is graded VALUE', () => {
+test('high-conviction underdog with mispriced odds is graded VALUE when quality met', () => {
   // The profitable niche the floor preserves: model rates the market underdog
-  // >=62% (conviction must clear the raised floor). This must still grade VALUE.
+  // >=52% (conviction must clear the lowered floor) AND the team has a winning
+  // record (.520+). Away +160 exceeds +115 limit but this test uses a close
+  // underdog line to ensure it passes the away-dog filter too.
   const game = sampleGame({
     away: {
       id: 1,
       name: 'Away Underdogs',
       abbreviation: 'AWY',
       winProbability: 64,
-      starter: { fullName: 'Away Starter' }
+      starter: { fullName: 'Away Starter' },
+      record: { wins: 45, losses: 30, pct: '.600' }
+    },
+    currentOdds: {
+      awayMoneyline: 110,
+      homeMoneyline: -120,
+      moneylineBook: 'FanDuel'
     }
   });
 
@@ -88,14 +98,16 @@ test('record dominated favorite is downgraded to no bet even with positive value
       name: 'Away Team',
       abbreviation: 'AWY',
       winProbability: 36,
-      starter: { fullName: 'Away Starter' }
+      starter: { fullName: 'Away Starter' },
+      record: { wins: 30, losses: 45, pct: '.400' }
     },
     home: {
       id: 2,
       name: 'Record Favorite',
       abbreviation: 'REC',
       winProbability: 64,
-      starter: { fullName: 'Home Starter' }
+      starter: { fullName: 'Home Starter' },
+      record: { wins: 45, losses: 30, pct: '.600' }
     },
     currentOdds: {
       awayMoneyline: 125,
@@ -161,14 +173,16 @@ test('approved audit guardrail can downgrade weak model edge to no bet', () => {
         name: 'Away Team',
         abbreviation: 'AWY',
         winProbability: 48,
-        starter: { fullName: 'Away Starter' }
+        starter: { fullName: 'Away Starter' },
+        record: { wins: 35, losses: 40, pct: '.467' }
       },
       home: {
         id: 2,
         name: 'Thin Favorite',
         abbreviation: 'THN',
         winProbability: 52,
-        starter: { fullName: 'Home Starter' }
+        starter: { fullName: 'Home Starter' },
+        record: { wins: 38, losses: 37, pct: '.507' }
       },
       currentOdds: {
         awayMoneyline: -130,
@@ -235,7 +249,8 @@ test('audit memory adds caution notes without forcing a bet decision by itself',
         name: 'Away Underdogs',
         abbreviation: 'AWY',
         winProbability: 64,
-        starter: { fullName: 'Away Starter' }
+        starter: { fullName: 'Away Starter' },
+        record: { wins: 45, losses: 30, pct: '.600' }
       },
       modelBreakdown: {
         matchupEdge: 0.3,
@@ -250,7 +265,9 @@ test('audit memory adds caution notes without forcing a bet decision by itself',
 
     applyMoneylineValueMarket(game);
 
-    assert.equal(game.betDecision.status, 'VALUE');
+    // Away at +160 exceeds the away-dog limit, so it should be NO BET
+    // even though conviction is high. The audit memory note should still fire.
+    assert.equal(game.betDecision.status, 'NO BET');
     assert.deepEqual(game.auditMemoryNotes, ['Memory: starting pitcher signal has misled recent picks.']);
   } finally {
     if (previousDir === undefined) {

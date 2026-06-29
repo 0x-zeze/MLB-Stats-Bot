@@ -60,19 +60,6 @@ DEFAULT_MONEYLINE_WEIGHTS = {
     "data_quality": 0.10,
 }
 
-DEFAULT_TOTALS_WEIGHTS = {
-    "starting_pitcher_run_prevention": 0.22,
-    "offense_splits": 0.20,
-    "bullpen_fatigue": 0.13,
-    "weather": 0.10,
-    "park_factor": 0.10,
-    "lineup": 0.10,
-    "recent_form": 0.07,
-    "market_total": 0.05,
-    "data_quality": 0.03,
-}
-
-
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -105,7 +92,6 @@ def _default_json(file_key: str) -> dict[str, Any]:
                     "status": "active",
                     "weights": {
                         "moneyline": DEFAULT_MONEYLINE_WEIGHTS,
-                        "totals": DEFAULT_TOTALS_WEIGHTS,
                     },
                     "previous_version": None,
                     "rollback_supported": True,
@@ -242,6 +228,9 @@ def write_json(file_key: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def append_prediction_outcome(evaluation: dict[str, Any]) -> dict[str, Any]:
     ensure_evolution_storage()
+    market = str(evaluation.get("market") or "").lower()
+    if market not in {"moneyline", "yrfi"}:
+        raise ValueError(f"inactive or missing market for prediction outcome: {market or 'missing'}")
     row = {field: "" for field in PREDICTION_OUTCOME_FIELDS}
     for field in PREDICTION_OUTCOME_FIELDS:
         if field == "evaluation_json":
@@ -306,14 +295,13 @@ def _context_value(context: dict[str, Any], *keys: str) -> Any:
 def _lesson_similarity(context: dict[str, Any], lesson: dict[str, Any]) -> float:
     score = 0.0
     supporting = lesson.get("supporting_data") or {}
-    if str(context.get("market") or "").lower() == str(lesson.get("market") or "").lower():
-        score += 4.0
+    context_market = str(context.get("market") or "moneyline").lower()
+    lesson_market = str(lesson.get("market") or "moneyline").lower()
+    if context_market != lesson_market:
+        return 0.0
+    score += 4.0
     if str(context.get("confidence") or "").lower() == str(supporting.get("confidence") or "").lower():
         score += 1.0
-    if abs(safe_float(context.get("market_total"), -99) - safe_float(supporting.get("market_total"), 99)) <= 1.0:
-        score += 1.5
-    if abs(safe_float(context.get("projected_total_difference"), -99) - safe_float(supporting.get("projected_total_difference"), 99)) <= 0.5:
-        score += 1.5
     if abs(safe_float(context.get("data_quality"), -99) - safe_float(supporting.get("data_quality"), 99)) <= 10:
         score += 1.0
     for key in ["lineup_status", "weather_status", "bullpen_status", "no_bet_reason"]:
@@ -328,7 +316,8 @@ def retrieve_similar_lessons(game_context: dict[str, Any], top_k: int = 5) -> di
     Memory is intentionally non-authoritative: callers should use these notes
     as caution context, never as an override for current validated data.
     """
-    lessons = read_jsonl("lessons")
+    market = str(game_context.get("market") or "moneyline").lower()
+    lessons = [lesson for lesson in read_jsonl("lessons") if str(lesson.get("market") or "moneyline").lower() == market]
     ranked = sorted(
         ((lesson, _lesson_similarity(game_context, lesson)) for lesson in lessons),
         key=lambda item: item[1],
@@ -371,13 +360,8 @@ def _recency_weight(created_at: str | None, half_life_days: float = 14.0) -> flo
 def _market_regimen(context: dict[str, Any]) -> str:
     """Classify the market regime for matching."""
     market = str(context.get("market") or "moneyline").lower()
-    if market == "totals":
-        total = safe_float(context.get("market_total"), 8.5)
-        if total >= 10.0:
-            return "totals_high"
-        if total >= 8.5:
-            return "totals_moderate"
-        return "totals_low"
+    if market == "yrfi":
+        return "yrfi"
     return "moneyline"
 
 
@@ -441,8 +425,9 @@ def retrieve_weighted_memory(
 
     Memory is advisory only — it adjusts risk framing, never raw probabilities.
     """
-    lessons = read_jsonl("lessons")
-    outcomes = read_prediction_outcomes()
+    market = str(game_context.get("market") or "moneyline").lower()
+    lessons = [lesson for lesson in read_jsonl("lessons") if str(lesson.get("market") or "moneyline").lower() == market]
+    outcomes = [row for row in read_prediction_outcomes() if str(row.get("market") or "moneyline").lower() == market]
 
     # Build outcome lookup for sample size enrichment
     outcome_by_market: dict[str, int] = {}

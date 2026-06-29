@@ -25,7 +25,6 @@ export default function TeamAnalytics({ game }) {
   }
 
   const ml = game.moneyline || {};
-  const totals = game.totals || {};
   const pitchers = game.probable_pitchers || {};
   const factors = game.main_factors || [];
   const risks = game.risk_factors || [];
@@ -69,25 +68,6 @@ export default function TeamAnalytics({ game }) {
                 highlight={edge !== 'N/A' && Number(edge) > 0 ? 'away' : undefined}
               />
             </div>
-
-            {/* Totals */}
-            {(totals.over_probability || totals.line || totals.total) && (
-              <div className="space-y-0.5 mb-4">
-                <p className="text-[10px] text-ink/50 uppercase tracking-wider mb-2 text-center">Totals</p>
-                {totals.line && (
-                  <StatRow label="Line" away={String(totals.line)} home="" />
-                )}
-                {totals.total && (
-                  <StatRow label="Total" away={String(totals.total)} home="" />
-                )}
-                {totals.over_probability != null && (
-                  <StatRow label="Over %" away={`${Number(totals.over_probability).toFixed(1)}%`} home="" />
-                )}
-                {totals.under_probability != null && (
-                  <StatRow label="Under %" away={`${Number(totals.under_probability).toFixed(1)}%`} home="" />
-                )}
-              </div>
-            )}
 
             {/* Data quality */}
             {quality.score != null && (

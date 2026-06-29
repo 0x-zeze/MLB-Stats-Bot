@@ -33,12 +33,12 @@ GRADIENT_MAP = {
     ),
     "lineup_misread": (
         "lineup_adjustment",
-        "Cap totals confidence when lineups are projected or missing.",
+        "Cap confidence when lineups are projected or missing.",
         "confidence_cap",
     ),
     "weather_misread": (
         "weather_adjustment",
-        "Require fresh weather context before confident outdoor totals picks.",
+        "Require fresh weather context before confident YRFI decisions.",
         "tool_order_update",
     ),
     "bad_data_quality": (
@@ -55,11 +55,6 @@ GRADIENT_MAP = {
         "no_bet_rules",
         "Preserve NO BET protection when weak edge, low confidence, or poor data quality is present.",
         "safety_rule",
-    ),
-    "totals_projection_error": (
-        "totals_model",
-        "Review totals projection features when final total misses projection by multiple runs.",
-        "weighting_update",
     ),
 }
 

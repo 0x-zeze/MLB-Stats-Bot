@@ -24,7 +24,7 @@ class PredictionPipelineTests(unittest.TestCase):
         output = run_prediction_pipeline(0)["explanation"]
         self.assertIn("1. Prediction Summary", output)
         self.assertIn("2. Moneyline Probability", output)
-        self.assertIn("3. Total Runs Projection", output)
+        self.assertIn("3. YRFI/NRFI Projection", output)
         self.assertIn("4. Market Comparison", output)
         self.assertIn("5. Data Quality Report", output)
         self.assertIn("8. Final Decision:", output)
@@ -33,9 +33,7 @@ class PredictionPipelineTests(unittest.TestCase):
     def test_numeric_predictions_are_deterministic_payloads(self) -> None:
         result = run_prediction_pipeline(0)
         self.assertEqual(result["moneyline"]["source"], "deterministic_python_model")
-        self.assertEqual(result["totals"]["source"], "deterministic_python_model")
         self.assertGreater(result["moneyline"]["home_win_probability"], 0)
-        self.assertGreater(result["totals"]["projected_total_runs"], 0)
 
 
 if __name__ == "__main__":

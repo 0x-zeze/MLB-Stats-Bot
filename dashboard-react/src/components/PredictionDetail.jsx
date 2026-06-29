@@ -12,7 +12,6 @@ export default function PredictionDetail({ game, onClose }) {
   if (!game) return null;
 
   const ml = game.moneyline || {};
-  const totals = game.totals || {};
   const quality = game.data_quality || {};
   const pitchers = game.probable_pitchers || {};
   const factors = game.main_factors || [];
@@ -72,18 +71,7 @@ export default function PredictionDetail({ game, onClose }) {
                 </div>
               </div>
 
-              {totals.projected_total > 0 && (
-                <div className="p-3 rounded-lg border-2 border-ink bg-paper shadow-neo-sm mt-3">
-                  <p className="text-xs text-ink/60 mb-2">Totals</p>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-ink">Projected: <span className="font-bold text-accent-blue">{Number(totals.projected_total).toFixed(1)}</span></span>
-                    <span className="text-sm text-ink">Market: <span className="font-bold">{totals.market_total}</span></span>
-                    <Badge variant={totals.lean?.toLowerCase().includes('over') ? 'success' : totals.lean?.toLowerCase().includes('under') ? 'danger' : 'neutral'}>
-                      {totals.lean || 'No lean'}
-                    </Badge>
-                  </div>
-                </div>
-              )}
+      
             </div>
           </div>
 

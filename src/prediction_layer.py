@@ -8,7 +8,6 @@ from .first_inning import FirstInningContext, predict_first_inning
 from .model import BaselinePredictionModel
 from .probability_calibrator import calibrate
 from .situational_weights import SituationalWeightEngine, classify_park_type, determine_seasonal_phase
-from .totals import predict_total_runs as predict_total_runs_model
 from .utils import clamp, confidence_label, logistic, safe_float
 
 
@@ -80,36 +79,6 @@ def predict_moneyline_from_features(
             "away_win_probability": result.away_win_probability,
             "predicted_winner": result.predicted_winner,
         },
-        "source": "deterministic_python_model",
-    }
-
-
-def predict_totals_from_features(
-    collected: dict[str, Any],
-    features: dict[str, Any],
-) -> dict[str, Any]:
-    """Produce deterministic team runs, total runs, and O/U probabilities."""
-    market_total = features["totals"].get("market_total")
-    result = predict_total_runs_model(
-        collected["home_team"],
-        collected["away_team"],
-        collected["total_context"],
-        market_total=market_total,
-    )
-    return {
-        "matchup": collected["context"]["matchup"],
-        "home_expected_runs": result.home_expected_runs,
-        "away_expected_runs": result.away_expected_runs,
-        "projected_total_runs": result.projected_total_runs,
-        "market_total": result.market_total,
-        "over_probabilities": result.over_probabilities,
-        "under_probabilities": result.under_probabilities,
-        "best_total_lean": result.best_total_lean,
-        "final_lean": result.best_total_lean,
-        "confidence": result.confidence,
-        "model_edge": result.model_edge,
-        "market_type": "totals",
-        "main_factors": result.main_factors,
         "source": "deterministic_python_model",
     }
 
@@ -213,6 +182,5 @@ def build_predictions(
         "moneyline": predict_moneyline_from_features(
             collected, features, weight_overrides=weight_overrides
         ),
-        "totals": predict_totals_from_features(collected, features),
         "first_inning": predict_first_inning_from_features(collected, features),
     }

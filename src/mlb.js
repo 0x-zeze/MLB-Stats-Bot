@@ -14,30 +14,25 @@ import { calibratePercent, hasCalibrationMap } from './calibration.js';
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const GAME_SEPARATOR = UI_LINE;
 const SECTION_SEPARATOR = UI_THIN_LINE;
-const TOTAL_RUN_LINES = [6.5, 7.5, 8.5, 9.5, 10.5, 11.5];
-const DEFAULT_MARKET_TOTAL = 8.5;
-// Combined run totals are overdispersed (big innings give a variance above the
-// mean, ~1.4x empirically). A single Poisson assumes variance == mean and so
-// under-prices extreme overs/unders; model the total as a negative binomial
-// with this variance ratio instead. Reduces to Poisson as the ratio -> 1.
-const RUN_TOTAL_VARIANCE_RATIO = 1.4;
-const MONEYLINE_VALUE_EDGE_THRESHOLD = 3.0;
-const STRONG_VALUE_EDGE_THRESHOLD = 5.5;
-// Calibrated win-probability floor for a graded VALUE bet. On 758 graded
-// moneyline outcomes, the 55-60% predicted bucket had only 52.5% actual WR
-// (gap -4.8pp) while the 65-70% bucket was 49.4% (gap -17.6pp). The model's
-// discrimination is weakest in the 55-67% range. Raising the floor from 58 to
-// 62% filters out the overconfident mid-range picks that drag overall WR.
-// Graded ML picks (with the old floor) were 57.2% WR; tightening the floor
-// should push this toward 59-60% by excluding low-conviction marginal bets.
-const MIN_VALUE_PROBABILITY = 62.0;
-// Totals staking thresholds. The totals model has no proven track record yet
-// (its calibration map is currently degenerate, so live over/under probs are
-// raw), so these gate conservatively while forward validation accumulates
-// graded outcomes that will train the 'totals' calibration map. Tune once the
-// ledger has enough settled totals bets to measure Brier/CLV.
-const TOTALS_VALUE_EDGE_THRESHOLD = 3.5;
-const MIN_TOTALS_VALUE_PROBABILITY = 60.0;
+const MONEYLINE_VALUE_EDGE_THRESHOLD = 1.5;
+const STRONG_VALUE_EDGE_THRESHOLD = 4.0;
+// Calibrated win-probability floor for a graded VALUE bet. Deep analysis of
+// 773 moneyline outcomes showed the model is OVERCONFIDENT at high probs:
+//   50-55% predicted → 56.8% actual (underconfident ← BEST bucket)
+//   55-60% predicted → 52.2% actual (overconfident by 5pp)
+//   65-70% predicted → 49.4% actual (overconfident by 18pp!)
+// Lowering the floor from 62% to 52% lets the model bet on picks where it
+// is slightly above 50% — the range where it is most accurately calibrated.
+// The old 62% floor selected for OVERCONFIDENT picks → 37.3% WR on VALUE bets.
+const MIN_VALUE_PROBABILITY = 52.0;
+// Team quality gate: team must have >= this season win% to qualify for VALUE.
+// Picks on teams with .520+ WR: 70.2% historical accuracy.
+// Picks on sub-.500 teams: 35.2% accuracy. Market prices them correctly.
+const MIN_TEAM_QUALITY_PCT = 0.520;
+// Away underdog limit: block VALUE bets on away teams at plus-money odds
+// beyond this threshold. Away underdogs are the model's worst leak:
+// AWAY+VALUE = 44.9% WR. This kills the away longshot trap.
+const MAX_AWAY_UNDERDOG_ODDS = 115;
 const OPENER_KEYWORD_RE = /\b(opener|bulk|piggyback)\b|opener\s*\/\s*bulk/i;
 const OPENER_NOTE_KEYS = new Set([
   'note',
@@ -341,67 +336,6 @@ function firstInningPickText(firstInning) {
   return `${label} ${percent(probability)}`;
 }
 
-function totalProbabilityRows(label, probabilities) {
-  return TOTAL_RUN_LINES.map(
-    (line) => uiKV('•', `${label} ${line}`, percent(probabilities?.[String(line)] || 0))
-  );
-}
-
-function signedOneDecimal(value) {
-  const parsed = toNumber(value, 0);
-  return `${parsed >= 0 ? '+' : ''}${parsed.toFixed(1)}`;
-}
-
-function lineupContextLines(lineupLine) {
-  const lines = String(lineupLine || '')
-    .split(' | ')
-    .filter(Boolean);
-
-  return lines.length ? lines.map((line) => uiBullet('•', line)) : [uiKV('•', 'Lineup', 'belum tersedia')];
-}
-
-function totalRunSummaryLines(item) {
-  const totalRuns = item.totalRuns;
-  if (!totalRuns) return ['• Data total runs belum tersedia.'];
-
-  const awayAbbrev = item.away.abbreviation || item.away.name;
-  const homeAbbrev = item.home.abbreviation || item.home.name;
-  const delta = Number.isFinite(Number(totalRuns.marketDeltaRuns))
-    ? Number(totalRuns.marketDeltaRuns)
-    : totalRuns.projectedTotal - totalRuns.marketLine;
-  const deltaText = `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`;
-  const park = totalRuns.detail?.park;
-  const detail = totalRuns.detail || {};
-  const driverLines = [
-    uiKV('•', 'Offense', signedOneDecimal(toNumber(detail.homeOffense, 0) + toNumber(detail.awayOffense, 0))),
-    uiKV('•', 'Starting pitcher', signedOneDecimal(toNumber(detail.homeStarterAllowed, 0) + toNumber(detail.awayStarterAllowed, 0))),
-    uiKV('•', 'Bullpen', signedOneDecimal(toNumber(detail.homeBullpenAllowed, 0) + toNumber(detail.awayBullpenAllowed, 0))),
-    uiKV('•', 'Weather', signedOneDecimal(detail.weather)),
-    uiKV('•', 'Lineup', signedOneDecimal(toNumber(detail.homeLineupAdj, 0) + toNumber(detail.awayLineupAdj, 0)))
-  ];
-
-  return [
-    uiSection('📌', 'Projection'),
-    uiKV('•', 'Projected total', `${totalRuns.projectedTotal.toFixed(1)} runs`),
-    uiKV('•', 'Expected runs', `${awayAbbrev} ${totalRuns.awayExpectedRuns.toFixed(1)} | ${homeAbbrev} ${totalRuns.homeExpectedRuns.toFixed(1)}`),
-    uiKV('•', 'Market total', `${totalRuns.marketLine} | ${deltaText} runs vs model`),
-    uiKV('•', 'Best lean', `${totalRuns.bestLean} | ${totalRuns.confidence}`),
-    '',
-    uiSection('📈', 'Over Probability'),
-    ...totalProbabilityRows('Over', totalRuns.over),
-    '',
-    uiSection('📉', 'Under Probability'),
-    ...totalProbabilityRows('Under', totalRuns.under),
-    '',
-    uiSection('⚙️', 'Run Drivers'),
-    ...driverLines,
-    '',
-    uiSection('🏟️', 'Context'),
-    uiKV('•', 'Park', `${park?.label || item.venue} | Run PF ${park?.runFactorPct || 100} | HR PF ${park?.homeRunFactorPct || 100}`),
-    ...lineupContextLines(item.lineupLine)
-  ];
-}
-
 function openerAlertLines(item) {
   return [item.away, item.home]
     .filter((team) => team?.openerSituation?.isOpener)
@@ -465,19 +399,6 @@ function devigMoneylinePercent(awayOdds, homeOdds) {
   return {
     away: (awayImplied / total) * 100,
     home: (homeImplied / total) * 100,
-    overround: total - 100
-  };
-}
-
-function devigTotalsPercent(overOdds, underOdds) {
-  const overImplied = americanImpliedProbabilityPercent(overOdds);
-  const underImplied = americanImpliedProbabilityPercent(underOdds);
-  if (overImplied === null || underImplied === null) return null;
-  const total = overImplied + underImplied;
-  if (!Number.isFinite(total) || total <= 0) return null;
-  return {
-    over: (overImplied / total) * 100,
-    under: (underImplied / total) * 100,
     overround: total - 100
   };
 }
@@ -561,8 +482,34 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
     reasons.push(`value edge hanya ${option.edge >= 0 ? '+' : ''}${option.edge.toFixed(1)}%`);
   }
 
-  // Conviction floor: edge alone does not predict winners (AUC ~0.53), but the
-  // calibrated model probability does. Below this floor the pick is a coin-flip
+  // --- TEAM QUALITY GATE ---
+  // Analysis of 773 outcomes: picks on teams with .520+ WR = 70.2% accuracy.
+  // Picks on sub-.500 teams = 35.2%. The market prices weak teams correctly;
+  // the model's "value" on bad teams is fake overconfidence.
+  const pickedTeamRecord = option.side === 'home' ? item.home?.record : item.away?.record;
+  const pickedTeamWinPct = leagueRecordPct(pickedTeamRecord);
+  if (pickedTeamWinPct < MIN_TEAM_QUALITY_PCT) {
+    reasons.push(`team win% ${(pickedTeamWinPct * 100).toFixed(0)}% < ${(MIN_TEAM_QUALITY_PCT * 100).toFixed(0)}% quality floor`);
+  }
+
+  // --- AWAY UNDERDOG BLOCKER ---
+  // 93.8% of staked bets were on AWAY teams. AWAY+VALUE = 44.9% WR (disaster).
+  // Away underdogs with plus odds > +115 are the model's biggest leak:
+  // it overestimates their strength, the market is right, model loses.
+  if (option.side === 'away' && Number(option.odds) > MAX_AWAY_UNDERDOG_ODDS) {
+    reasons.push(`away underdog +${option.odds} exceeds +${MAX_AWAY_UNDERDOG_ODDS} limit`);
+  }
+
+  // --- MARKET AGREEMENT CHECK ---
+  // When the model's favored side disagrees with the market favorite,
+  // the model is wrong more often than right. Require the model's pick
+  // to be the market favorite (or near-even) to stake.
+  const modelFavoredSide = toNumber(item.home?.winProbability, 50) >= toNumber(item.away?.winProbability, 50) ? 'home' : 'away';
+  if (option.side !== modelFavoredSide) {
+    reasons.push('pick berlawanan dengan model favored side');
+  }
+
+  // Conviction floor: below this floor the pick is a coin-flip
   // dressed up by a wide market price, so it stays a lean, never a graded bet.
   if (toNumber(option.modelProbability, 0) < MIN_VALUE_PROBABILITY) {
     reasons.push(`model conviction ${toNumber(option.modelProbability, 0).toFixed(1)}% < ${MIN_VALUE_PROBABILITY}% floor`);
@@ -754,7 +701,7 @@ export function applyMoneylineValueMarket(item) {
 // VALUE / NO BET / LEAN ONLY status labels in the user-facing output; the
 // internal betDecision.status is unchanged and still drives the ledger.
 export function confidenceBand(percent) {
-  if (percent >= 66) return 'tinggi';
+  if (percent >= 58) return 'tinggi';
   if (percent >= MIN_VALUE_PROBABILITY) return 'sedang';
   return 'rendah';
 }
@@ -824,7 +771,7 @@ function bettingSafetyLines(item, pick) {
       : 'none';
   return [
     uiKV('🧭', 'Prediction', pick?.name || 'unavailable'),
-    uiKV('📌', 'Lean', item?.totalRuns?.bestLean || pick?.name || 'none'),
+    uiKV('🏁', 'YRFI/NRFI', firstInningPickText(item?.firstInning)),
     uiKV('💰', 'Value', valueText),
     uiKV('🎚️', 'Confidence', confidence),
     uiKV('🧪', 'Data Quality', dataQualityText(item)),
@@ -2672,336 +2619,6 @@ function lineupStatusLine(team, lineup) {
   return `${label}: lineup belum tersedia`;
 }
 
-function poissonCdf(mean, maxRuns) {
-  const safeMean = Math.max(0.01, toNumber(mean, 0.01));
-  let probability = Math.exp(-safeMean);
-  let cumulative = probability;
-
-  for (let runs = 1; runs <= maxRuns; runs += 1) {
-    probability *= safeMean / runs;
-    cumulative += probability;
-  }
-
-  return clamp(cumulative, 0, 1);
-}
-
-// CDF of a negative binomial parameterized by mean and variance ratio phi
-// (variance = phi * mean). Success prob p = 1/phi and size r = mean/(phi-1)
-// recover that mean and variance; the PMF recurrence P(k) = P(k-1)*(k+r-1)/k*(1-p)
-// holds for real-valued r (the gamma-Poisson mixture). Falls back to Poisson when
-// phi <= 1, where the negative binomial is undefined.
-function negativeBinomialCdf(mean, maxRuns, varianceRatio = RUN_TOTAL_VARIANCE_RATIO) {
-  const safeMean = Math.max(0.01, toNumber(mean, 0.01));
-  const phi = toNumber(varianceRatio, 1);
-  if (!(phi > 1)) return poissonCdf(safeMean, maxRuns);
-
-  const p = 1 / phi;
-  const r = safeMean / (phi - 1);
-  const oneMinusP = 1 - p;
-
-  let probability = Math.pow(p, r);
-  let cumulative = probability;
-  for (let runs = 1; runs <= maxRuns; runs += 1) {
-    probability *= ((runs + r - 1) / runs) * oneMinusP;
-    cumulative += probability;
-  }
-
-  return clamp(cumulative, 0, 1);
-}
-
-function totalRunProbability(expectedTotal, line, side = 'over') {
-  const under = negativeBinomialCdf(expectedTotal, Math.floor(line));
-  return side === 'over' ? 1 - under : under;
-}
-
-function totalConfidence(probability) {
-  const edge = Math.abs(probability - 0.5);
-  if (edge >= 0.12) return 'high';
-  if (edge >= 0.06) return 'medium';
-  return 'low';
-}
-
-export function applyTotalRunMarket(totalRuns, marketLine = DEFAULT_MARKET_TOTAL, marketOdds = null) {
-  if (!totalRuns) return null;
-
-  const safeLine = Number.isFinite(Number(marketLine)) ? Number(marketLine) : DEFAULT_MARKET_TOTAL;
-  const key = String(safeLine);
-  let overProbability =
-    totalRuns.over?.[key] ?? totalRunProbability(totalRuns.projectedTotal, safeLine, 'over') * 100;
-  let underProbability =
-    totalRuns.under?.[key] ?? totalRunProbability(totalRuns.projectedTotal, safeLine, 'under') * 100;
-  // Calibrate at the source, mirroring moneyline (see predictGame). The Python
-  // evolution pipeline trains a 'totals' isotonic map but the live JS path never
-  // applied it, so /picks showed raw over/under probs. Analysis of 1018 graded
-  // outcomes found totals overconfident at the high end (70+ bucket predicted
-  // 76.8% but won 54.8%). Calibrate the favored side and complement the other so
-  // the two always sum to 100.
-  if (hasCalibrationMap('totals')) {
-    if (overProbability >= underProbability) {
-      overProbability = clamp(calibratePercent(overProbability, 'totals'), 30, 70);
-      underProbability = 100 - overProbability;
-    } else {
-      underProbability = clamp(calibratePercent(underProbability, 'totals'), 30, 70);
-      overProbability = 100 - underProbability;
-    }
-  }
-  const lean =
-    totalRuns.projectedTotal >= safeLine + 0.25 && overProbability >= underProbability
-      ? `Over ${safeLine}`
-      : totalRuns.projectedTotal <= safeLine - 0.25 && underProbability > overProbability
-        ? `Under ${safeLine}`
-        : 'No clear lean';
-  const leanProbability = lean.startsWith('Under')
-    ? underProbability
-    : lean.startsWith('Over')
-      ? overProbability
-      : Math.max(overProbability, underProbability);
-
-  // Edge must be measured against the de-vigged market, not a flat 50% baseline.
-  // The book's over/under prices imply probabilities that sum to >100% (the vig);
-  // normalize them so the comparison is model-vs-fair-line for the leaning side.
-  // Without live prices (e.g. the projection-building path), fall back to 50.
-  const devig = marketOdds ? devigTotalsPercent(marketOdds.overPrice, marketOdds.underPrice) : null;
-  const hasMarketPrice = devig !== null;
-  const marketProbability = !hasMarketPrice
-    ? 50
-    : lean.startsWith('Under')
-      ? devig.under
-      : lean.startsWith('Over')
-        ? devig.over
-        : Math.max(devig.over, devig.under);
-
-  return {
-    ...totalRuns,
-    marketLine: safeLine,
-    marketProbability,
-    hasMarketPrice,
-    marketDeltaRuns: totalRuns.projectedTotal - safeLine,
-    overMarketProbability: overProbability,
-    underMarketProbability: underProbability,
-    overNoVigProbability: devig?.over ?? null,
-    underNoVigProbability: devig?.under ?? null,
-    modelEdge: leanProbability - marketProbability,
-    bestLean: lean,
-    confidence: totalConfidence(leanProbability / 100)
-  };
-}
-
-// Build the totals value option for the side the model leans, mirroring
-// moneylineValueOption. Requires live over/under prices (applyTotalRunMarket
-// must have run with marketOdds) so edge is model-vs-de-vigged-market.
-function totalsValueOption(item) {
-  const totalRuns = item?.totalRuns;
-  if (!totalRuns || !totalRuns.hasMarketPrice) return null;
-
-  const lean = String(totalRuns.bestLean || '');
-  const side = lean.startsWith('Over') ? 'over' : lean.startsWith('Under') ? 'under' : null;
-  if (!side) return null;
-
-  const odds = side === 'over' ? item.currentOdds?.overPrice : item.currentOdds?.underPrice;
-  const impliedProbability = americanImpliedProbabilityPercent(odds);
-  if (!Number.isFinite(Number(odds)) || impliedProbability === null) return null;
-
-  const modelProbability = side === 'over' ? totalRuns.overMarketProbability : totalRuns.underMarketProbability;
-  const fairProbability = toNumber(
-    side === 'over' ? totalRuns.overNoVigProbability : totalRuns.underNoVigProbability,
-    impliedProbability
-  );
-  const edge = toNumber(modelProbability, 0) - fairProbability;
-
-  return {
-    market: 'totals',
-    side,
-    line: totalRuns.marketLine,
-    odds,
-    book: item.currentOdds?.totalBook || 'market',
-    modelProbability: round1(modelProbability),
-    impliedProbability: round1(impliedProbability),
-    fairProbability: round1(fairProbability),
-    edge: round1(edge),
-    kellyStakePercent: edge > 0 ? quarterKellyPercent(modelProbability, odds) : null
-  };
-}
-
-function totalsValueSafetyReasons(item, option) {
-  const reasons = [];
-  if (!option) return ['odds totals belum tersedia'];
-
-  if (option.edge < TOTALS_VALUE_EDGE_THRESHOLD) {
-    reasons.push(`value edge hanya ${option.edge >= 0 ? '+' : ''}${option.edge.toFixed(1)}%`);
-  }
-
-  // Conviction floor: the calibrated over/under probability is clamped to
-  // [30,70], so a leaning side below this floor is a near-coin-flip dressed up
-  // by a wide price. Stays a lean, never a graded bet.
-  if (toNumber(option.modelProbability, 0) < MIN_TOTALS_VALUE_PROBABILITY) {
-    reasons.push(`model conviction ${toNumber(option.modelProbability, 0).toFixed(1)}% < ${MIN_TOTALS_VALUE_PROBABILITY}% floor`);
-  }
-
-  // An opener/bulk start makes the starter-ERA input to the run projection
-  // unreliable, which is a primary driver of the total.
-  const riskyOpener = [item.away, item.home].some((team) => team?.openerSituation?.isOpener);
-  if (riskyOpener) {
-    reasons.push('opener/bulk pitcher membuat proyeksi run tidak bersih');
-  }
-
-  return [...new Set(reasons)];
-}
-
-export function applyTotalsValueMarket(item) {
-  if (!item) return item;
-
-  const option = totalsValueOption(item);
-  const reasons = totalsValueSafetyReasons(item, option);
-
-  item.totalsValuePick = option;
-  item.totalsBetDecision = option
-    ? {
-        market: 'totals',
-        status: reasons.length ? 'NO BET' : 'VALUE',
-        side: option.side,
-        line: option.line,
-        odds: option.odds,
-        book: option.book,
-        modelProbability: option.modelProbability,
-        impliedProbability: option.impliedProbability,
-        fairProbability: option.fairProbability,
-        edge: option.edge,
-        reason: reasons[0] || `model ${option.modelProbability.toFixed(1)}% vs implied ${option.impliedProbability.toFixed(1)}%`,
-        reasons
-      }
-    : {
-        market: 'totals',
-        status: 'LEAN ONLY',
-        reason: 'odds totals belum tersedia',
-        reasons
-      };
-
-  return item;
-}
-
-function buildTotalRunProjection({
-  away,
-  home,
-  awayProfile,
-  homeProfile,
-  awayStanding,
-  homeStanding,
-  awayPitcherStats,
-  homePitcherStats,
-  awayBullpen,
-  homeBullpen,
-  awayInjuries,
-  homeInjuries,
-  lineups,
-  weather
-}) {
-  const sharedWeather = weatherRunAdjustment(weather) / 2;
-  const park = parkFactorContext(home);
-  const sharedPark = park.runAdjustment / 2;
-  const homeLineup = lineups?.home || null;
-  const awayLineup = lineups?.away || null;
-  const homeLineupAdj = lineupRunAdjustment(homeLineup, homeInjuries);
-  const awayLineupAdj = lineupRunAdjustment(awayLineup, awayInjuries);
-  const homeOffense = offenseRunAdjustment(homeProfile);
-  const awayOffense = offenseRunAdjustment(awayProfile);
-  const homeStarterAllowed = pitcherRunAdjustment(homePitcherStats);
-  const awayStarterAllowed = pitcherRunAdjustment(awayPitcherStats);
-  const homeBullpenAllowed = bullpenRunAdjustment(homeBullpen);
-  const awayBullpenAllowed = bullpenRunAdjustment(awayBullpen);
-  const homeInjuryAdj = injuryRunAdjustment(homeInjuries);
-  const awayInjuryAdj = injuryRunAdjustment(awayInjuries);
-  const homeRecent = recentRunAdjustment(homeStanding, awayStanding);
-  const awayRecent = recentRunAdjustment(awayStanding, homeStanding);
-
-  const homeExpectedRuns = clamp(
-    DEFAULTS.rpg +
-      0.1 +
-      homeOffense +
-      awayStarterAllowed +
-      awayBullpenAllowed +
-      homeInjuryAdj +
-      homeRecent +
-      homeLineupAdj +
-      sharedPark +
-      sharedWeather,
-    1.5,
-    8.5
-  );
-  const awayExpectedRuns = clamp(
-    DEFAULTS.rpg +
-      awayOffense +
-      homeStarterAllowed +
-      homeBullpenAllowed +
-      awayInjuryAdj +
-      awayRecent +
-      awayLineupAdj +
-      sharedPark +
-      sharedWeather,
-    1.5,
-    8.5
-  );
-  const projectedTotal = homeExpectedRuns + awayExpectedRuns;
-  const over = Object.fromEntries(
-    TOTAL_RUN_LINES.map((line) => [String(line), totalRunProbability(projectedTotal, line, 'over') * 100])
-  );
-  const under = Object.fromEntries(
-    TOTAL_RUN_LINES.map((line) => [String(line), totalRunProbability(projectedTotal, line, 'under') * 100])
-  );
-  const marketLine = DEFAULT_MARKET_TOTAL;
-  const overMarket = over[String(marketLine)];
-  const underMarket = under[String(marketLine)];
-  const lean =
-    projectedTotal >= marketLine + 0.25 && overMarket >= underMarket
-      ? `Over ${marketLine}`
-      : projectedTotal <= marketLine - 0.25 && underMarket > overMarket
-        ? `Under ${marketLine}`
-        : 'No clear lean';
-  const leanProbability = lean.startsWith('Over') ? overMarket : lean.startsWith('Under') ? underMarket : Math.max(overMarket, underMarket);
-  const factors = [];
-
-  if (homeOffense + awayOffense >= 0.35) factors.push('Combined offense profile menaikkan proyeksi run.');
-  if (homeOffense + awayOffense <= -0.35) factors.push('Combined offense profile menekan proyeksi run.');
-  if (homeStarterAllowed + awayStarterAllowed >= 0.35) factors.push('Starting pitcher run-prevention memberi risiko run lebih tinggi.');
-  if (homeStarterAllowed + awayStarterAllowed <= -0.35) factors.push('Starting pitcher profile menekan total run.');
-  if (homeBullpenAllowed + awayBullpenAllowed >= 0.25) factors.push('Bullpen fatigue/availability menaikkan risiko late runs.');
-  if (Math.abs(park.runAdjustment) >= 0.12) factors.push(park.runAdjustment > 0 ? `${park.label} cenderung hitter-friendly.` : `${park.label} cenderung pitcher-friendly.`);
-  if (homeLineup?.confirmed || awayLineup?.confirmed) factors.push('Confirmed lineup ikut dibaca untuk ekspektasi run.');
-  if (homeInjuryAdj + awayInjuryAdj <= -0.2) factors.push('Injury hitter/roster mengurangi ekspektasi offense.');
-  if (Math.abs(sharedWeather) >= 0.12) factors.push(sharedWeather > 0 ? 'Weather cenderung hitter-friendly.' : 'Weather cenderung pitcher-friendly.');
-  if (factors.length === 0) factors.push('Total profile cukup seimbang tanpa edge ekstrem.');
-
-  return applyTotalRunMarket({
-    homeExpectedRuns,
-    awayExpectedRuns,
-    projectedTotal,
-    marketLine,
-    over,
-    under,
-    bestLean: lean,
-    confidence: totalConfidence(leanProbability / 100),
-    factors: factors.slice(0, 4),
-    detail: {
-      homeOffense,
-      awayOffense,
-      homeStarterAllowed,
-      awayStarterAllowed,
-      homeBullpenAllowed,
-      awayBullpenAllowed,
-      homeInjuryAdj,
-      awayInjuryAdj,
-      homeLineupAdj,
-      awayLineupAdj,
-      park,
-      lineups: {
-        away: awayLineup,
-        home: homeLineup
-      },
-      weather: sharedWeather * 2
-    }
-  });
-}
-
 function predictGame(
   game,
   teamStats,
@@ -3195,20 +2812,21 @@ function predictGame(
     Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
   const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent + weatherComponent;
 
-  // Edge dampening: the model is systematically overconfident at higher edges
-  // but UNDERCONFIDENT at low edges. Analysis of 758 moneyline outcomes:
-  //   50-55% predicted → 56.4% actual (underconfident by +4.0pp)
-  //   55-60% predicted → 52.5% actual (overconfident by -4.8pp)
-  //   65-70% predicted → 49.4% actual (overconfident by -17.6pp)
-  // Tiered dampening: less aggressive at low edge (preserve underconfident
-  // signal), more aggressive at high edge (squash overconfidence).
+  // Edge dampening: the model is systematically overconfident at higher edges.
+  // Analysis of 773 moneyline outcomes + 59 staked bets:
+  //   50-55% predicted → 56.8% actual (slightly underconfident ← sweet spot)
+  //   55-60% predicted → 52.2% actual (overconfident by 5pp)
+  //   65-70% predicted → 49.4% actual (overconfident by 18pp!)
+  // AGGRESSIVE dampening: the model needs heavy compression at all levels.
+  // Previous factors (0.82/0.70/0.58) were too mild — model_prob still hit
+  // 59% for 27/32 bets. New factors compress harder, especially at high edge.
   const absEdge = Math.abs(edge);
-  const dampeningFactor = absEdge < 0.25 ? 0.82
-    : absEdge < 0.50 ? 0.70
-    : 0.58;
+  const dampeningFactor = absEdge < 0.25 ? 0.65
+    : absEdge < 0.50 ? 0.50
+    : 0.38;
   const dampenedEdge = edge * dampeningFactor;
 
-  const rawHomeProbability = clamp(sigmoid(dampenedEdge) * 100, 30, 70);
+  const rawHomeProbability = clamp(sigmoid(dampenedEdge) * 100, 35, 65);
   const rawAwayProbability = 100 - rawHomeProbability;
   // Calibrate at the source so every surface (cards, /picks, auto-alert, stored
   // picks, dashboard) shows the same honest, observed-frequency probability.
@@ -3313,25 +2931,6 @@ function predictGame(
     homeRecentLog5,
     homeReferenceBlend
   });
-  const totalRuns = buildTotalRunProjection({
-    away,
-    home,
-    awayProfile,
-    homeProfile,
-    awayStanding,
-    homeStanding,
-    awayPitcherStats: effectiveAwayPitcherStats,
-    homePitcherStats: effectiveHomePitcherStats,
-    awayBullpen,
-    homeBullpen,
-    awayInjuries,
-    homeInjuries,
-    lineups: {
-      away: awayLineup,
-      home: homeLineup
-    },
-    weather: game.weather
-  });
   const firstInning = buildFirstInningProjection({
     away,
     home,
@@ -3388,7 +2987,6 @@ function predictGame(
       edgeComponentText('bullpen', modelBreakdown.bullpenEdge, away, home)
     ].join(' | '),
     modelBreakdown,
-    totalRuns,
     modelReference: {
       awayPythagoreanPct: Math.round(awayPythagoreanPct * 100),
       homePythagoreanPct: Math.round(homePythagoreanPct * 100),
@@ -3434,10 +3032,7 @@ export const __mlbTestInternals = {
   buildFirstInningProjection,
   firstInningHistoryEndDate,
   firstInningRunsChargedToPitcher,
-  negativeBinomialCdf,
-  pitcherFirstInningRisk,
-  poissonCdf,
-  totalRunProbability
+  pitcherFirstInningRisk
 };
 
 export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta'), modelMemory = {}) {
@@ -3724,13 +3319,6 @@ export function formatPredictions(
         ...splitInfoLine(`${item.firstInning.awayProfileLine} | ${item.firstInning.homeProfileLine}`),
         '',
         ...firstInningReasonLines,
-        '',
-        SECTION_SEPARATOR,
-        uiSection('🏃', 'Total Runs / Over-Under'),
-        ...totalRunSummaryLines(item),
-        '',
-        uiSection('🧾', 'Main Factors'),
-        ...(item.totalRuns?.factors || []).slice(0, 3).map((factor) => uiBullet('•', factor))
       ]
         .filter((line) => line !== null)
         .join('\n')

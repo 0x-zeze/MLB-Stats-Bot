@@ -12,8 +12,9 @@ from typing import Any
 
 from ..evaluate import load_prediction_log
 from ..probability_calibrator import retrain as retrain_calibration
-from ..totals import poisson_total_probability
 from ..utils import DATA_DIR, safe_float
+
+ACTIVE_MARKETS = {"moneyline", "yrfi"}
 from .calibration_auto_adjust import find_miscalibrated_buckets
 from .language_gradient import generate_language_gradient
 from .language_loss import calculate_language_loss
@@ -187,15 +188,6 @@ def _plausible_moneyline(value: float | None) -> float | None:
     return value
 
 
-def _plausible_total(value: float | None) -> float | None:
-    """Reject implausible total lines (live totals inflate after runs score)."""
-    if value is None:
-        return None
-    if value < 4.0 or value > 14.0:
-        return None
-    return value
-
-
 def _closing_odds_from_snapshots(game_snapshots: dict[str, float]) -> dict[str, Any]:
     """Map stored line snapshots to the closing-odds keys the evaluator reads.
 
@@ -210,7 +202,6 @@ def _closing_odds_from_snapshots(game_snapshots: dict[str, float]) -> dict[str, 
     pairs = (
         ("closing_home_moneyline", ("closing_home", "moneyline_home"), _plausible_moneyline),
         ("closing_away_moneyline", ("closing_away", "moneyline_away"), _plausible_moneyline),
-        ("closing_total", ("closing_total", "total"), _plausible_total),
     )
     result: dict[str, Any] = {}
     for target_key, source_keys, validate in pairs:
@@ -249,8 +240,7 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
     away = prediction.get("away") or {}
     home = prediction.get("home") or {}
     pick = prediction.get("pick") or {}
-    total_runs = prediction.get("totalRuns") or {}
-    confidence = str(pick.get("confidence") or total_runs.get("confidence") or "Low")
+    confidence = str(pick.get("confidence") or "Low")
     if confidence.lower() not in ("low", "medium", "high"):
         confidence = "Low"
     pick_probability = safe_float(pick.get("winProbability"), 50.0)
@@ -313,74 +303,6 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
     return build_prediction_trajectory(context, output)
 
 
-def _build_totals_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | None:
-    total_runs = prediction.get("totalRuns") or {}
-    best_lean = str(total_runs.get("bestLean") or "")
-    if not best_lean or best_lean == "No clear lean":
-        return None
-
-    away = prediction.get("away") or {}
-    home = prediction.get("home") or {}
-    projected = safe_float(total_runs.get("projectedTotal"), 0.0)
-    market_line = safe_float(total_runs.get("marketLine"), 8.5)
-    confidence = str(total_runs.get("confidence") or "low")
-    if confidence.lower() not in ("low", "medium", "high"):
-        confidence = "Low"
-    model_edge = safe_float(total_runs.get("modelEdge"), 0.0)
-
-    # over/underMarketProbability are only populated when live odds were attached
-    # (storage.js compaction). When absent, derive them from the projected total
-    # so totals predictions carry a real probability instead of a flat 50%.
-    over_prob = total_runs.get("overMarketProbability")
-    under_prob = total_runs.get("underMarketProbability")
-    if over_prob in (None, "") or under_prob in (None, ""):
-        if projected > 0 and market_line > 0:
-            over_prob = round(poisson_total_probability(projected, market_line, "over") * 100.0, 2)
-            under_prob = round(100.0 - over_prob, 2)
-        else:
-            over_prob = under_prob = 50.0
-    else:
-        over_prob = safe_float(over_prob, 50.0)
-        under_prob = safe_float(under_prob, 50.0)
-
-    context = {
-        "game_id": prediction.get("gamePk"),
-        "date": prediction.get("dateYmd"),
-        "market": "totals",
-        "matchup": prediction.get("matchup") or f"{away.get('name')} @ {home.get('name')}",
-        "away_team": away.get("name"),
-        "home_team": home.get("name"),
-        "game_time": prediction.get("start"),
-        "venue": prediction.get("venue"),
-        "data_quality_score": 65,
-        "probable_pitcher_status": "stored",
-        "lineup_status": "stored",
-        "weather_status": "unknown",
-        "odds_status": "unknown",
-        "bullpen_status": "stored",
-        "tool_usage": ["get_mlb_predictions", "total_run_projection"],
-        "totals": {
-            "projected_total": projected,
-            "market_total": market_line,
-            "best_lean": best_lean,
-            "confidence": confidence,
-            "model_edge": model_edge,
-            "over_probability": over_prob,
-            "under_probability": under_prob,
-        },
-        "main_factors": total_runs.get("factors") or [],
-        "risk_factors": [],
-    }
-    output = {
-        "final_lean": best_lean,
-        "confidence": confidence,
-        "totals": context["totals"],
-        "main_factors": context["main_factors"],
-        "risk_factors": [],
-    }
-    return build_prediction_trajectory(context, output)
-
-
 def _build_yrfi_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | None:
     first_inning = prediction.get("firstInning") or {}
     pick = first_inning.get("pick") or first_inning.get("baselinePick")
@@ -434,12 +356,8 @@ def _build_yrfi_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _prediction_to_trajectories(prediction: dict[str, Any]) -> list[dict[str, Any]]:
-    """Build all market trajectories (moneyline, totals, yrfi) from a stored prediction."""
+    """Build active market trajectories (moneyline, yrfi) from a stored prediction."""
     trajectories = [_prediction_to_trajectory(prediction)]
-
-    totals = _build_totals_trajectory(prediction)
-    if totals:
-        trajectories.append(totals)
 
     yrfi = _build_yrfi_trajectory(prediction)
     if yrfi:
@@ -478,7 +396,6 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
             continue
 
         away_score, home_score = score
-        total_score = away_score + home_score
         first_inning_actual = entry.get("firstInningActual")
         first_inning_run = first_inning_actual == "YES" if first_inning_actual in ("YES", "NO") else None
 
@@ -491,9 +408,7 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
 
             final_result = {"away_score": away_score, "home_score": home_score}
             final_result.update(_closing_odds_from_snapshots(line_snapshots.get(game_pk, {})))
-            if market == "totals":
-                final_result["actual_total"] = total_score
-            elif market == "yrfi":
+            if market == "yrfi":
                 if first_inning_run is None:
                     continue
                 final_result["first_inning_run"] = first_inning_run
@@ -533,7 +448,7 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
 
 
 def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
-    # Repair legacy flat-50% totals/yrfi rows before anything reads outcomes,
+    # Repair legacy flat-50% YRFI rows before anything reads outcomes,
     # so calibration and metrics train on real signal instead of coinflip noise.
     backfill = backfill_flat_outcomes(state_path)
     ingest = ingest_bot_history(state_path)
@@ -589,48 +504,37 @@ def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
 
 
 def backfill_flat_outcomes(state_path: str | Path | None = None) -> dict[str, Any]:
-    """Recompute real probability + Brier for legacy flat-50% totals/yrfi rows.
+    """Recompute real probability + Brier for legacy flat-50% YRFI rows.
 
-    Rows ingested before the 2026-05-30 probability fix stored a flat
-    predicted_probability of 50 (Brier 0.2500) — pure coinflip noise that
-    dilutes every calibration/edge metric. The normal ingest path is
-    append-only and deduped by game/market, so it can never correct them. This
-    rebuilds the trajectory from the still-stored bot prediction (picks payload)
-    and recomputes probability + Brier in place, leaving win/loss/profit
-    untouched. Idempotent: once a row carries real signal it is no longer flat
-    and is skipped on the next run.
+    Totals is archived/inactive. This only touches active YRFI rows and leaves
+    historical totals rows intact for audit trail.
     """
     predictions, _learning_log, source = _read_bot_history(state_path)
     rows = read_prediction_outcomes()
     updated = 0
     skipped_no_source = 0
     skipped_still_flat = 0
-    by_market = {"totals": 0, "yrfi": 0}
 
     for row in rows:
         market = str(row.get("market") or "").lower()
-        if market not in ("totals", "yrfi") or row.get("result") not in ("win", "loss"):
+        if market != "yrfi" or row.get("result") not in ("win", "loss"):
             continue
         brier = safe_float(row.get("brier_score"), None)
         if brier is None or abs(brier - 0.25) > 1e-9:
-            continue  # only touch the flat coinflip rows
+            continue
 
         prediction = predictions.get(str(row.get("game_id")))
         if not prediction:
             skipped_no_source += 1
             continue
-        trajectory = (
-            _build_totals_trajectory(prediction)
-            if market == "totals"
-            else _build_yrfi_trajectory(prediction)
-        )
+        trajectory = _build_yrfi_trajectory(prediction)
         if not trajectory:
             skipped_no_source += 1
             continue
 
         prob = _predicted_probability(trajectory, market, str(row.get("prediction") or ""))
         if abs(prob - 0.5) < 1e-9:
-            skipped_still_flat += 1  # projected == market line; genuinely no signal
+            skipped_still_flat += 1
             continue
 
         outcome = 1.0 if row.get("result") == "win" else 0.0
@@ -641,20 +545,18 @@ def backfill_flat_outcomes(state_path: str | Path | None = None) -> dict[str, An
         row["brier_score"] = new_brier
         row["evaluation_json"] = json.dumps(evaluation, sort_keys=True, default=str)
         updated += 1
-        by_market[market] += 1
 
     if updated:
         rewrite_prediction_outcomes(rows)
         record_evolution_event(
             "flat_outcomes_backfilled",
-            {"source": source, "updated": updated, "by_market": by_market},
+            {"source": source, "updated": updated, "by_market": {"yrfi": updated}},
         )
 
     return {
         "source": source or "not_found",
         "updated": updated,
-        "totals_fixed": by_market["totals"],
-        "yrfi_fixed": by_market["yrfi"],
+        "yrfi_fixed": updated,
         "skipped_no_source": skipped_no_source,
         "skipped_still_flat": skipped_still_flat,
     }
@@ -789,7 +691,7 @@ def _matches_segment(outcome: dict[str, Any], segment: str) -> bool:
     confidence = str(outcome.get("confidence", "")).lower()
     if segment_lower in (market, confidence):
         return True
-    if segment_lower in ("moneyline", "totals", "yrfi") and market == segment_lower:
+    if segment_lower in ACTIVE_MARKETS and market == segment_lower:
         return True
     return False
 
@@ -806,7 +708,7 @@ def backtest_candidates() -> dict[str, Any]:
     """Run backtest on pending candidates and pass through promotion gate."""
     candidates = read_jsonl("rule_candidates")
     pending = [c for c in candidates if c.get("backtest_status") == "pending"]
-    outcomes = read_prediction_outcomes()
+    outcomes = [o for o in read_prediction_outcomes() if str(o.get("market") or "moneyline").lower() in ACTIVE_MARKETS]
 
     if not outcomes or not pending:
         return {"pending_candidates": len(pending), "processed": 0, "reason": "no data or no pending candidates"}
@@ -821,10 +723,16 @@ def backtest_candidates() -> dict[str, Any]:
             candidate["promotion_status"] = "skipped"
             continue
 
-        before = [o for o in outcomes if str(o.get("date", "")) < created_at]
-        after = [o for o in outcomes if str(o.get("date", "")) >= created_at]
+        candidate_market = str(candidate.get("market") or candidate.get("target") or "moneyline").lower()
+        if candidate_market not in ACTIVE_MARKETS:
+            candidate["backtest_status"] = "skipped_inactive_market"
+            candidate["promotion_status"] = "skipped"
+            continue
 
-        segment = candidate.get("segment") or candidate.get("market")
+        before = [o for o in outcomes if str(o.get("date", "")) < created_at and str(o.get("market") or "moneyline").lower() == candidate_market]
+        after = [o for o in outcomes if str(o.get("date", "")) >= created_at and str(o.get("market") or "moneyline").lower() == candidate_market]
+
+        segment = candidate.get("segment")
         if segment:
             before = [o for o in before if _matches_segment(o, segment)]
             after = [o for o in after if _matches_segment(o, segment)]

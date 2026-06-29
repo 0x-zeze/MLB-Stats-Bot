@@ -53,7 +53,7 @@ def _infer_market(context: dict[str, Any], prediction: dict[str, Any]) -> str:
     if explicit:
         return str(explicit).lower()
     lean = str(prediction.get("final_lean") or prediction.get("lean") or "")
-    return "totals" if lean.lower().startswith(("over", "under")) else "moneyline"
+    return "yrfi" if lean.upper() in {"YES", "NO", "YRFI", "NRFI"} else "moneyline"
 
 
 def _infer_tools(context: dict[str, Any]) -> list[str]:
@@ -63,8 +63,6 @@ def _infer_tools(context: dict[str, Any]) -> list[str]:
     tools = ["get_today_games", "generate_quality_report"]
     if context.get("probable_pitchers") or context.get("probable_pitcher_status"):
         tools.append("get_probable_pitchers")
-    if context.get("totals") or "total" in str(context.get("final_lean") or "").lower():
-        tools.append("predict_total_runs")
     if context.get("moneyline"):
         tools.append("predict_moneyline")
     return tools
@@ -79,15 +77,13 @@ def build_prediction_trajectory(game_context: dict[str, Any], prediction_output:
         game_id = f"{context.get('date', 'unknown')}-{context.get('away_team', 'away')}-{context.get('home_team', 'home')}"
 
     data_quality = context.get("data_quality") or {}
-    totals = prediction_source.get("totals") or context.get("totals") or {}
     moneyline = prediction_source.get("moneyline") or context.get("moneyline") or {}
     yrfi = prediction_source.get("yrfi") or context.get("yrfi") or {}
     market = _infer_market(context, prediction_source)
-    final_lean = prediction_source.get("final_lean") or totals.get("lean") or prediction_source.get("lean") or "NO BET"
+    final_lean = prediction_source.get("final_lean") or yrfi.get("pick") or prediction_source.get("lean") or "NO BET"
     confidence = (
         prediction_source.get("confidence")
         or moneyline.get("confidence")
-        or totals.get("confidence")
         or "Low"
     )
 
@@ -118,14 +114,9 @@ def build_prediction_trajectory(game_context: dict[str, Any], prediction_output:
         "model_features_used": context.get("model_features_used") or [],
         "prediction": {
             "moneyline_probability": moneyline.get("model_probability") or moneyline.get("home_probability"),
-            "projected_total": totals.get("projected_total"),
-            "projected_total_runs": totals.get("projected_total") or prediction_source.get("projected_total_runs"),
-            "market_total": totals.get("market_total"),
-            "over_probability": totals.get("over_probability"),
-            "under_probability": totals.get("under_probability"),
-            "yrfi_probability": yrfi.get("probability"),
-            "market_odds": moneyline.get("current_odds") or {"over": totals.get("over_odds"), "under": totals.get("under_odds")},
-            "model_edge": moneyline.get("edge") if market == "moneyline" else totals.get("edge"),
+                                "yrfi_probability": yrfi.get("probability"),
+            "market_odds": moneyline.get("current_odds") or yrfi.get("odds") or {},
+            "model_edge": moneyline.get("edge") if market == "moneyline" else yrfi.get("edge"),
             "lean": final_lean,
             "final_lean": final_lean,
             "confidence": confidence,

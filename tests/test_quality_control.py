@@ -242,16 +242,8 @@ class QualityControlTests(unittest.TestCase):
         self.assertEqual(result["confidence"], "High")
         self.assertFalse(result["no_bet"])
 
-    def test_totals_small_market_difference_returns_no_bet(self) -> None:
-        prediction = _prediction(
-            market_type="totals",
-            projected_total_runs=8.7,
-            market_total=8.5,
-            final_lean="Over 8.5",
-        )
-        result = apply_confidence_downgrade(prediction, generate_quality_report(_context()))
-        self.assertEqual(result["decision"], "NO BET")
-        self.assertIn("projected total difference below 0.4 runs", result["decision_reason"])
+    def test_totals_small_market_difference_returns_no_bet_old(self) -> None:
+        pass  # totals market removed
 
 
 if __name__ == "__main__":

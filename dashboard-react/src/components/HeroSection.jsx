@@ -21,7 +21,7 @@ export default function HeroSection({ onRefresh, onTabChange, summary = {}, load
           MLB Prediction Control Center
         </h1>
         <p className="max-w-3xl text-sm font-semibold leading-6 text-ink/75 md:text-base">
-          Track today's MLB slate, model probabilities, moneyline value, totals, YRFI/NRFI signals, and Analyst Agent reasoning in one loud dashboard.
+          Track today's MLB slate, model probabilities, moneyline value, YRFI/NRFI signals, and Analyst Agent reasoning in one loud dashboard.
         </p>
       </div>
 

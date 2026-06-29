@@ -30,7 +30,6 @@ from .lineup import get_lineup, load_lineups
 from .park_factors import get_park_factor as find_park_factor
 from .park_factors import load_park_factors
 from .rolling_expected_stats import RollingExpectedStats, rolling_team_xstats
-from .totals import GameTotalContext
 from .travel_fatigue import TravelContext, build_travel_context
 from .umpire import UmpireContext, build_umpire_context
 from .utils import clean_name, data_path, safe_float
@@ -187,13 +186,13 @@ def get_weather_context(
 
 
 def get_market_odds(game_id: str | int) -> dict[str, Any]:
-    """Return local market total/odds row when present."""
+    """Return local moneyline odds row when present."""
     game = resolve_game(game_id)
     return market_odds_for_game(game)
 
 
 def market_odds_for_game(game: GameRow) -> dict[str, Any]:
-    """Return market row for a resolved game."""
+    """Return moneyline market row for a resolved game."""
     source = data_path("sample_market_totals.csv")
     if not source.exists():
         return {"available": False}
@@ -208,15 +207,6 @@ def market_odds_for_game(game: GameRow) -> dict[str, Any]:
                 "away_team": row.get("away_team"),
                 "home_moneyline": row.get("home_moneyline"),
                 "away_moneyline": row.get("away_moneyline"),
-                "run_line": safe_float(row.get("run_line"), 0.0),
-                "home_run_line_odds": row.get("home_run_line_odds"),
-                "away_run_line_odds": row.get("away_run_line_odds"),
-                "market_total": safe_float(row.get("market_total"), 0.0),
-                "opening_total": safe_float(row.get("opening_total"), 0.0),
-                "current_total": safe_float(row.get("current_total"), 0.0),
-                "closing_total": safe_float(row.get("closing_total"), 0.0),
-                "over_odds": row.get("over_odds"),
-                "under_odds": row.get("under_odds"),
             }
     return {"available": False}
 
@@ -275,17 +265,6 @@ def collect_game_data(game_id: str | int) -> dict[str, Any]:
         },
     }
 
-    total_context = GameTotalContext(
-        home_pitcher=home_pitcher,
-        away_pitcher=away_pitcher,
-        home_lineup=home_lineup,
-        away_lineup=away_lineup,
-        home_bullpen=home_bullpen_raw,
-        away_bullpen=away_bullpen_raw,
-        weather=weather_raw,
-        park=park_raw,
-    )
-
     # New signals: umpire, travel fatigue, BvP, rolling xstats
     umpire_context = _collect_umpire_context(context)
     home_travel_context = _collect_travel_context(game, "home")
@@ -310,7 +289,6 @@ def collect_game_data(game_id: str | int) -> dict[str, Any]:
         "weather": weather_raw,
         "market": market,
         "context": context,
-        "total_context": total_context,
         "umpire_context": umpire_context,
         "home_travel_context": home_travel_context,
         "away_travel_context": away_travel_context,

@@ -19,9 +19,8 @@ RECOMMENDATION_MAP = {
     "weak_edge": "Raise the required edge or return NO BET when model edge is marginal.",
     "overconfidence": "Tighten confidence caps; do not allow Medium/High confidence without multiple independent Tier 1 signals.",
     "lineup_misread": "Downgrade confidence when lineup is projected, missing, or key lineup slots are unclear.",
-    "weather_misread": "Require fresh weather context before confident outdoor totals or YRFI decisions.",
+    "weather_misread": "Require fresh weather context before confident YRFI decisions.",
     "bad_data_quality": "Lower confidence or return NO BET when data quality falls below the safe threshold.",
-    "totals_projection_error": "Review totals weights for starter run prevention, bullpen fatigue, park, weather, and lineup impact.",
     "market_misread": "Compare model probability against implied odds and closing line before treating a lean as value.",
     "pitcher_misread": "Increase review of starter K-BB%, WHIP, HR/9, handedness split, and opener/bulk risk.",
     "bullpen_misread": "Increase penalty for tired bullpen, back-to-back relievers, and short-start risk.",
@@ -62,6 +61,7 @@ SAFE_APPLY_MAX_WEIGHT_DELTA = 0.05
 SAFE_APPLY_MIN_LOSS_RATE = 55.0
 CALIBRATION_RELEASE_ERROR_THRESHOLD = 5.0
 CALIBRATION_RELEASE_MIN_SAMPLE = 10
+ACTIVE_MARKETS = {"moneyline", "yrfi"}
 
 MEMORY_CAUTION_BY_PATTERN = {
     "weak_edge": "Prefer NO BET or LEAN ONLY when edge is marginal and no Tier 1 signal confirms the side.",
@@ -114,6 +114,8 @@ def _evaluation_rows() -> list[dict[str, Any]]:
         merged = {**row, **evaluation}
         merged["result"] = str(merged.get("result") or "").lower()
         merged["market"] = str(merged.get("market") or "moneyline").lower()
+        if merged["market"] not in ACTIVE_MARKETS:
+            continue
         merged["confidence"] = str(merged.get("confidence") or "unknown").lower()
         rows.append(merged)
     return rows
@@ -439,6 +441,7 @@ def confidence_cap_candidates(rows: list[dict[str, Any]], calibration: list[dict
         candidates.append(
             {
                 "candidate_id": f"audit-confidence-cap-{bucket['bucket'].replace(':', '-').replace('+', 'plus')}",
+                "market": rows[0].get("market", "moneyline") if rows else "moneyline",
                 "type": "confidence_cap",
                 "target": bucket["bucket"],
                 "update": f"Cap confidence one level lower for {bucket['bucket']} until calibration improves.",
@@ -456,6 +459,7 @@ def confidence_cap_candidates(rows: list[dict[str, Any]], calibration: list[dict
         candidates.append(
             {
                 "candidate_id": f"audit-confidence-cap-{confidence}",
+                "market": rows[0].get("market", "moneyline") if rows else "moneyline",
                 "type": "confidence_cap",
                 "target": label,
                 "update": f"Cap {confidence} confidence picks when Tier 1 signals do not agree.",
@@ -637,8 +641,9 @@ def _safe_rule_candidates_from_audit(audit: dict[str, Any]) -> list[dict[str, An
     ):
         candidates.append(
             {
-                "candidate_id": "audit-safe-no-bet-weak-edge",
-                "rule_key": "audit:no_bet:weak_edge",
+                "candidate_id": "audit-safe-moneyline-no-bet-weak-edge",
+                "rule_key": "audit:moneyline:no_bet:weak_edge",
+                "market": "moneyline",
                 "type": "no_bet_rule",
                 "target": "moneyline",
                 "rule": "Return NO BET when moneyline value/model edge is weak and no stronger Tier 1 signal confirms the side.",
@@ -663,8 +668,9 @@ def _safe_rule_candidates_from_audit(audit: dict[str, Any]) -> list[dict[str, An
     if record_bias and record_bias.get("count", 0) >= 2:
         candidates.append(
             {
-                "candidate_id": "audit-safe-confidence-cap-record-bias",
-                "rule_key": "audit:confidence_cap:record_bias",
+                "candidate_id": "audit-safe-moneyline-confidence-cap-record-bias",
+                "rule_key": "audit:moneyline:confidence_cap:record_bias",
+                "market": "moneyline",
                 "type": "confidence_cap",
                 "target": "moneyline",
                 "rule": "Cap to LEAN ONLY/NO BET when record, H2H, or recent form dominates weak game-specific matchup edge.",
@@ -690,8 +696,9 @@ def _safe_rule_candidates_from_audit(audit: dict[str, Any]) -> list[dict[str, An
         bucket_id = str(bucket.get("bucket") or "unknown").replace(":", "-").replace("+", "plus")
         candidates.append(
             {
-                "candidate_id": f"audit-safe-confidence-cap-{bucket_id}",
-                "rule_key": f"audit:confidence_cap:{bucket_id}",
+                "candidate_id": f"audit-safe-moneyline-confidence-cap-{bucket_id}",
+                "rule_key": f"audit:moneyline:confidence_cap:{bucket_id}",
+                "market": "moneyline",
                 "type": "confidence_cap",
                 "target": bucket.get("bucket"),
                 "rule": f"Cap confidence one level lower for {bucket.get('bucket')} until calibration improves.",
@@ -748,7 +755,7 @@ def _release_calibrated_confidence_caps(
 
     for control in active_controls:
         rule_key = str(control.get("rule_key") or control.get("candidate_id") or "")
-        if control.get("type") != "confidence_cap" or not rule_key.startswith("audit:confidence_cap:probability-"):
+        if control.get("type") != "confidence_cap" or "confidence_cap:probability-" not in rule_key:
             kept.append(control)
             continue
 
@@ -1238,6 +1245,51 @@ def _risk_warnings(causes: list[dict[str, Any]], weakest: list[dict[str, Any]]) 
     return warnings[:8]
 
 
+
+def _market_diagnostics(market: str, rows: list[dict[str, Any]], losses: list[dict[str, Any]], min_segment_sample: int, candidate_limit: int) -> dict[str, Any]:
+    wins = sum(1 for row in rows if row.get("result") == "win")
+    lost = sum(1 for row in rows if row.get("result") == "loss")
+    pushes = sum(1 for row in rows if row.get("result") == "push")
+    no_bets = sum(1 for row in rows if row.get("result") == "no_bet")
+    decided = wins + lost
+    briers = [safe_float(row.get("brier_score"), 0.0) for row in rows if row.get("brier_score") not in (None, "")]
+    clvs = [safe_float(row.get("clv"), 0.0) for row in rows if row.get("clv") not in (None, "")]
+    segments = segment_performance(rows, min_sample=min_segment_sample)
+    decided_segments = [segment for segment in segments if segment.get("decided", 0) >= min_segment_sample]
+    weakest = sorted(decided_segments, key=lambda item: (item["loss_rate"], item["losses"], item["sample_size"]), reverse=True)[:8]
+    strongest = sorted(decided_segments, key=lambda item: (item["accuracy"], item["wins"], item["sample_size"]), reverse=True)[:8]
+    causes = root_causes(losses)
+    fixes = recommendations(causes, weakest)
+    calibration = calibration_buckets(rows)
+    clv = clv_report(rows)
+    reasons = reason_quality(rows, losses)
+    cap_candidates = confidence_cap_candidates(rows, calibration, segments)
+    return {
+        "market": market,
+        "summary": {
+            "market": market,
+            "evaluated": len(rows),
+            "decided": decided,
+            "wins": wins,
+            "losses": lost,
+            "pushes": pushes,
+            "no_bets": no_bets,
+            "accuracy": _pct(wins, decided),
+            "average_brier": _avg(briers),
+            "average_clv": _avg(clvs),
+        },
+        "weakest_segments": weakest,
+        "strongest_segments": strongest,
+        "root_causes": causes[:10],
+        "priority_recommendations": fixes,
+        "calibration_buckets": calibration,
+        "clv_report": clv,
+        "reason_quality": reasons,
+        "confidence_cap_candidates": cap_candidates,
+        "risk_warnings": _risk_warnings(causes, weakest),
+        "segment_performance": segments[:30],
+    }
+
 def build_evolution_audit(
     *,
     min_segment_sample: int = 3,
@@ -1247,12 +1299,24 @@ def build_evolution_audit(
     update_memory: bool = False,
 ) -> dict[str, Any]:
     rows = _evaluation_rows()
-    losses = read_jsonl("language_losses")
-    lessons = read_jsonl("lessons")
-    gradients = read_jsonl("language_gradients")
+    losses = [loss for loss in read_jsonl("language_losses") if str(loss.get("market") or "moneyline").lower() in ACTIVE_MARKETS]
+    lessons = [lesson for lesson in read_jsonl("lessons") if str(lesson.get("market") or "moneyline").lower() in ACTIVE_MARKETS]
+    gradients = [gradient for gradient in read_jsonl("language_gradients") if str(gradient.get("market") or "moneyline").lower() in ACTIVE_MARKETS]
     candidates = [*read_jsonl("rule_candidates"), *read_jsonl("symbolic_updates")]
     approved = read_json("approved_rules").get("approved", [])
     rejected = read_json("rejected_rules").get("rejected", [])
+
+    rows_by_market = {market: [row for row in rows if str(row.get("market") or "moneyline").lower() == market] for market in sorted(ACTIVE_MARKETS)}
+    losses_by_market = {market: [loss for loss in losses if str(loss.get("market") or "moneyline").lower() == market] for market in sorted(ACTIVE_MARKETS)}
+    markets = {
+        market: _market_diagnostics(market, market_rows, losses_by_market[market], min_segment_sample, candidate_limit)
+        for market, market_rows in rows_by_market.items()
+    }
+
+    # Backward-compatible top-level diagnostics intentionally use MONEYLINE only.
+    # Safe production guardrails/weight updates are moneyline controls; YRFI remains
+    # separate advisory diagnostics and cannot poison moneyline updates.
+    moneyline = markets.get("moneyline") or _market_diagnostics("moneyline", [], [], min_segment_sample, candidate_limit)
 
     wins = sum(1 for row in rows if row.get("result") == "win")
     lost = sum(1 for row in rows if row.get("result") == "loss")
@@ -1262,21 +1326,10 @@ def build_evolution_audit(
     briers = [safe_float(row.get("brier_score"), 0.0) for row in rows if row.get("brier_score") not in (None, "")]
     clvs = [safe_float(row.get("clv"), 0.0) for row in rows if row.get("clv") not in (None, "")]
 
-    segments = segment_performance(rows, min_sample=min_segment_sample)
-    decided_segments = [segment for segment in segments if segment.get("decided", 0) >= min_segment_sample]
-    weakest = sorted(decided_segments, key=lambda item: (item["loss_rate"], item["losses"], item["sample_size"]), reverse=True)[:8]
-    strongest = sorted(decided_segments, key=lambda item: (item["accuracy"], item["wins"], item["sample_size"]), reverse=True)[:8]
-    causes = root_causes(losses)
-    priorities = candidate_priorities(limit=candidate_limit)
-    fixes = recommendations(causes, weakest)
-    calibration = calibration_buckets(rows)
-    clv = clv_report(rows)
-    reasons = reason_quality(rows, losses)
-    cap_candidates = confidence_cap_candidates(rows, calibration, segments)
-
     audit = {
         "summary": {
             "generated_at": utc_now(),
+            "active_markets": sorted(ACTIVE_MARKETS),
             "evaluated": len(rows),
             "decided": decided,
             "wins": wins,
@@ -1293,30 +1346,33 @@ def build_evolution_audit(
             "approved": len(approved),
             "rejected": len(rejected),
         },
-        "weakest_segments": weakest,
-        "strongest_segments": strongest,
-        "root_causes": causes[:10],
-        "priority_recommendations": fixes,
-        "candidate_priorities": priorities,
-        "calibration_buckets": calibration,
-        "clv_report": clv,
-        "reason_quality": reasons,
-        "confidence_cap_candidates": cap_candidates,
-        "risk_warnings": _risk_warnings(causes, weakest),
-        "segment_performance": segments[:30],
+        "markets": markets,
+        "weakest_segments": moneyline["weakest_segments"],
+        "strongest_segments": moneyline["strongest_segments"],
+        "root_causes": moneyline["root_causes"],
+        "priority_recommendations": moneyline["priority_recommendations"],
+        "candidate_priorities": candidate_priorities(limit=candidate_limit),
+        "calibration_buckets": moneyline["calibration_buckets"],
+        "clv_report": moneyline["clv_report"],
+        "reason_quality": moneyline["reason_quality"],
+        "confidence_cap_candidates": moneyline["confidence_cap_candidates"],
+        "risk_warnings": moneyline["risk_warnings"],
+        "segment_performance": moneyline["segment_performance"],
         "applied_updates": None,
         "memory_update": None,
         "evolution_data_dir": str(evolution_data_dir()),
-        "safety": "Audit can apply only conservative, versioned risk guardrails when --apply-safe is used. It never increases confidence or removes NO BET protections.",
+        "safety": "Audit safe updates use moneyline-only diagnostics. YRFI diagnostics are market-scoped and advisory unless a YRFI-specific control is added.",
     }
     if apply_safe or update_memory:
-        audit["memory_update"] = update_audit_memory(audit, rows, losses, lessons)
+        moneyline_rows = rows_by_market.get("moneyline", [])
+        moneyline_losses = losses_by_market.get("moneyline", [])
+        moneyline_lessons = [lesson for lesson in lessons if str(lesson.get("market") or "moneyline").lower() == "moneyline"]
+        audit["memory_update"] = update_audit_memory(audit, moneyline_rows, moneyline_losses, moneyline_lessons)
     if apply_safe:
         audit["applied_updates"] = apply_safe_audit_updates(audit)
     if persist:
         append_jsonl("audit_reports", audit)
     return audit
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build Evolution audit diagnostics.")

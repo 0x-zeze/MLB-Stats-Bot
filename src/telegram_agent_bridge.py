@@ -10,7 +10,7 @@ from .agent_tools import (
     get_game_context,
     get_today_games,
     predict_moneyline,
-    predict_total_runs,
+    predict_yrfi,
 )
 from .knowledge.baseball_knowledge import BaseballKnowledgeBase
 from .utils import format_probability
@@ -19,11 +19,11 @@ from .utils import format_probability
 KNOWLEDGE_QUESTIONS = {
     "wrc": "Why is wRC+ better than OPS for offense evaluation?",
     "fip": "Why does FIP matter more than ERA for pitcher prediction?",
-    "wind": "Why does wind blowing out increase over probability?",
-    "bullpen": "Why is bullpen fatigue important for totals?",
-    "market": "What does it mean if model total is 9.2 but market total is 8.5?",
+    "wind": "Why can weather affect run scoring?",
+    "bullpen": "Why is bullpen fatigue important for MLB betting?",
+    "market": "How do moneyline odds become implied probability?",
     "value": "Why can a team be favored but still not be a good value bet?",
-    "markets": "What is the difference between moneyline, run line, and total?",
+    "markets": "What is the difference between moneyline and YRFI/NRFI?",
     "f5": "What are the best indicators for first 5 innings bets?",
 }
 
@@ -104,48 +104,22 @@ def moneyline(game_id: str) -> dict[str, Any]:
     return {"text": "\n".join(lines)}
 
 
-def total_runs(game_id: str) -> dict[str, Any]:
-    result = predict_total_runs(game_id)
-    over = result["over_probabilities"]
-    under = result["under_probabilities"]
-    market_total = result.get("market_total")
+
+def yrfi(game_id: str) -> dict[str, Any]:
+    result = predict_yrfi(game_id)
     quality = result.get("quality_report", {})
     lines = [
-        "Total Runs",
-        result["matchup"],
-        f"Projected: {_fmt_number(result['projected_total_runs'])}",
-        f"Expected: home {_fmt_number(result['home_expected_runs'])} | away {_fmt_number(result['away_expected_runs'])}",
+        "YRFI / NRFI",
+        result.get("matchup", "-"),
+        f"Lean: {result.get('lean', '-')}",
+        f"YRFI: {_pct(result.get('yrfi_probability'))}",
+        f"NRFI: {_pct(result.get('nrfi_probability'))}",
+        f"Confidence: {result.get('confidence', '-')}",
+        f"Decision: {result.get('decision', '-')}",
+        f"Quality: {quality.get('score', 0)}/100",
+        f"No-bet: {'YES' if result.get('no_bet') else 'NO'}",
     ]
-    if market_total:
-        lines.append(f"Market total: {_fmt_number(market_total)}")
-    lines.extend(
-        [
-            f"Lean: {result['best_total_lean']}",
-            f"Confidence: {result['confidence']}",
-            "",
-            "Over:",
-            f"- Over 6.5: {_pct(over[6.5])}",
-            f"- Over 7.5: {_pct(over[7.5])}",
-            f"- Over 8.5: {_pct(over[8.5])}",
-            f"- Over 9.5: {_pct(over[9.5])}",
-            f"- Over 10.5: {_pct(over[10.5])}",
-            "",
-            "Under:",
-            f"- Under 6.5: {_pct(under[6.5])}",
-            f"- Under 7.5: {_pct(under[7.5])}",
-            f"- Under 8.5: {_pct(under[8.5])}",
-            f"- Under 9.5: {_pct(under[9.5])}",
-            f"- Under 10.5: {_pct(under[10.5])}",
-            "",
-            f"Decision: {result.get('decision', '-')}",
-            f"Quality: {quality.get('score', 0)}/100",
-            f"No-bet: {'YES' if result['no_bet'] else 'NO'}",
-        ]
-    )
-    if result.get("confidence_adjustments"):
-        lines.insert(-1, f"Adjustment: {result['confidence_adjustments'][0]}")
     return {"text": "\n".join(lines)}
-
 
 def context(game_id: str) -> dict[str, Any]:
     item = get_game_context(game_id)
@@ -156,29 +130,29 @@ def context(game_id: str) -> dict[str, Any]:
         item["matchup"],
         f"Park: {item['park'].get('park', '-')}",
         f"Weather: {_fmt_number(weather.get('temperature'))} F, wind {_fmt_number(weather.get('wind_speed'))} {weather.get('wind_direction', '')}",
-        f"Market total: {_fmt_number(market.get('market_total')) if market.get('available') else '-'}",
-        f"Run line: {market.get('run_line', '-') if market.get('available') else '-'}",
+        f"Home ML: {market.get('home_moneyline', '-') if market.get('available') else '-'}",
+        f"Away ML: {market.get('away_moneyline', '-') if market.get('available') else '-'}",
     ]
     return {"text": "\n".join(lines)}
 
 
 def full(game_id: str) -> dict[str, Any]:
     ml = predict_moneyline(game_id)
-    total = predict_total_runs(game_id)
-    quality = total.get("quality_report", ml.get("quality_report", {}))
+    first = predict_yrfi(game_id)
+    quality = first.get("quality_report", ml.get("quality_report", {}))
     lines = [
         "MLB Game Analysis",
         ml["matchup"],
         f"ML pick: {ml['predicted_winner']} ({ml['confidence']})",
         f"Home/Away: {_pct(ml['home_win_probability'])} / {_pct(ml['away_win_probability'])}",
-        f"Total: {_fmt_number(total['projected_total_runs'])}",
-        f"Lean: {total['best_total_lean']} ({total['confidence']})",
-        f"Decision: ML {ml.get('decision', '-')} | Total {total.get('decision', '-')}",
+        f"YRFI lean: {first.get('lean', '-')} ({first.get('confidence', '-')})",
+        f"YRFI/NRFI: {_pct(first.get('yrfi_probability'))} / {_pct(first.get('nrfi_probability'))}",
+        f"Decision: ML {ml.get('decision', '-')} | YRFI {first.get('decision', '-')}",
         f"Quality: {quality.get('score', 0)}/100",
         "",
         "Factors:",
-        *[f"- {factor}" for factor in (ml["main_factors"] + total["main_factors"])[:4]],
-        f"No-bet: {'YES' if ml['no_bet'] and total['no_bet'] else 'NO'}",
+        *[f"- {factor}" for factor in (ml.get("main_factors", []) + first.get("main_factors", []))[:4]],
+        f"No-bet: {'YES' if ml.get('no_bet') else 'NO'}",
     ]
     return {"text": "\n".join(lines)}
 
@@ -209,8 +183,8 @@ def main(argv: list[str] | None = None) -> None:
         _json(game_menu(value))
     elif action == "moneyline":
         _json(moneyline(value))
-    elif action == "total":
-        _json(total_runs(value))
+    elif action == "yrfi":
+        _json(yrfi(value))
     elif action == "context":
         _json(context(value))
     elif action == "full":

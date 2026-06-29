@@ -96,7 +96,7 @@ def _odds_status(game_context: dict[str, Any]) -> str:
         return MISSING
     has_odds = any(
         _field(market, key) not in (None, "")
-        for key in ("home_moneyline", "away_moneyline", "over_odds", "under_odds")
+        for key in ("home_moneyline", "away_moneyline")
     )
     if not has_odds:
         return MISSING
@@ -112,24 +112,8 @@ def _park_status(game_context: dict[str, Any]) -> str:
     return AVAILABLE if _available(game_context.get("park") or game_context.get("park_factor")) else MISSING
 
 
-def _market_total_status(game_context: dict[str, Any]) -> str:
-    market = game_context.get("market") or game_context.get("odds")
-    return AVAILABLE if _available(market) and safe_float(_field(market, "market_total"), 0.0) > 0 else MISSING
-
-
 def _market_odds_status(game_context: dict[str, Any]) -> str:
     return AVAILABLE if _odds_status(game_context) in {FRESH, STALE} else MISSING
-
-
-def _market_movement_status(game_context: dict[str, Any]) -> str:
-    market = game_context.get("market") or game_context.get("odds")
-    if not _available(market):
-        return MISSING
-    opening = safe_float(_field(market, "opening_total"), 0.0)
-    current = safe_float(_field(market, "current_total"), 0.0) or safe_float(_field(market, "market_total"), 0.0)
-    if opening <= 0 or current <= 0:
-        return MISSING
-    return MOVED_HEAVILY if abs(current - opening) >= 0.75 else STABLE
 
 
 def _injury_news_status(game_context: dict[str, Any]) -> str:
@@ -232,9 +216,7 @@ def check_prediction_inputs(game_context: dict[str, Any]) -> dict[str, str]:
         "odds": _odds_status(game_context),
         "bullpen_usage": _bullpen_status(game_context),
         "park_factor": _park_status(game_context),
-        "market_total": _market_total_status(game_context),
         "market_odds": _market_odds_status(game_context),
-        "market_movement": _market_movement_status(game_context),
         "injury_news": _injury_news_status(game_context),
     }
 
@@ -261,8 +243,6 @@ def calculate_data_quality_score(game_context: dict[str, Any]) -> int:
         score += 15
     if checks["park_factor"] == AVAILABLE:
         score += 10
-    if checks["market_total"] == AVAILABLE:
-        score += 10
     if checks["injury_news"] == AVAILABLE:
         score += 5
 
@@ -284,7 +264,6 @@ def generate_quality_report(game_context: dict[str, Any]) -> dict[str, Any]:
             "odds": "odds",
             "bullpen_usage": "bullpen usage",
             "park_factor": "park factor",
-            "market_total": "market total",
             "market_odds": "market odds",
             "injury_news": "injury/news context",
         }.items()
@@ -339,14 +318,6 @@ def _downgrade(confidence: str) -> str:
     return _CONFIDENCE_LEVELS[max(0, index - 1)]
 
 
-def _total_difference(prediction: dict[str, Any]) -> float | None:
-    projected = prediction.get("projected_total_runs")
-    market = prediction.get("market_total")
-    if projected is None or market is None:
-        return None
-    return abs(safe_float(projected) - safe_float(market))
-
-
 def apply_confidence_downgrade(
     prediction: dict[str, Any],
     quality_report: dict[str, Any],
@@ -381,14 +352,7 @@ def apply_confidence_downgrade(
         no_bet = True
         reasons.append("model edge below 2%")
 
-    if market_type == "totals":
-        total_diff = _total_difference(output)
-        if total_diff is None:
-            no_bet = True
-            reasons.append("market total unavailable")
-        elif total_diff < 0.4:
-            no_bet = True
-            reasons.append("projected total difference below 0.4 runs")
+
 
     score = int(quality_report.get("score", 0))
     if score < 60:
@@ -444,7 +408,7 @@ def apply_confidence_downgrade(
         confidence = "Medium"
         adjustments.append("calibration does not support High: confidence capped at Medium")
 
-    raw_lean = output.get("final_lean") or output.get("predicted_winner") or output.get("best_total_lean")
+    raw_lean = output.get("final_lean") or output.get("predicted_winner") or output.get("lean")
     if no_bet:
         decision = "NO BET"
         final_lean = "NO BET"

@@ -10,7 +10,7 @@ class RuleCandidateGeneratorTests(unittest.TestCase):
                 "lesson_id": f"lesson-{index}",
                 "lesson_type": "overconfidence",
                 "category": "confidence",
-                "suggested_adjustment": "Cap totals confidence when projected total difference is below 0.5 and lineup is not confirmed.",
+                "suggested_adjustment": "Cap yrfi confidence when model edge is below 0.5 and lineup is not confirmed.",
             }
             for index in range(5)
         ]

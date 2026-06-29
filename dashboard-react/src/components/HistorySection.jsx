@@ -55,7 +55,7 @@ function EvolveSummary({ result }) {
     <div className="mt-3 space-y-3">
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <MetricPill label="Backfilled Rows" value={backfill.updated} />
-        <MetricPill label="Totals/YRFI Fixed" value={`${backfill.totals_fixed || 0}/${backfill.yrfi_fixed || 0}`} />
+        <MetricPill label="YRFI Fixed" value={backfill.yrfi_fixed || 0} />
         <MetricPill label="Evaluated" value={ingest.evaluated || summary.total_predictions_evaluated} />
         <MetricPill label="Skipped Dupes" value={ingest.skipped_duplicates} />
         <MetricPill label="Lessons" value={ingest.lessons || summary.lessons_generated} />

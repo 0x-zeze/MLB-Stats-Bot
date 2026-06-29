@@ -35,8 +35,6 @@ from .park_factors import get_park_factor as find_park_factor
 from .park_factors import load_park_factors
 from .quality_control import apply_confidence_downgrade, generate_quality_report
 from .prediction_pipeline import run_prediction_pipeline
-from .totals import COMMON_TOTAL_LINES, GameTotalContext
-from .totals import predict_total_runs as predict_total_runs_model
 from .utils import clean_name, data_path, format_probability, safe_float
 from .weather import get_weather_context as find_weather_context
 from .weather import load_weather_contexts
@@ -174,7 +172,7 @@ def get_weather_context(ballpark_id: str, game_time: str | None = None, away_tea
 
 
 def get_market_odds(game_id: str | int) -> dict[str, Any]:
-    """Return local market total/odds row when present."""
+    """Return local moneyline market odds row when present."""
     return collect_market_odds(game_id)
 
 
@@ -183,9 +181,9 @@ def predict_moneyline(game_id: str | int) -> dict[str, Any]:
     return run_prediction_pipeline(game_id)["moneyline"]
 
 
-def predict_total_runs(game_id: str | int) -> dict[str, Any]:
-    """Predict total runs and common over/under probabilities."""
-    return run_prediction_pipeline(game_id)["totals"]
+def predict_yrfi(game_id: str | int) -> dict[str, Any]:
+    """Predict YRFI/NRFI with first-inning model probability."""
+    return run_prediction_pipeline(game_id)["first_inning"]
 
 
 def explain_prediction(game_id: str | int) -> str:

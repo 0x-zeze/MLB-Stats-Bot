@@ -132,7 +132,7 @@ def build_report(rows: list[dict[str, Any]]) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate MLB prediction logs.")
     parser.add_argument("--log", default=str(data_path("predictions_log.csv")), help="Predictions log CSV")
-    parser.add_argument("--market", choices=["moneyline", "totals", "all"], default="all")
+    parser.add_argument("--market", choices=["moneyline", "yrfi", "all"], default="all")
     parser.add_argument("--report", action="store_true", help="Print evaluation report")
     return parser.parse_args()
 
@@ -143,7 +143,7 @@ def main() -> None:
     if args.market != "all":
         if args.market == "moneyline":
             rows = [row for row in rows if not str(row.get("final_lean", "")).startswith(("Over", "Under"))]
-        if args.market == "totals":
+        if args.market == "yrfi":
             rows = [row for row in rows if str(row.get("final_lean", "")).startswith(("Over", "Under", "NO BET"))]
     if args.report:
         print(build_report(rows))

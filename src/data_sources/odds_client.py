@@ -56,10 +56,10 @@ class OddsApiClient:
     def get_mlb_odds(
         self,
         regions: str = "us",
-        markets: str = "h2h,spreads,totals",
+        markets: str = "h2h",
         odds_format: str = "american",
     ) -> list[dict[str, Any]]:
-        """Return current MLB moneyline, run line, and totals markets."""
+        """Return current MLB moneyline markets."""
         return self._get(
             "/sports/baseball_mlb/odds",
             {
@@ -73,7 +73,7 @@ class OddsApiClient:
         self,
         event_id: str,
         regions: str = "us",
-        markets: str = "h2h,spreads,totals",
+        markets: str = "h2h",
         odds_format: str = "american",
     ) -> dict[str, Any] | list[Any]:
         """Return odds for a single Odds API event id."""
@@ -88,14 +88,12 @@ class OddsApiClient:
 
 
 def extract_market_snapshot(event: dict[str, Any]) -> dict[str, Any]:
-    """Extract moneyline, run-line, and total snapshots from an Odds API event."""
+    """Extract moneyline snapshot from an Odds API event."""
     snapshot: dict[str, Any] = {
         "event_id": event.get("id"),
         "home_team": event.get("home_team"),
         "away_team": event.get("away_team"),
         "moneyline": {},
-        "run_line": {},
-        "totals": {},
     }
     for bookmaker in event.get("bookmakers", []):
         for market in bookmaker.get("markets", []):
@@ -104,19 +102,6 @@ def extract_market_snapshot(event: dict[str, Any]) -> dict[str, Any]:
             if key == "h2h":
                 for outcome in outcomes:
                     snapshot["moneyline"][outcome.get("name")] = outcome.get("price")
-            if key == "spreads":
-                for outcome in outcomes:
-                    snapshot["run_line"][outcome.get("name")] = {
-                        "price": outcome.get("price"),
-                        "point": outcome.get("point"),
-                    }
-            if key == "totals":
-                for outcome in outcomes:
-                    name = str(outcome.get("name", "")).lower()
-                    snapshot["totals"][name] = {
-                        "price": outcome.get("price"),
-                        "point": outcome.get("point"),
-                    }
     return snapshot
 
 

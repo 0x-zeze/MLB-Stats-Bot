@@ -38,12 +38,11 @@ function Stat({ label, value, helper }) {
 export default function GameCard({ game }) {
   const [open, setOpen] = useState(false);
   const moneyline = game.moneyline || {};
-  const totals = game.totals || {};
   const value = game.value || null;
   const predictedWinner = game.predicted_winner || (Number(moneyline.home_probability) >= Number(moneyline.away_probability) ? game.home_team : game.away_team);
   const predictedWinnerProbability = game.predicted_winner_probability || moneyline.model_probability || Math.max(Number(moneyline.away_probability) || 0, Number(moneyline.home_probability) || 0);
   const modelProbability = moneyline.model_probability || Math.max(Number(moneyline.away_probability) || 0, Number(moneyline.home_probability) || 0);
-  const edge = Math.max(Math.abs(Number(moneyline.edge) || 0), Math.abs(Number(totals.edge) || 0));
+  const edge = Math.abs(Number(moneyline.edge) || 0);
   const quality = Number(game.data_quality?.score) || 0;
   const confidenceBand = game.confidence_band || moneyline.confidence;
   const kellyStake = game.kelly_stake_percent;
@@ -77,11 +76,10 @@ export default function GameCard({ game }) {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <Stat label="Predicted Winner" value={predictedWinner || '-'} helper={`${percent(predictedWinnerProbability)} win probability`} />
           <Stat label="Confidence" value={percent(value?.modelSideProbability ?? modelProbability)} helper={`band: ${confidenceBand || '-'}`} />
-          <Stat label="Edge" value={<EdgeIndicator value={edge} />} helper={isValueBet && Number.isFinite(Number(kellyStake)) ? `¼-Kelly ${number(kellyStake, 2)}u` : 'largest edge'} />
-          <Stat label="Total" value={totals.lean || '-'} helper={`Projected ${number(totals.projected_total)} / Market ${number(totals.market_total)}`} />
+          <Stat label="Edge" value={<EdgeIndicator value={edge} />} helper={isValueBet && Number.isFinite(Number(kellyStake)) ? `¼-Kelly ${number(kellyStake, 2)}u` : 'moneyline edge'} />
         </div>
 
         <NoBetReason reason={game.no_bet_reason} />
