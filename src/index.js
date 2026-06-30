@@ -46,6 +46,8 @@ const config = loadConfig();
 const storage = new Storage();
 let postGameCheckRunning = false;
 let autoUpdateCheckRunning = false;
+let lineupAutoStartRunning = false;
+let lastLineupAutoStartAt = 0;
 const predictionCache = new Map();
 const PREDICT_CALLBACK_PREFIX = 'predict_live:';
 const LEGACY_PREDICT_CALLBACK_PREFIX = 'predict:';
@@ -152,6 +154,41 @@ async function buildAlertPayload(dateYmd, options = {}) {
     }),
     predictions
   };
+}
+
+function dateForPrediction(prediction) {
+  if (prediction?.dateYmd && isValidDateYmd(prediction.dateYmd)) return prediction.dateYmd;
+  if (prediction?.startTime) {
+    const parsed = new Date(prediction.startTime);
+    if (!Number.isNaN(parsed.getTime())) return dateInTimezone(config.timezone, parsed);
+  }
+  return dateInTimezone(config.timezone);
+}
+
+async function sendBothLineupsPregameAlert(bot, chatId, game) {
+  const dateYmd = dateForPrediction(game);
+  const gamePk = String(game?.gamePk || game?.game_id || game?.id || '');
+  if (!gamePk) return false;
+
+  const modelMemory = config.modelMemory ? storage.getMemory() : {};
+  const predictions = await getMlbPredictions(dateYmd, modelMemory);
+  await attachOddsContext(predictions);
+  await attachMarketContext(predictions);
+  await attachAgentAnalyses(predictions);
+  storage.savePredictions(dateYmd, predictions);
+
+  const prediction = predictions.find((item) => String(item.gamePk || item.game_id || item.id || '') === gamePk);
+  if (!prediction) return false;
+
+  const text = [
+    uiTitle('📋', 'Lineup Confirmed | Pre-game Prediction'),
+    uiBullet('✅', 'Kedua tim sudah announce lineup. Model re-run dengan lineup terbaru.'),
+    '',
+    formatPredictions(dateYmd, [prediction], { maxGames: 1, includeAdvanced: false })
+  ].join('\n');
+
+  await bot.sendMessage(chatId, text);
+  return true;
 }
 
 async function attachOddsContext(predictions) {
@@ -1868,6 +1905,40 @@ async function processPendingPostGames(bot) {
   }
 }
 
+function lineupAutoStartIntervalMs() {
+  const configured = Number(process.env.LINEUP_AUTO_START_INTERVAL_MIN);
+  if (Number.isFinite(configured) && configured > 0) return configured * 60 * 1000;
+  return 30 * 60 * 1000;
+}
+
+async function processLineupAutoStart(bot) {
+  if (lineupAutoStartRunning) return;
+  if (!lineupMonitorSettings().enabled) return;
+  const chatIds = targetChatIds();
+  if (chatIds.length === 0) return;
+
+  const nowMs = Date.now();
+  if (nowMs - lastLineupAutoStartAt < lineupAutoStartIntervalMs()) return;
+
+  lineupAutoStartRunning = true;
+  lastLineupAutoStartAt = nowMs;
+  try {
+    const today = dateInTimezone(config.timezone);
+    const modelMemory = config.modelMemory ? storage.getMemory() : {};
+    const predictions = await getMlbPredictions(today, modelMemory);
+    if (!predictions.length) return;
+
+    for (const chatId of chatIds) {
+      startLineupMonitor(predictions, chatId);
+    }
+    console.log(`Lineup auto-monitor armed for ${chatIds.length} chat(s), ${predictions.length} game(s).`);
+  } catch (error) {
+    console.error('Lineup auto-monitor start failed:', error.message);
+  } finally {
+    lineupAutoStartRunning = false;
+  }
+}
+
 async function processAutoUpdates(bot) {
   if (autoUpdateCheckRunning) return;
 
@@ -2106,10 +2177,16 @@ function startScheduler(bot) {
   processAutoUpdates(bot).catch((error) => {
     console.error('Auto-update check error:', error.message);
   });
+  processLineupAutoStart(bot).catch((error) => {
+    console.error('Lineup auto-monitor error:', error.message);
+  });
 
   setInterval(() => {
     processAutoUpdates(bot).catch((error) => {
       console.error('Auto-update check error:', error.message);
+    });
+    processLineupAutoStart(bot).catch((error) => {
+      console.error('Lineup auto-monitor error:', error.message);
     });
     processWeeklyRecap(bot).catch((error) => {
       console.error('Weekly recap error:', error.message);
@@ -2164,7 +2241,12 @@ async function main() {
     console.warn(`setMyCommands gagal/diabaikan: ${error.message}`);
   });
   configureLineMonitor({ bot, storage, config });
-  configureLineupMonitor({ bot, storage, config });
+  configureLineupMonitor({
+    bot,
+    storage,
+    config,
+    onBothLineupsConfirmed: ({ chatId, game }) => sendBothLineupsPregameAlert(bot, chatId, game)
+  });
   startScheduler(bot);
 
   if (config.telegramWebhook.enabled) {

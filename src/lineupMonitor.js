@@ -10,7 +10,8 @@ const lineupCache = new Map();
 const state = {
   bot: null,
   storage: null,
-  config: {}
+  config: {},
+  onBothLineupsConfirmed: null
 };
 
 function intervalMinutes() {
@@ -29,9 +30,24 @@ function lineupMonitorEnabled() {
   return true;
 }
 
+// Feature flag: send a full per-game pre-game alert (one message per game)
+// the moment BOTH teams have confirmed their lineups, instead of (or in
+// addition to) the legacy side-by-side "just confirmed" notifications.
+// Default ON — the user requested this as the new pre-game flow so they
+// don't need to run /today before first pitch.
+function pregameAlertsEnabled() {
+  const envValue = process.env.LINEUP_PREGAME_ALERTS;
+  if (envValue === undefined || envValue === '') return true;
+  return ['1', 'true', 'yes', 'on'].includes(String(envValue).toLowerCase());
+}
+
 function chatLineupAlertsEnabled(chatId) {
   if (!lineupMonitorEnabled()) return false;
   if (!state.storage || chatId === undefined || chatId === null) return true;
+  // Honor /lineups off (stored in app_state meta) first; the legacy subscriber
+  // payload path is kept as a fallback for older test fixtures.
+  const meta = state.storage.getMeta?.(`lineupAlerts:${chatId}`, '1');
+  if (meta === '0') return false;
   const subscriber = state.storage.getSubscriber?.(chatId);
   return subscriber?.lineupAlerts?.enabled !== false;
 }
@@ -205,9 +221,35 @@ async function pollLineupMonitor(key) {
       });
     }
 
-    if (awayJustConfirmed || homeJustConfirmed) {
-      if (!state.bot || !chatLineupAlertsEnabled(monitor.chatId)) continue;
+    if (!state.bot || !chatLineupAlertsEnabled(monitor.chatId)) continue;
 
+    // New default: when both teams are confirmed, send ONE per-game pre-game
+    // alert with the full prediction (team direction + confidence + odds).
+    // This does NOT depend on the shared lineup cache transition; durable
+    // per-chat dedupe decides if this chat/game still needs the alert.
+    const bothConfirmed = awayLineup.confirmed && homeLineup.confirmed;
+    if (bothConfirmed && pregameAlertsEnabled() && typeof state.onBothLineupsConfirmed === 'function') {
+      const reserved = state.storage?.reserveLineupAlert?.(monitor.chatId, gamePk);
+      if (reserved) {
+        try {
+          await state.onBothLineupsConfirmed({
+            chatId: monitor.chatId,
+            game,
+            awayLineup,
+            homeLineup,
+            gamePk
+          });
+          console.log(`Pre-game both-lineups alert sent for game ${gamePk} to ${monitor.chatId}.`);
+        } catch (error) {
+          console.error(`Pre-game alert failed for game ${gamePk}:`, error.message);
+        }
+        continue;
+      }
+    }
+
+    // Legacy side-confirmed notification only when pre-game alerts are
+    // explicitly disabled. Default behavior waits until BOTH teams confirm.
+    if ((awayJustConfirmed || homeJustConfirmed) && !pregameAlertsEnabled()) {
       const alertText = formatLineupAlert(game, awayJustConfirmed ? awayLineup : null, homeJustConfirmed ? homeLineup : null);
       await state.bot.sendMessage(monitor.chatId, alertText).catch((error) => {
         console.error(`Lineup alert gagal ke ${monitor.chatId}:`, error.message);
@@ -224,10 +266,13 @@ function stopMonitor(key) {
   activeMonitors.delete(key);
 }
 
-export function configureLineupMonitor({ bot, storage, config } = {}) {
+export function configureLineupMonitor({ bot, storage, config, onBothLineupsConfirmed } = {}) {
   state.bot = bot || state.bot;
   state.storage = storage || state.storage;
   state.config = config || state.config || {};
+  if (typeof onBothLineupsConfirmed === 'function') {
+    state.onBothLineupsConfirmed = onBothLineupsConfirmed;
+  }
 }
 
 export function startLineupMonitor(games, chatId) {

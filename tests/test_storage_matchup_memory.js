@@ -211,6 +211,26 @@ test('line alert reservations suppress duplicate movement alerts', () => {
   }
 });
 
+test('lineup alert reservations suppress duplicate both-confirmed alerts', () => {
+  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  mkdirSync(tempDir, { recursive: true });
+  const statePath = resolve(tempDir, `lineup-alert-state-${Date.now()}.json`);
+  const storage = new Storage(statePath);
+
+  try {
+    assert.equal(storage.reserveLineupAlert('chat', 'game-1', '2026-06-30T10:00:00.000Z'), true);
+    assert.equal(storage.reserveLineupAlert('chat', 'game-1', '2026-06-30T10:01:00.000Z'), false);
+    assert.equal(storage.reserveLineupAlert('chat', 'game-2', '2026-06-30T10:02:00.000Z'), true);
+    assert.equal(storage.reserveLineupAlert('other-chat', 'game-1', '2026-06-30T10:03:00.000Z'), true);
+  } finally {
+    storage.close();
+    rmSync(statePath, { force: true });
+    rmSync(storage.dbPath, { force: true });
+    rmSync(`${storage.dbPath}-wal`, { force: true });
+    rmSync(`${storage.dbPath}-shm`, { force: true });
+  }
+});
+
 test('line movement alert preference persists per chat', () => {
   const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
   mkdirSync(tempDir, { recursive: true });

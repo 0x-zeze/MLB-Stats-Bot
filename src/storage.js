@@ -1259,6 +1259,23 @@ export class Storage {
     return result.changes === 1;
   }
 
+  // Durable dedupe for lineup-confirmed pre-game alerts. Reuses the line_alerts
+  // table since the contract is identical: at-most-once delivery per
+  // (chatId, gamePk) pair, with TTL cleanup.
+  reserveLineupAlert(chatId, gamePk, timestamp = new Date().toISOString(), ttlHours = 24) {
+    const chat = String(chatId || '');
+    const game = String(gamePk || '');
+    if (!chat || !game) return false;
+    const key = `lineup-both:${chat}:${game}`;
+    return this.reserveLineAlert(
+      key,
+      { gamePk: game, market: 'lineup_both_confirmed' },
+      chat,
+      timestamp,
+      ttlHours
+    );
+  }
+
   listPendingPredictionDates() {
     return this.db
       .prepare(

@@ -2680,6 +2680,19 @@ function lineupWinEdge(homeLineup, awayLineup, homeInjuries, awayInjuries) {
   return clamp(homeQuality - awayQuality + (homeAvailability - awayAvailability) * 0.45, -0.18, 0.18);
 }
 
+// Both teams have publicly posted full nine-hitter lineups. Confirmed lineups
+// remove a real source of uncertainty (replacement-level fill-ins) so the
+// model's existing matchup edge should count slightly more — but only when
+// directional info is already there. We expose this as a small multiplier,
+// never as a free bump to either side's win probability.
+export function bothLineupsConfirmed(lineups) {
+  const away = lineups?.away;
+  const home = lineups?.home;
+  return Boolean(
+    away?.confirmed && home?.confirmed && (away?.count || 0) >= 9 && (home?.count || 0) >= 9
+  );
+}
+
 function bullpenAvailabilityEdge(homeBullpen, awayBullpen) {
   const homeFatigue = toNumber(homeBullpen?.fatigueScore, 0);
   const awayFatigue = toNumber(awayBullpen?.fatigueScore, 0);
@@ -2893,7 +2906,7 @@ function predictGame(
     offenseComponent +
     preventionComponent +
     starterComponent +
-    lineupEdge * 0.85 +
+    lineupEdge * (bothLineupsConfirmed({ away: awayLineup, home: homeLineup }) ? 0.95 : 0.85) +
     bullpenComponent +
     fatigueEdge * 0.7;
   // Record signal uses ONLY the Log5 blend. winPctEdge and pythagoreanEdge were
@@ -2954,7 +2967,7 @@ function predictGame(
     offenseEdge: offenseComponent,
     preventionEdge: preventionComponent,
     starterEdge: starterComponent,
-    lineupEdge: lineupEdge * 0.85,
+    lineupEdge: lineupEdge * (bothLineupsConfirmed({ away: awayLineup, home: homeLineup }) ? 0.95 : 0.85),
     bullpenEdge: bullpenComponent,
     fatigueEdge: fatigueEdge * 0.7,
     winPctEdge,
