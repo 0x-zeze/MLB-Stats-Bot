@@ -124,9 +124,72 @@
       "status": "active",
       "target": "probability:65-70",
       "type": "confidence_cap"
+    },
+    {
+      "backtest_status": "audit_repeated_pattern_gate",
+      "candidate_id": "audit-safe-moneyline-confidence-cap-record-bias",
+      "date_created": "2026-06-30T01:37:02.257589+00:00",
+      "evidence": {
+        "count": 27,
+        "latest_summary": "The moneyline pick leaned too much on record, form, H2H, or previous-series context instead of game-specific matchup signals.",
+        "loss_type": "record_bias",
+        "markets": [
+          "moneyline"
+        ],
+        "primary_factor": "record_context",
+        "severity_score": 54
+      },
+      "market": "moneyline",
+      "parameters": {
+        "max_matchup_edge": 0.18,
+        "record_context_multiplier": 1.25
+      },
+      "production_update_allowed": true,
+      "promotion_status": "approved_conservative_guardrail",
+      "reason": "Audit found record_bias 27 times.",
+      "rollback_supported": true,
+      "rule": "Cap to LEAN ONLY/NO BET when record, H2H, or recent form dominates weak game-specific matchup edge.",
+      "rule_key": "audit:moneyline:confidence_cap:record_bias",
+      "rule_version": "rules-v1.230",
+      "source": "evolution_audit",
+      "status": "active",
+      "target": "moneyline",
+      "type": "confidence_cap"
+    },
+    {
+      "backtest_status": "audit_calibration_gate",
+      "candidate_id": "audit-safe-moneyline-confidence-cap-probability-65-70",
+      "date_created": "2026-06-30T01:37:02.257589+00:00",
+      "evidence": {
+        "avg_predicted_probability": 66.6,
+        "bucket": "probability:65-70",
+        "calibration_error": -16.3,
+        "losses": 25,
+        "observed_win_rate": 51.0,
+        "sample_size": 51,
+        "verdict": "overconfident",
+        "weighted_observed_win_rate": 50.3,
+        "wins": 26
+      },
+      "market": "moneyline",
+      "parameters": {
+        "cap_one_level": true,
+        "probability_bucket": "probability:65-70"
+      },
+      "production_update_allowed": true,
+      "promotion_status": "approved_conservative_guardrail",
+      "reason": "Observed win rate 51.0% vs predicted 66.6%.",
+      "rollback_supported": true,
+      "rule": "Cap confidence one level lower for probability:65-70 until calibration improves.",
+      "rule_key": "audit:moneyline:confidence_cap:probability-65-70",
+      "rule_version": "rules-v1.230",
+      "source": "evolution_audit",
+      "status": "active",
+      "target": "probability:65-70",
+      "type": "confidence_cap"
     }
   ],
-  "active_rule_version": "rules-v1.229",
+  "active_rule_version": "rules-v1.230",
   "approved": [
     {
       "candidate": {
@@ -11188,6 +11251,91 @@
         "rule_version": "rules-v1.228",
         "sample_size": 920,
         "status": "released"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "audit_repeated_pattern_gate",
+        "candidate_id": "audit-safe-moneyline-confidence-cap-record-bias",
+        "date_created": "2026-06-30T01:37:02.257589+00:00",
+        "evidence": {
+          "count": 27,
+          "latest_summary": "The moneyline pick leaned too much on record, form, H2H, or previous-series context instead of game-specific matchup signals.",
+          "loss_type": "record_bias",
+          "markets": [
+            "moneyline"
+          ],
+          "primary_factor": "record_context",
+          "severity_score": 54
+        },
+        "market": "moneyline",
+        "parameters": {
+          "max_matchup_edge": 0.18,
+          "record_context_multiplier": 1.25
+        },
+        "production_update_allowed": true,
+        "promotion_status": "approved_conservative_guardrail",
+        "reason": "Audit found record_bias 27 times.",
+        "rollback_supported": true,
+        "rule": "Cap to LEAN ONLY/NO BET when record, H2H, or recent form dominates weak game-specific matchup edge.",
+        "rule_key": "audit:moneyline:confidence_cap:record_bias",
+        "rule_version": "rules-v1.230",
+        "source": "evolution_audit",
+        "status": "active",
+        "target": "moneyline",
+        "type": "confidence_cap"
+      },
+      "date": "2026-06-30T01:37:02.376432+00:00",
+      "decision": {
+        "candidate_id": "audit-safe-moneyline-confidence-cap-record-bias",
+        "reason": "Conservative audit guardrail only reduces risk; it does not increase confidence.",
+        "rule_version": "rules-v1.230",
+        "sample_size": 968,
+        "status": "approved"
+      },
+      "rollback_supported": true
+    },
+    {
+      "candidate": {
+        "backtest_status": "audit_calibration_gate",
+        "candidate_id": "audit-safe-moneyline-confidence-cap-probability-65-70",
+        "date_created": "2026-06-30T01:37:02.257589+00:00",
+        "evidence": {
+          "avg_predicted_probability": 66.6,
+          "bucket": "probability:65-70",
+          "calibration_error": -16.3,
+          "losses": 25,
+          "observed_win_rate": 51.0,
+          "sample_size": 51,
+          "verdict": "overconfident",
+          "weighted_observed_win_rate": 50.3,
+          "wins": 26
+        },
+        "market": "moneyline",
+        "parameters": {
+          "cap_one_level": true,
+          "probability_bucket": "probability:65-70"
+        },
+        "production_update_allowed": true,
+        "promotion_status": "approved_conservative_guardrail",
+        "reason": "Observed win rate 51.0% vs predicted 66.6%.",
+        "rollback_supported": true,
+        "rule": "Cap confidence one level lower for probability:65-70 until calibration improves.",
+        "rule_key": "audit:moneyline:confidence_cap:probability-65-70",
+        "rule_version": "rules-v1.230",
+        "source": "evolution_audit",
+        "status": "active",
+        "target": "probability:65-70",
+        "type": "confidence_cap"
+      },
+      "date": "2026-06-30T01:37:02.398323+00:00",
+      "decision": {
+        "candidate_id": "audit-safe-moneyline-confidence-cap-probability-65-70",
+        "reason": "Conservative audit guardrail only reduces risk; it does not increase confidence.",
+        "rule_version": "rules-v1.230",
+        "sample_size": 968,
+        "status": "approved"
       },
       "rollback_supported": true
     }
