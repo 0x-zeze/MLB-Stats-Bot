@@ -787,12 +787,12 @@ function bettingSafetyLines(item, pick) {
   const valueText =
     decision.status === 'VALUE'
       ? `${decision.teamName} ${formatMoneylineOdds(decision.odds)} | edge +${toNumber(decision.edge, 0).toFixed(1)}%`
-      : 'none';
+      : `model condong ${model.team?.name || pick?.name || 'TBD'}`;
   return [
     uiKV('🧭', 'Prediction', pick?.name || 'unavailable'),
     uiKV('🏁', 'YRFI/NRFI', firstInningPickText(item?.firstInning)),
     uiKV('💰', 'Value', valueText),
-    uiKV('🎚️', 'Confidence', confidence),
+    uiKV('🎯', 'Prediksi', `${model.team?.name || 'TBD'} ${confidence}`),
     uiKV('🧪', 'Data Quality', dataQualityText(item)),
     uiKV('⚠️', 'Risk Warning', 'Analysis only; probabilities are estimates, not guarantees')
   ];
@@ -854,12 +854,14 @@ function playerImpactLines(item) {
 }
 
 function compactPredictionBlock(item) {
+  const model = modelPickSide(item);
   return [
     uiKV('🏟️', 'Matchup', `${item.away.name} @ ${item.home.name}`),
     uiKV('🕒', 'Waktu', item.start),
     uiKV('📍', 'Stadium', item.venue),
     uiKV('📊', 'Probabilitas', `${winProbText(item.away)} | ${winProbText(item.home)}`),
-    uiKV('✅', 'Pick Model', item.winner?.name || (item.home.winProbability >= item.away.winProbability ? item.home.name : item.away.name)),
+    uiKV('✅', 'Pick Model', model.team?.name || item.winner?.name || 'TBD'),
+    uiKV('🎯', 'Prediksi', `${model.team?.name || 'TBD'} ${confidenceText(model.percent)}`),
     ...lateUpdateLines(item, { compact: true })
   ].join('\n');
 }

@@ -755,7 +755,7 @@ function topPickWarnings(prediction) {
 }
 
 function pickTier(candidate) {
-  if (candidate.status === 'NO BET' || candidate.warnings.length >= 2) return '⛔ No Bet Risk';
+  if (candidate.status === 'NO BET' || candidate.warnings.length >= 2) return '⚠️ Edge Tipis';
   // Calibrated moneyline probabilities compress (the trained map tops out near
   // 60%), so tiering keys off conviction (raw probability + confidence) and,
   // when odds exist, the calibrated market edge — the real value signal.
@@ -767,8 +767,8 @@ function pickTier(candidate) {
     return '✅ Strong Pick';
   }
   const leanEdge = hasOdds ? edge >= 1 : conviction >= 56;
-  if (leanEdge || confidenceRank(candidate.confidence) >= 2) return '🟡 Lean Only';
-  return '⚪ Thin Lean';
+  if (leanEdge || confidenceRank(candidate.confidence) >= 2) return '🔵 Model Lean';
+  return '⚪ Lean Tipis';
 }
 
 function shortReason(candidate) {
@@ -843,7 +843,7 @@ function isQualityPick(candidate) {
 // Relaxed filter for fallback: excludes only true coinflips (raw conviction
 // strictly below 50, meaning the pick side is genuinely the underdog). Status
 // is deliberately NOT checked — most picks on thin slates are NO BET due to
-// safety guards, but the tier label already shows "No Bet Risk" so the user
+// safety guards, but the tier label already shows "Edge Tipis" so the user
 // sees the risk. This keeps /picks always showing up to 5 ranked suggestions
 // instead of 1 or 0.
 function isAcceptablePick(candidate) {
@@ -895,14 +895,14 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5, memor
   const lines = ['', `╔══ ${uiTitle('🏆', 'Top Pick Model | Hari Ini')} ══╗`, ''];
 
   if (allNoBet) {
-    lines.push('⚠️  Semua pick hari ini NO BET — edge terlalu tipis atau lineup belum jelas.');
-    lines.push('     Ini ranking model murni, bukan rekomendasi bet.');
+    lines.push('⚠️  Semua pick hari ini edge tipis — lineup belum jelas atau odds belum tersedia.');
+    lines.push('     Ini ranking model murni berdasarkan analisa matchup.');
     lines.push('');
   } else if (noBetShown > 0) {
-    lines.push(`⚠️  ${qualityCount} pick berkualitas; ${noBetShown} sisanya NO BET (ranking model, bukan rekomendasi bet).`);
+    lines.push(`⚠️  ${qualityCount} pick berkualitas; ${noBetShown} sisanya edge tipis (ranking model, bukan rekomendasi bet).`);
     lines.push('');
   } else if (thinSlate && candidates.length > qualityCount) {
-    lines.push(`⚠️  Slate tipis: ${qualityCount} pick berkualitas, sisanya thin lean / lean only.`);
+    lines.push(`⚠️  Slate tipis: ${qualityCount} pick berkualitas, sisanya lean tipis.`);
     lines.push('');
   }
 
