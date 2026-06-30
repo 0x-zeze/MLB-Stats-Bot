@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .data_loader import PitcherStats
-from .features import normalize_stat, pitcher_score
+from .features import normalize_stat, pitcher_score, pitcher_score_with_xfip
 from .utils import clamp, safe_float
 
 
@@ -134,7 +134,12 @@ def enhanced_pitcher_score(context: PitcherMatchupContext) -> float:
     Builds on the base pitcher_score and adds matchup-specific adjustments.
     """
     pitcher = context.pitcher
-    base = pitcher_score(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio)
+    xfip = safe_float(getattr(pitcher, "xfip", None), None)
+    base = (
+        pitcher_score_with_xfip(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio, xfip)
+        if xfip is not None
+        else pitcher_score(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio)
+    )
 
     platoon_adj = platoon_adjustment(pitcher, context.opponent_lineup_handedness)
 

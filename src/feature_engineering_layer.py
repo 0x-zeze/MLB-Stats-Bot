@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from .batter_vs_pitcher import aggregate_bvp_for_lineup, bvp_adjustment
-from .bullpen import bullpen_fatigue_adjustment
+from .bullpen import bullpen_fatigue_adjustment, bullpen_fatigue_score
 from .features import (
     bullpen_score,
     detect_opener_situation,
@@ -19,8 +19,10 @@ from .features import (
     log5_probability,
     offense_score,
     pitcher_score,
+    pitcher_score_with_xfip,
     pythagorean_win_pct,
     recent_form_score,
+    rolling_pythagorean_win_pct,
 )
 from .lineup import lineup_adjustment
 from .lineup_depth import LineupDepthContext, enhanced_lineup_impact
@@ -45,11 +47,11 @@ SIGNAL_PRIORITY = {
         "bullpen_usage",
         "park_factor",
         "market_odds",
+        "platoon_splits",
     ],
     "tier_2": [
         "weather",
         "confirmed_lineup",
-        "platoon_splits",
         "recent_form",
     ],
     "tier_3": [
@@ -65,7 +67,33 @@ SIGNAL_PRIORITY = {
 
 
 def _team_strength(team) -> float:
-    pyth = pythagorean_win_pct(team.runs_scored, team.runs_allowed)
+    # Use rolling 15-game Pythagorean when recent data available.
+    try:
+        recent_rs = safe_float(
+            getattr(team, "runs_scored_last_15", None)
+            if getattr(team, "runs_scored_last_15", None) is not None
+            else getattr(team, "recent_runs_scored", None),
+            None,
+        )
+        recent_ra = safe_float(
+            getattr(team, "runs_allowed_last_15", None)
+            if getattr(team, "runs_allowed_last_15", None) is not None
+            else getattr(team, "recent_runs_allowed", None),
+            None,
+        )
+        if (recent_rs is None or recent_ra is None) and getattr(team, "runs_last_5", 0) and getattr(team, "runs_allowed_last_5", 0):
+            recent_rs = safe_float(getattr(team, "runs_last_5", 0), 0.0) * 3.0
+            recent_ra = safe_float(getattr(team, "runs_allowed_last_5", 0), 0.0) * 3.0
+        if recent_rs is not None and recent_ra is not None:
+            pyth = rolling_pythagorean_win_pct(
+                recent_rs, recent_ra,
+                team.runs_scored, team.runs_allowed,
+                rolling_weight=0.35,
+            )
+        else:
+            pyth = pythagorean_win_pct(team.runs_scored, team.runs_allowed)
+    except Exception:
+        pyth = pythagorean_win_pct(team.runs_scored, team.runs_allowed)
     return clamp(pyth * 0.65 + team.win_pct * 0.35, 0.05, 0.95)
 
 
@@ -94,7 +122,17 @@ def _pitcher_feature(
         return 0.0
     if opener_detection and opener_detection.get("is_opener"):
         return 0.0
-    score = pitcher_score(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio)
+    # Use xFIP-enhanced score when available
+    try:
+        xfip = safe_float(getattr(pitcher, "xfip", None), None)
+        if xfip is not None:
+            score = pitcher_score_with_xfip(
+                pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio, xfip
+            )
+        else:
+            score = pitcher_score(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio)
+    except Exception:
+        score = pitcher_score(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio)
     if rest_days is not None:
         score *= _pitcher_rest_multiplier(rest_days)
     return clamp(score, -1.0, 1.0)
@@ -297,6 +335,34 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
     home_lineup_depth = _build_lineup_depth(home_lineup_data)
     away_lineup_depth = _build_lineup_depth(away_lineup_data)
 
+    # Platoon advantage — promoted to Tier 1
+    try:
+        home_platoon = safe_float(
+            getattr(home_lineup_data, "platoon_advantage", None)
+            if home_lineup_data and not isinstance(home_lineup_data, dict)
+            else (home_lineup_data or {}).get("platoon_advantage"),
+            0.0,
+        )
+        away_platoon = safe_float(
+            getattr(away_lineup_data, "platoon_advantage", None)
+            if away_lineup_data and not isinstance(away_lineup_data, dict)
+            else (away_lineup_data or {}).get("platoon_advantage"),
+            0.0,
+        )
+        platoon_diff = clamp(home_platoon - away_platoon, -1.0, 1.0)
+    except Exception:
+        platoon_diff = 0.0
+
+    try:
+        home_bullpen_fatigue_score = bullpen_fatigue_score(collected.get("home_bullpen"))
+        away_bullpen_fatigue_score = bullpen_fatigue_score(collected.get("away_bullpen"))
+        # Higher fatigue hurts that team's bullpen; positive diff favors home.
+        bullpen_fatigue_diff = clamp((away_bullpen_fatigue_score - home_bullpen_fatigue_score) / 100.0, -0.45, 0.45)
+    except Exception:
+        home_bullpen_fatigue_score = 0
+        away_bullpen_fatigue_score = 0
+        bullpen_fatigue_diff = 0.0
+
     components = {
         "team_strength": (log5_home - 0.5) * 5.0,
         "starting_pitcher": _enhanced_pitcher_feature(
@@ -312,9 +378,10 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
             opener_situation["away"],
         ),
         "offense": _offense_feature(home_team, home_fatigue) - _offense_feature(away_team, away_fatigue),
-        "bullpen": _bullpen_feature(home_team) - _bullpen_feature(away_team),
+        "bullpen": _bullpen_feature(home_team) - _bullpen_feature(away_team) + bullpen_fatigue_diff,
         "recent_form": _recent_feature(home_team) - _recent_feature(away_team),
         "home_field": home_field_adjustment(True),
+        "platoon_advantage": platoon_diff,
     }
 
     return {
@@ -377,6 +444,51 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
             "home": home_lineup_depth,
             "away": away_lineup_depth,
         },
+        "bullpen_fatigue_score": {
+            "home": home_bullpen_fatigue_score,
+            "away": away_bullpen_fatigue_score,
+            "diff": bullpen_fatigue_diff,
+        },
+    }
+
+
+def _lineup_leadoff_obp(lineup_data: Any) -> float:
+    try:
+        value = _attr(lineup_data, "leadoff_obp", "leadoffObp", "leadoff_on_base_pct")
+        if value is not None:
+            return safe_float(value, 0.330)
+        players = _attr(lineup_data, "players", "batters")
+        if isinstance(players, list) and players:
+            first = players[0]
+            if isinstance(first, dict):
+                return safe_float(first.get("obp") or first.get("onBasePercentage"), 0.330)
+    except Exception:
+        pass
+    return 0.330
+
+
+def build_first_inning_features(collected: dict[str, Any]) -> dict[str, Any]:
+    """Create clean YRFI/NRFI model features from raw game data."""
+    home_team = collected["home_team"]
+    away_team = collected["away_team"]
+    home_lineup = collected.get("home_lineup")
+    away_lineup = collected.get("away_lineup")
+
+    try:
+        away_scoring = safe_float(getattr(away_team, "first_inning_scoring_rate", None), 0.33)
+        home_scoring = safe_float(getattr(home_team, "first_inning_scoring_rate", None), 0.33)
+        away_allowed = safe_float(getattr(away_team, "first_inning_allowed_rate", None), 0.33)
+        home_allowed = safe_float(getattr(home_team, "first_inning_allowed_rate", None), 0.33)
+    except Exception:
+        away_scoring = home_scoring = away_allowed = home_allowed = 0.33
+
+    return {
+        "away_first_inning_scoring_rate": away_scoring,
+        "home_first_inning_scoring_rate": home_scoring,
+        "away_first_inning_allowed_rate": away_allowed,
+        "home_first_inning_allowed_rate": home_allowed,
+        "away_leadoff_obp": _lineup_leadoff_obp(away_lineup),
+        "home_leadoff_obp": _lineup_leadoff_obp(home_lineup),
     }
 
 
@@ -425,5 +537,6 @@ def build_game_features(collected: dict[str, Any]) -> dict[str, Any]:
     """Build all deterministic features for one game."""
     return {
         "moneyline": build_moneyline_features(collected),
+        "first_inning": build_first_inning_features(collected),
         "signal_priority": SIGNAL_PRIORITY,
     }

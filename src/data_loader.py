@@ -43,6 +43,8 @@ class TeamStats:
     run_diff_last_10: float = 0.0
     runs_last_5: float = 0.0
     runs_allowed_last_5: float = 0.0
+    runs_scored_last_15: float | None = None
+    runs_allowed_last_15: float | None = None
     ops_last_7_days: float | None = None
     xwoba_last_14: float | None = None
     xslg_last_14: float | None = None
@@ -91,6 +93,8 @@ class TeamStats:
             run_diff_last_10=safe_float(row.get("run_diff_last_10")),
             runs_last_5=safe_float(row.get("runs_last_5")),
             runs_allowed_last_5=safe_float(row.get("runs_allowed_last_5")),
+            runs_scored_last_15=_opt_float("runs_scored_last_15"),
+            runs_allowed_last_15=_opt_float("runs_allowed_last_15"),
             ops_last_7_days=_opt_float("ops_last_7_days"),
             xwoba_last_14=_opt_float("xwoba_last_14"),
             xslg_last_14=_opt_float("xslg_last_14"),

@@ -78,6 +78,36 @@ def pythagorean_win_pct(
     return clamp(rs_power / denominator, 0.0, 1.0)
 
 
+def rolling_pythagorean_win_pct(
+    recent_runs_scored: float | int | str | None,
+    recent_runs_allowed: float | int | str | None,
+    season_runs_scored: float | int | str | None = None,
+    season_runs_allowed: float | int | str | None = None,
+    rolling_weight: float = 0.35,
+    exponent: float = 1.83,
+) -> float:
+    """Blend rolling 15-game Pythagorean with season-long Pythagorean.
+
+    If recent (rolling) data is available, blend it with season aggregate.
+    Rolling window captures hot/cold streaks; season provides stability.
+    Default 35% rolling / 65% season — additive to existing pythagorean_win_pct.
+    """
+    try:
+        recent_rs = safe_float(recent_runs_scored, None)
+        recent_ra = safe_float(recent_runs_allowed, None)
+        if recent_rs is not None and recent_ra is not None and (recent_rs + recent_ra) > 0:
+            rolling_pyth = pythagorean_win_pct(recent_rs, recent_ra, exponent)
+        else:
+            # No rolling data — fall back to season only
+            return pythagorean_win_pct(season_runs_scored, season_runs_allowed, exponent)
+
+        season_pyth = pythagorean_win_pct(season_runs_scored, season_runs_allowed, exponent)
+        blended = rolling_pyth * rolling_weight + season_pyth * (1.0 - rolling_weight)
+        return clamp(blended, 0.0, 1.0)
+    except Exception:
+        return pythagorean_win_pct(season_runs_scored, season_runs_allowed, exponent)
+
+
 def log5_probability(p_a: float, p_b: float) -> float:
     """Calculate Bill James Log5 probability for Team A beating Team B."""
     a = clamp(safe_float(p_a, 0.5), 0.001, 0.999)
@@ -477,6 +507,30 @@ def pitcher_score(
     if k_bb_ratio is not None:
         scores.append(normalize_stat(k_bb_ratio, 2.70, higher_is_better=True))
     return clamp(_average_available(scores), -1.0, 1.0)
+
+
+def pitcher_score_with_xfip(
+    era: float | int | str | None,
+    whip: float | int | str | None,
+    fip: float | int | str | None = None,
+    k_bb_ratio: float | int | str | None = None,
+    xfip: float | int | str | None = None,
+) -> float:
+    """Enhanced pitcher score that includes xFIP when available.
+
+    xFIP normalizes HR/FB rate — better predictor of future ERA than FIP.
+    Additive: if xFIP missing, falls back to standard pitcher_score.
+    """
+    try:
+        base = pitcher_score(era, whip, fip, k_bb_ratio)
+        xfip_val = safe_float(xfip, None)
+        if xfip_val is not None:
+            xfip_signal = normalize_stat(xfip_val, 4.00, higher_is_better=False)
+            # Blend: 80% base + 20% xFIP signal
+            return clamp(base * 0.80 + xfip_signal * 0.20, -1.0, 1.0)
+        return base
+    except Exception:
+        return pitcher_score(era, whip, fip, k_bb_ratio)
 
 
 def offense_score(

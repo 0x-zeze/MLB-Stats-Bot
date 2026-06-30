@@ -45,6 +45,42 @@ def weather_adjustment(weather: WeatherContext | None) -> float:
     return (temperature_adj + wind_adj + humidity_adj + pressure_adj) * roof_multiplier
 
 
+def yrfi_weather_adjustment(weather: WeatherContext | None) -> float:
+    """Return YRFI probability adjustment from weather conditions.
+
+    First-inning specific: temperature and wind out boost YRFI,
+    cold/wind in suppress it. Dome/closed roof neutralizes.
+    Smaller magnitude than total-runs adjustment (~half scale).
+    """
+    if weather is None:
+        return 0.0
+
+    try:
+        roof = weather.roof.strip().lower()
+        if roof in {"closed", "dome"}:
+            return 0.0  # Weather irrelevant under roof
+
+        adj = 0.0
+
+        # Temperature: hot = more YRFI, cold = less
+        # Scale: ±0.03 max for first inning
+        adj += clamp((weather.temperature - 70.0) * 0.006, -0.03, 0.03)
+
+        # Wind out boosts YRFI, wind in suppresses
+        direction = weather.wind_direction.strip().lower()
+        if "out" in direction:
+            adj += clamp(weather.wind_speed * 0.004, 0.0, 0.03)
+        elif "in" in direction:
+            adj -= clamp(weather.wind_speed * 0.004, 0.0, 0.03)
+
+        # High humidity slightly increases fly ball carry
+        adj += clamp((weather.humidity - 50.0) * 0.001, -0.01, 0.01)
+
+        return clamp(adj, -0.05, 0.05)
+    except Exception:
+        return 0.0
+
+
 def _key(home_team: str, away_team: str) -> str:
     return f"{clean_name(home_team)}|{clean_name(away_team)}"
 

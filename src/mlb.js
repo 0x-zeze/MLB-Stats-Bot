@@ -78,6 +78,26 @@ const PARK_FACTOR_BASELINES = new Map([
   [147, { runFactor: 1.01, homeRunFactor: 1.08, label: 'Yankee Stadium' }],
   [158, { runFactor: 0.99, homeRunFactor: 1.02, label: 'American Family Field' }]
 ]);
+const BALLPARK_YRFI_RATES = new Map([
+  ['Coors Field', 0.72],
+  ['Great American Ball Park', 0.65],
+  ['Globe Life Field', 0.63],
+  ['Fenway Park', 0.62],
+  ['Wrigley Field', 0.61],
+  ['Yankee Stadium', 0.60],
+  ['Chase Field', 0.60],
+  ['Minute Maid Park', 0.59],
+  ['Daikin Park', 0.59],
+  ['Citizens Bank Park', 0.59],
+  ['American Family Field', 0.58],
+  ['Oracle Park', 0.55],
+  ['Petco Park', 0.54],
+  ['Dodger Stadium', 0.54],
+  ['T-Mobile Park', 0.53],
+  ['Tropicana Field', 0.53]
+]);
+const DEFAULT_YRFI_RATE = 0.57;
+
 const DEFAULTS = {
   rpg: 4.4,
   ops: 0.72,
@@ -361,7 +381,6 @@ function lateUpdateWarnings(item, { compact = false } = {}) {
       lineups.length < 2 || lineups.some((lineup) => !lineup.confirmed || toNumber(lineup.count, 0) < 9);
     if (incompleteLineup) warnings.push('lineup belum confirmed');
     if (!item.currentOdds?.awayMoneyline || !item.currentOdds?.homeMoneyline) warnings.push('moneyline odds belum lengkap');
-    if (!item.currentOdds?.totalLine) warnings.push('market total belum tersedia');
   }
 
   return [...new Set(warnings)].slice(0, compact ? 2 : 5);
@@ -1369,6 +1388,10 @@ function extractLineupProfile(boxTeam) {
     .slice(0, 5)
     .map(lineupPlayerName)
     .filter(Boolean);
+  const leadoffStats = hitterBattingStats(orderedHitters[0]);
+  const leadoffObpValue = orderedHitters[0]
+    ? firstStatNumber(leadoffStats, ['obp', 'onBasePercentage'], Number.NaN)
+    : Number.NaN;
   const hitterScores = orderedHitters.map((hitter, index) => hitterLineupScore(hitter, index + 1));
   const knownStatCount = hitterScores.filter((score) => score.known).length;
   const weightedScore =
@@ -1380,6 +1403,7 @@ function extractLineupProfile(boxTeam) {
     confirmed: orderedHitters.length >= 9,
     count: orderedHitters.length,
     topFive,
+    leadoffObp: Number.isFinite(leadoffObpValue) ? leadoffObpValue : null,
     knownStatCount,
     qualityScore: clamp(weightedScore, -0.12, 0.12)
   };
@@ -1986,19 +2010,33 @@ function buildFirstInningProjection({
   homePitcherStats,
   awayPitcherFirstInningProfile,
   homePitcherFirstInningProfile,
-  headToHead
+  headToHead,
+  venue,
+  weather,
+  awayLineup,
+  homeLineup
 }) {
+  const awayLeadoffObp = leadoffObp(awayLineup);
+  const homeLeadoffObp = leadoffObp(homeLineup);
+  const awayLeadoffAdj = Number.isFinite(awayLeadoffObp)
+    ? clamp((awayLeadoffObp - 0.330) * 0.8, -0.04, 0.04)
+    : 0;
+  const homeLeadoffAdj = Number.isFinite(homeLeadoffObp)
+    ? clamp((homeLeadoffObp - 0.330) * 0.8, -0.04, 0.04)
+    : 0;
   const topRate = clamp(
     awayProfile.scoredBlend * 0.55 +
       homeProfile.allowedBlend * 0.45 +
-      pitcherFirstInningRisk(homePitcherStats, homePitcherFirstInningProfile),
+      pitcherFirstInningRisk(homePitcherStats, homePitcherFirstInningProfile) +
+      awayLeadoffAdj,
     0.08,
     0.62
   );
   const bottomRate = clamp(
     homeProfile.scoredBlend * 0.55 +
       awayProfile.allowedBlend * 0.45 +
-      pitcherFirstInningRisk(awayPitcherStats, awayPitcherFirstInningProfile),
+      pitcherFirstInningRisk(awayPitcherStats, awayPitcherFirstInningProfile) +
+      homeLeadoffAdj,
     0.08,
     0.62
   );
@@ -2016,12 +2054,16 @@ function buildFirstInningProjection({
   const h2hProbability = (headToHead?.firstInning?.probability || DEFAULTS.gameFirstInningRunRate * 100) / 100;
   const blendedProbability =
     h2hGames >= 3 ? modelProbability * 0.85 + h2hProbability * 0.15 : modelProbability;
+  const venueRate = venueYrfiRate(venue?.name || venue);
+  const venueAdjustment = clamp((venueRate - DEFAULTS.gameFirstInningRunRate) * 0.5, -0.08, 0.08);
+  const weatherAdjustment = yrfiWeatherAdjustment(weather);
+  const contextualProbability = clamp(blendedProbability + venueAdjustment + weatherAdjustment, 0.20, 0.80);
   // Per-game YRFI signal has historically shown ~zero correlation with outcomes
   // (the matchup features barely move the needle), so shrink hard toward the
   // league base rate. This keeps the probability honest instead of emitting
   // overconfident leans the data does not support.
   const baseRate = DEFAULTS.gameFirstInningRunRate;
-  const shrunkProbability = blendedProbability * 0.4 + baseRate * 0.6;
+  const shrunkProbability = contextualProbability * 0.4 + baseRate * 0.6;
   let probability = clamp(shrunkProbability * 100, 35, 70);
   // Calibrate at the source, mirroring moneyline/totals. The Python pipeline
   // trains a 'yrfi' isotonic map the live path never applied. Analysis of 192
@@ -2065,6 +2107,17 @@ function buildFirstInningProjection({
   if (h2hGames > 0) {
     reasons.push(`H2H first-inning run: ${headToHead.firstInning.runGames}/${h2hGames}.`);
   }
+  const contextParts = [];
+  contextParts.push(`venue YRFI ${percent(venueRate * 100)}`);
+  if (Math.abs(weatherAdjustment) >= 0.005) {
+    contextParts.push(`weather ${weatherAdjustment >= 0 ? '+' : ''}${percent(weatherAdjustment * 100)}`);
+  }
+  if (Number.isFinite(awayLeadoffObp) || Number.isFinite(homeLeadoffObp)) {
+    contextParts.push(`leadoff OBP ${Number.isFinite(awayLeadoffObp) ? safeFixed(awayLeadoffObp, 3) : '-'} | ${Number.isFinite(homeLeadoffObp) ? safeFixed(homeLeadoffObp, 3) : '-'}`);
+  }
+  if (contextParts.length) {
+    reasons.push(`YRFI context: ${contextParts.join(' | ')}.`);
+  }
   if (!yrfiActive) {
     reasons.push('YRFI advisory-only: market historically unprofitable, not graded as a bet.');
   }
@@ -2089,6 +2142,11 @@ function buildFirstInningProjection({
     homeProfileLine: firstInningProfileLine(homeProfile),
     awayPitcherFirstInningLine: pitcherFirstInningProfileLine(awayPitcherFirstInningProfile),
     homePitcherFirstInningLine: pitcherFirstInningProfileLine(homePitcherFirstInningProfile),
+    venueYrfiRate: venueRate,
+    venueAdjustment,
+    weatherAdjustment,
+    awayLeadoffObp: Number.isFinite(awayLeadoffObp) ? awayLeadoffObp : null,
+    homeLeadoffObp: Number.isFinite(homeLeadoffObp) ? homeLeadoffObp : null,
     reasons
   };
 }
@@ -2533,6 +2591,47 @@ function weatherRunAdjustment(weather) {
   return clamp((tempAdj + windAdj) * roofMultiplier, -0.55, 0.55);
 }
 
+function yrfiWeatherAdjustment(weather) {
+  if (!weather) return 0;
+  const weatherText = JSON.stringify(weather).toLowerCase();
+  if (weatherText.includes('roof closed') || weatherText.includes('closed roof') || weatherText.includes('dome')) return 0;
+  const temp = parseWeatherNumber(weather.temp || weather.temperature);
+  const windText = String(weather.wind || weather.windDirection || '').toLowerCase();
+  const windSpeed = parseWeatherNumber(windText) || 0;
+  const humidity = parseWeatherNumber(weather.humidity) ?? 50;
+  const tempAdj = temp === null ? 0 : clamp((temp - 70) * 0.006, -0.03, 0.03);
+  const windAdj = windText.includes('out')
+    ? clamp(windSpeed * 0.004, 0, 0.03)
+    : windText.includes('in')
+      ? -clamp(windSpeed * 0.004, 0, 0.03)
+      : 0;
+  const humidityAdj = clamp((humidity - 50) * 0.001, -0.01, 0.01);
+  return clamp(tempAdj + windAdj + humidityAdj, -0.05, 0.05);
+}
+
+function venueYrfiRate(venueName) {
+  return BALLPARK_YRFI_RATES.get(String(venueName || '').trim()) || DEFAULT_YRFI_RATE;
+}
+
+function leadoffObp(lineup) {
+  return toNumber(lineup?.leadoffObp, Number.NaN);
+}
+
+function firstInningSignalLine(firstInning) {
+  if (!firstInning) return '';
+  const parts = [];
+  if (Number.isFinite(Number(firstInning.venueYrfiRate))) {
+    parts.push(`park YRFI ${percent(firstInning.venueYrfiRate * 100)}`);
+  }
+  if (Number.isFinite(Number(firstInning.weatherAdjustment)) && Math.abs(Number(firstInning.weatherAdjustment)) >= 0.005) {
+    parts.push(`weather ${Number(firstInning.weatherAdjustment) >= 0 ? '+' : ''}${percent(Number(firstInning.weatherAdjustment) * 100)}`);
+  }
+  if (Number.isFinite(Number(firstInning.awayLeadoffObp)) || Number.isFinite(Number(firstInning.homeLeadoffObp))) {
+    parts.push(`leadoff OBP ${Number.isFinite(Number(firstInning.awayLeadoffObp)) ? safeFixed(firstInning.awayLeadoffObp, 3) : '-'} | ${Number.isFinite(Number(firstInning.homeLeadoffObp)) ? safeFixed(firstInning.homeLeadoffObp, 3) : '-'}`);
+  }
+  return parts.join(' | ');
+}
+
 function parkFactorContext(homeTeam) {
   const baseline = PARK_FACTOR_BASELINES.get(homeTeam?.id) || {
     runFactor: 1,
@@ -2940,7 +3039,11 @@ function predictGame(
     homePitcherStats: effectiveHomePitcherStats,
     awayPitcherFirstInningProfile,
     homePitcherFirstInningProfile,
-    headToHead
+    headToHead,
+    venue: game.venue,
+    weather: game.weather,
+    awayLineup,
+    homeLineup
   });
   const awayPitcherRecentLine = awayOpenerSituation.isOpener
     ? 'Bulk pitcher TBD'
@@ -3315,6 +3418,7 @@ export function formatPredictions(
         uiKV('🏁', 'Run in 1st', firstInningPickText(item.firstInning)),
         uiKV('📐', 'Baseline', `${item.firstInning.baselinePick} | ${percent(item.firstInning.baselineProbability)}`),
         uiKV('📊', 'Top/Bottom 1', `${percent(item.firstInning.topRate)} | ${percent(item.firstInning.bottomRate)}`),
+        firstInningSignalLine(item.firstInning) ? uiKV('🌤️', 'YRFI signals', firstInningSignalLine(item.firstInning)) : null,
         '',
         ...splitInfoLine(`${item.firstInning.awayProfileLine} | ${item.firstInning.homeProfileLine}`),
         '',

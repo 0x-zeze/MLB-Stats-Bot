@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from .utils import clamp, safe_float
+from .utils import clamp, data_path, safe_float
 
 
 # Per-half-inning scoring prior. Empirically a run scores in the 1st in ~55% of
@@ -20,8 +22,52 @@ LEAGUE_AVG_FIRST_PITCH_STRIKE_RATE = 0.60
 LEAGUE_AVG_VENUE_YRFI_RATE = 0.55
 LEAGUE_AVG_K_RATE = 0.22
 LEAGUE_AVG_GROUND_BALL_RATE = 0.44
+LEAGUE_AVG_PITCHES_FIRST_INNING = 16.0
 
 YRFI_MIN_EDGE = 0.06
+
+# Cache for SP first inning stats
+_sp_first_inning_cache: dict[str, dict[str, float]] | None = None
+
+
+def load_sp_first_inning_stats() -> dict[str, dict[str, float]]:
+    """Load pitcher-specific first-inning stats from JSON file.
+
+    Data structure: {pitcher_name: {first_inning_era, first_pitch_strike_pct, avg_pitches_first_inning}}
+    Falls back to pybaseball if installed, otherwise reads from data/sp_first_inning_stats.json.
+    """
+    global _sp_first_inning_cache
+    if _sp_first_inning_cache is not None:
+        return _sp_first_inning_cache
+
+    _sp_first_inning_cache = {}
+    json_path = Path(data_path("sp_first_inning_stats.json"))
+    if json_path.exists():
+        try:
+            raw = json.loads(json_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                for pitcher_name, stats in raw.items():
+                    if isinstance(stats, dict):
+                        _sp_first_inning_cache[str(pitcher_name).strip()] = {
+                            "first_inning_era": safe_float(stats.get("first_inning_era"), None),
+                            "first_pitch_strike_pct": safe_float(stats.get("first_pitch_strike_pct"), None),
+                            "avg_pitches_first_inning": safe_float(stats.get("avg_pitches_first_inning"), None),
+                        }
+        except Exception:
+            _sp_first_inning_cache = {}
+
+    return _sp_first_inning_cache
+
+
+def get_sp_first_inning_stats(pitcher_name: str | None) -> dict[str, float | None]:
+    """Get first-inning stats for a specific pitcher by name."""
+    if not pitcher_name:
+        return {}
+    try:
+        stats = load_sp_first_inning_stats()
+        return stats.get(pitcher_name.strip(), {})
+    except Exception:
+        return {}
 
 
 @dataclass(frozen=True)
@@ -46,6 +92,9 @@ class FirstInningContext:
     home_pitcher_k_rate: float = LEAGUE_AVG_K_RATE
     away_pitcher_ground_ball_rate: float = LEAGUE_AVG_GROUND_BALL_RATE
     home_pitcher_ground_ball_rate: float = LEAGUE_AVG_GROUND_BALL_RATE
+    away_pitcher_avg_pitches_first_inning: float = LEAGUE_AVG_PITCHES_FIRST_INNING
+    home_pitcher_avg_pitches_first_inning: float = LEAGUE_AVG_PITCHES_FIRST_INNING
+    weather_yrfi_adjustment: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -71,6 +120,7 @@ def _half_inning_run_probability(
     park_factor: float,
     pitcher_k_rate: float = LEAGUE_AVG_K_RATE,
     pitcher_ground_ball_rate: float = LEAGUE_AVG_GROUND_BALL_RATE,
+    pitcher_avg_pitches_first_inning: float = LEAGUE_AVG_PITCHES_FIRST_INNING,
 ) -> float:
     """Estimate probability of at least one run in a half-inning."""
     scoring_signal = (team_scoring_rate - LEAGUE_AVG_FIRST_INNING_SCORING_RATE) * 1.2
@@ -87,6 +137,9 @@ def _half_inning_run_probability(
     k_rate_signal = (LEAGUE_AVG_K_RATE - pitcher_k_rate) * 0.5
     gb_rate_signal = (LEAGUE_AVG_GROUND_BALL_RATE - pitcher_ground_ball_rate) * 0.3
 
+    # High pitch count in first inning = more traffic = higher scoring chance
+    pitches_signal = (pitcher_avg_pitches_first_inning - LEAGUE_AVG_PITCHES_FIRST_INNING) * 0.01
+
     raw = (
         LEAGUE_AVG_FIRST_INNING_SCORING_RATE
         + scoring_signal
@@ -98,6 +151,7 @@ def _half_inning_run_probability(
         + park_signal
         + k_rate_signal
         + gb_rate_signal
+        + pitches_signal
     )
 
     return clamp(raw, 0.08, 0.55)
@@ -115,6 +169,7 @@ def predict_first_inning(context: FirstInningContext) -> FirstInningPrediction:
         park_factor=context.park_run_factor,
         pitcher_k_rate=context.home_pitcher_k_rate,
         pitcher_ground_ball_rate=context.home_pitcher_ground_ball_rate,
+        pitcher_avg_pitches_first_inning=context.home_pitcher_avg_pitches_first_inning,
     )
 
     bottom_prob = _half_inning_run_probability(
@@ -127,6 +182,7 @@ def predict_first_inning(context: FirstInningContext) -> FirstInningPrediction:
         park_factor=context.park_run_factor,
         pitcher_k_rate=context.away_pitcher_k_rate,
         pitcher_ground_ball_rate=context.away_pitcher_ground_ball_rate,
+        pitcher_avg_pitches_first_inning=context.away_pitcher_avg_pitches_first_inning,
     )
 
     nrfi_prob = (1.0 - top_prob) * (1.0 - bottom_prob)
@@ -134,6 +190,10 @@ def predict_first_inning(context: FirstInningContext) -> FirstInningPrediction:
     venue_weight = 0.15
     model_yrfi = 1.0 - nrfi_prob
     blended_yrfi = model_yrfi * (1.0 - venue_weight) + context.venue_yrfi_rate * venue_weight
+
+    # Apply weather adjustment for first inning
+    blended_yrfi += context.weather_yrfi_adjustment
+
     blended_yrfi = clamp(blended_yrfi, 0.15, 0.75)
     blended_nrfi = 1.0 - blended_yrfi
 

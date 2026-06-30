@@ -76,6 +76,52 @@ def get_bullpen_usage(usage: dict[str, BullpenUsage], team: str) -> BullpenUsage
     return usage.get(clean_name(team))
 
 
+def bullpen_fatigue_score(bullpen: BullpenUsage | None) -> int:
+    """Return a 0-100 numeric relief fatigue score.
+
+    0 = fully rested, 100 = completely gassed.
+    Granular scoring replaces binary flags for better model discrimination.
+    """
+    if bullpen is None:
+        return 0
+
+    try:
+        score = 0.0
+
+        # Innings load last 3 days (0-25 points)
+        innings = safe_float(bullpen.bullpen_innings_last_3_days, 0.0)
+        if innings > 12.0:
+            score += 25.0
+        elif innings > 9.0:
+            score += (innings - 9.0) * (25.0 / 3.0)
+
+        # Relievers used yesterday (0-15 points)
+        relievers = safe_int(bullpen.relievers_used_yesterday, 0)
+        if relievers > 4:
+            score += min((relievers - 4) * 5.0, 15.0)
+
+        # Closer unavailable (0 or 15 points)
+        if not bullpen.closer_available:
+            score += 15.0
+
+        # High-leverage unavailable (0 or 10 points)
+        if not bullpen.high_leverage_available:
+            score += 10.0
+
+        # Back-to-back usage (0-20 points)
+        b2b = safe_int(bullpen.back_to_back_usage, 0)
+        score += min(b2b * 5.0, 20.0)
+
+        # Recent ERA blow-up (0-15 points)
+        era = safe_float(bullpen.bullpen_era_last_7, 4.10)
+        if era > 4.10:
+            score += min((era - 4.10) * 5.0, 15.0)
+
+        return int(clamp(round(score), 0, 100))
+    except Exception:
+        return 0
+
+
 def expected_bullpen_quality_remaining(
     bullpen: BullpenUsage | None,
     expected_starter_ip: float = 5.5,

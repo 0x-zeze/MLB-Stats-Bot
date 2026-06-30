@@ -1,0 +1,102 @@
+{
+  "Spencer Strider": {
+    "first_inning_era": 2.80,
+    "first_pitch_strike_pct": 0.68,
+    "avg_pitches_first_inning": 17.2
+  },
+  "Gerrit Cole": {
+    "first_inning_era": 3.10,
+    "first_pitch_strike_pct": 0.67,
+    "avg_pitches_first_inning": 16.8
+  },
+  "Jacob deGrom": {
+    "first_inning_era": 2.10,
+    "first_pitch_strike_pct": 0.70,
+    "avg_pitches_first_inning": 15.5
+  },
+  "Zack Wheeler": {
+    "first_inning_era": 3.50,
+    "first_pitch_strike_pct": 0.64,
+    "avg_pitches_first_inning": 16.2
+  },
+  "Corbin Burnes": {
+    "first_inning_era": 3.80,
+    "first_pitch_strike_pct": 0.65,
+    "avg_pitches_first_inning": 17.0
+  },
+  "Shohei Ohtani": {
+    "first_inning_era": 4.50,
+    "first_pitch_strike_pct": 0.58,
+    "avg_pitches_first_inning": 18.5
+  },
+  "Framber Valdez": {
+    "first_inning_era": 4.80,
+    "first_pitch_strike_pct": 0.56,
+    "avg_pitches_first_inning": 18.0
+  },
+  "Blake Snell": {
+    "first_inning_era": 5.20,
+    "first_pitch_strike_pct": 0.55,
+    "avg_pitches_first_inning": 19.5
+  },
+  "Logan Webb": {
+    "first_inning_era": 3.20,
+    "first_pitch_strike_pct": 0.63,
+    "avg_pitches_first_inning": 16.0
+  },
+  "Kevin Gausman": {
+    "first_inning_era": 4.10,
+    "first_pitch_strike_pct": 0.61,
+    "avg_pitches_first_inning": 17.5
+  },
+  "Aaron Nola": {
+    "first_inning_era": 3.90,
+    "first_pitch_strike_pct": 0.62,
+    "avg_pitches_first_inning": 16.8
+  },
+  "Max Fried": {
+    "first_inning_era": 3.40,
+    "first_pitch_strike_pct": 0.64,
+    "avg_pitches_first_inning": 15.8
+  },
+  "Justin Verlander": {
+    "first_inning_era": 3.30,
+    "first_pitch_strike_pct": 0.66,
+    "avg_pitches_first_inning": 16.5
+  },
+  "Clayton Kershaw": {
+    "first_inning_era": 2.90,
+    "first_pitch_strike_pct": 0.69,
+    "avg_pitches_first_inning": 15.2
+  },
+  "Yu Darvish": {
+    "first_inning_era": 4.30,
+    "first_pitch_strike_pct": 0.59,
+    "avg_pitches_first_inning": 18.2
+  },
+  "Luis Castillo": {
+    "first_inning_era": 3.60,
+    "first_pitch_strike_pct": 0.63,
+    "avg_pitches_first_inning": 16.3
+  },
+  "Pablo Lopez": {
+    "first_inning_era": 3.70,
+    "first_pitch_strike_pct": 0.62,
+    "avg_pitches_first_inning": 16.7
+  },
+  "Zac Gallen": {
+    "first_inning_era": 3.00,
+    "first_pitch_strike_pct": 0.66,
+    "avg_pitches_first_inning": 15.9
+  },
+  "Dylan Cease": {
+    "first_inning_era": 5.50,
+    "first_pitch_strike_pct": 0.54,
+    "avg_pitches_first_inning": 20.0
+  },
+  "Tyler Glasnow": {
+    "first_inning_era": 4.70,
+    "first_pitch_strike_pct": 0.57,
+    "avg_pitches_first_inning": 19.0
+  }
+}
