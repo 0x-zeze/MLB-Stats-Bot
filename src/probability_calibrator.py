@@ -38,6 +38,11 @@ _MARKET_PARAMS: dict[str, dict[str, float]] = {
     "yrfi": {"min_samples": 40, "bucket_size": 0.05, "min_bin_count": 4},
 }
 
+_SQLITE_MARKET_PARAMS: dict[str, dict[str, float]] = {
+    "moneyline": {"min_samples": 25, "bucket_size": 0.04, "min_bin_count": 2},
+    "yrfi": {"min_samples": 30, "bucket_size": 0.05, "min_bin_count": 2},
+}
+
 _cached_maps: dict[str, list[tuple[float, float]]] | None = None
 
 
@@ -104,16 +109,17 @@ def calibrate(raw_probability: float, market: str = "moneyline") -> float:
 
 
 def _normalize_probability(value: Any) -> float | None:
-    """Normalize decimal or percent probability to a clamped decimal."""
+    """Normalize decimal or percent probability to a valid model range."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
-    parsed = safe_float(value, None)
-    if parsed is None:
+    normalized = safe_float(value, None)
+    if normalized is None:
         return None
-    normalized = parsed / 100.0 if abs(parsed) > 1.0 else parsed
-    if normalized < 0.0 or normalized > 1.0:
+    if normalized > 1.0:
+        normalized /= 100.0
+    if not 0.05 <= normalized <= 0.95:
         return None
-    return clamp(normalized, 0.05, 0.95)
+    return normalized
 
 
 def _normalize_market(value: Any) -> str | None:
@@ -276,14 +282,19 @@ def _fit_all_markets(
     rows_by_market: dict[str, list[tuple[float, float]]],
     *,
     min_samples: int | None = None,
+    market_params: dict[str, dict[str, float]] | None = None,
 ) -> tuple[dict[str, list[tuple[float, float]]], dict[str, Any]]:
     maps: dict[str, list[tuple[float, float]]] = {}
     per_market: dict[str, Any] = {}
     for market in _MARKETS:
-        params = _MARKET_PARAMS.get(market, {})
+        params = (market_params or _MARKET_PARAMS).get(market, {})
+        if market_params is None and min_samples is not None:
+            sample_floor = min_samples
+        else:
+            sample_floor = params.get("min_samples", min_samples if min_samples is not None else _MIN_SAMPLES)
         calibration_map, info = _fit_market_map(
             rows_by_market[market],
-            min_samples=int(min_samples if min_samples is not None else params.get("min_samples", _MIN_SAMPLES)),
+            min_samples=int(sample_floor),
             bucket_size=float(params.get("bucket_size", _BUCKET_SIZE)),
             min_bin_count=int(params.get("min_bin_count", _MIN_BIN_COUNT)),
         )
@@ -346,12 +357,31 @@ def retrain_from_sqlite(sqlite_path: str | Path | None = None) -> dict[str, Any]
                     continue
                 outcome = 1.0 if str(row["result"]).strip().lower() == "win" else 0.0
                 rows_by_market[market].append((prob, outcome))
+
+            try:
+                yrfi_rows = conn.execute(
+                    """
+                    SELECT probability, correct
+                    FROM yrfi_results
+                    WHERE correct IS NOT NULL
+                    """
+                )
+            except sqlite3.Error:
+                yrfi_rows = []
+            for row in yrfi_rows:
+                prob = _normalize_probability(row["probability"])
+                if prob is None:
+                    continue
+                outcome = safe_float(row["correct"], None)
+                if outcome not in (0.0, 1.0):
+                    continue
+                rows_by_market["yrfi"].append((prob, float(outcome)))
         finally:
             conn.close()
     except sqlite3.Error as exc:
         return {"status": "error", "reason": f"SQLite read failed: {exc}", "source": "SQLite bet_ledger"}
 
-    maps, per_market = _fit_all_markets(rows_by_market, min_samples=30)
+    maps, per_market = _fit_all_markets(rows_by_market, market_params=_SQLITE_MARKET_PARAMS)
     return _write_calibration_maps(maps, per_market, source="SQLite bet_ledger")
 
 
@@ -360,8 +390,6 @@ def retrain_default() -> dict[str, Any]:
     if _SQLITE_PATH.exists():
         return retrain_from_sqlite(_SQLITE_PATH)
     return retrain()
-
-
 
 
 if __name__ == "__main__":
