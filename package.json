@@ -18,6 +18,7 @@
     "setup:web": "npm --prefix dashboard-react install",
     "setup": "npm run setup:python && npm run setup:web",
     "migrate:storage": "node scripts/migrate_state_to_sqlite.js",
+    "export:live": "node scripts/run_python.js scripts/export_sqlite_to_csv.py",
     "doctor": "node scripts/doctor.mjs",
     "once": "node src/index.js --once",
     "test": "npm run check && npm run test:js && npm run test:py",

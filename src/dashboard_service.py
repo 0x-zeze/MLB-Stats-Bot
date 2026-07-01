@@ -25,7 +25,7 @@ from .evaluate import (
     performance_by_confidence,
     performance_by_market_total,
 )
-from .calibration import calibration_table
+from .calibration import brier_score, calibration_table, log_loss
 from .prediction_pipeline import run_prediction_pipeline
 from .utils import data_path, safe_float
 
@@ -707,6 +707,53 @@ def _telegram_calibration_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _normalize_probability(value: Any) -> float | None:
+    probability = safe_float(value, float("nan"))
+    if probability != probability:
+        return None
+    if abs(probability) > 1.0:
+        probability /= 100.0
+    return max(0.0, min(1.0, probability))
+
+
+def _settled_ledger_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if row.get("status") == "settled"]
+
+
+def _scored_ledger_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if str(row.get("result") or "").lower() in {"win", "loss"}]
+
+
+def _ledger_financial_metrics(rows: list[dict[str, Any]]) -> dict[str, float]:
+    staked = sum(safe_float(row.get("units_staked"), 0.0) for row in rows)
+    units_pl = sum(safe_float(row.get("units_pl"), 0.0) for row in rows)
+    clv_values = [safe_float(row.get("clv"), 0.0) for row in rows if row.get("clv") not in (None, "")]
+    edges = [safe_float(row.get("edge"), 0.0) for row in rows if row.get("edge") not in (None, "")]
+    probability_pairs = [
+        (probability, 1 if str(row.get("result") or "").lower() == "win" else 0)
+        for row in _scored_ledger_rows(rows)
+        for probability in [_normalize_probability(row.get("model_prob"))]
+        if probability is not None
+    ]
+    probabilities = [probability for probability, _ in probability_pairs]
+    outcomes = [outcome for _, outcome in probability_pairs]
+    return {
+        "roi": round((units_pl / staked) * 100.0, 1) if staked > 0 else 0.0,
+        "average_edge": round(sum(edges) / len(edges), 3) if edges else 0.0,
+        "average_clv": round(sum(clv_values) / len(clv_values), 3) if clv_values else 0.0,
+        "clv_hit_rate": round((sum(1 for value in clv_values if value > 0) / len(clv_values)) * 100.0, 1) if clv_values else 0.0,
+        "brier_score": round(brier_score(probabilities, outcomes), 4) if probability_pairs else 0.0,
+        "log_loss": round(log_loss(probabilities, outcomes), 4) if probability_pairs else 0.0,
+    }
+
+
+def _is_first_inning_market(row: dict[str, Any]) -> bool:
+    market = str(row.get("market") or "").lower()
+    side = str(row.get("side") or "").lower()
+    team = str(row.get("team") or "").lower()
+    return any(token in market or token in side or token in team for token in ("yrfi", "nrfi", "first inning", "first_inning"))
+
+
 def get_telegram_model_performance() -> dict[str, Any] | None:
     """Return model performance from Telegram memory so it matches /memory."""
     state = load_telegram_state()
@@ -734,6 +781,15 @@ def get_telegram_model_performance() -> dict[str, Any] | None:
             for label, value in by_confidence.items()
         ]
 
+    fallback_roi = round(((correct - wrong) / total) * 100.0, 1) if total else 0.0
+    ledger = get_bet_ledger()
+    settled_ledger = _settled_ledger_rows(ledger.get("settled") or [])
+    ledger_metrics = _ledger_financial_metrics(settled_ledger) if settled_ledger else None
+    moneyline_rows = [row for row in settled_ledger if not _is_first_inning_market(row)]
+    first_inning_rows = [row for row in settled_ledger if _is_first_inning_market(row)]
+    moneyline_metrics = _ledger_financial_metrics(moneyline_rows) if moneyline_rows else None
+    first_inning_metrics = _ledger_financial_metrics(first_inning_rows) if first_inning_rows else None
+
     return {
         "overall": {
             "total_predictions": int(total),
@@ -743,21 +799,21 @@ def get_telegram_model_performance() -> dict[str, Any] | None:
             "win_rate": win_rate,
             "win_rate_3d": rolling_3d.get("win_rate") if rolling_3d else None,
             "win_rate_3d_sample": f"{rolling_3d['wins']}/{rolling_3d['total']}" if rolling_3d else None,
-            "roi": round(((correct - wrong) / total) * 100.0, 1) if total else 0.0,
-            "average_edge": 0.0,
-            "average_clv": 0.0,
-            "brier_score": 0.0,
-            "log_loss": 0.0,
-            "clv_hit_rate": 0.0,
+            "roi": ledger_metrics["roi"] if ledger_metrics else fallback_roi,
+            "average_edge": ledger_metrics["average_edge"] if ledger_metrics else 0.0,
+            "average_clv": ledger_metrics["average_clv"] if ledger_metrics else 0.0,
+            "brier_score": ledger_metrics["brier_score"] if ledger_metrics else 0.0,
+            "log_loss": ledger_metrics["log_loss"] if ledger_metrics else 0.0,
+            "clv_hit_rate": ledger_metrics["clv_hit_rate"] if ledger_metrics else 0.0,
             "source": "telegram",
         },
         "by_market": [
-            {"market": "moneyline", "bets": int(total), "win_rate": win_rate, "roi": round(((correct - wrong) / total) * 100.0, 1) if total else 0.0},
+            {"market": "moneyline", "bets": int(total), "win_rate": win_rate, "roi": moneyline_metrics["roi"] if moneyline_metrics else fallback_roi},
             {
                 "market": "first inning",
                 "bets": int(safe_float(first_inning.get("totalPicks"), 0.0)),
                 "win_rate": _accuracy(first_inning.get("correctPicks", 0), first_inning.get("totalPicks", 0)),
-                "roi": 0.0,
+                "roi": first_inning_metrics["roi"] if first_inning_metrics else 0.0,
             },
         ],
         "by_total_range": [],

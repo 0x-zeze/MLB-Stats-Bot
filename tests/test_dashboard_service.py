@@ -157,6 +157,76 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertEqual(75.0, performance["overall"]["win_rate"])
         self.assertEqual(50.0, performance["overall"]["roi"])
 
+    def test_telegram_performance_uses_ledger_financial_metrics(self):
+        state = {
+            "predictions": {},
+            "memory": {
+                "totalPicks": 2,
+                "correctPicks": 1,
+                "wrongPicks": 1,
+                "byConfidence": {"high": {"total": 2, "correct": 1}},
+                "firstInning": {"totalPicks": 1, "correctPicks": 1},
+                "learningLog": [],
+            },
+        }
+        ledger = {
+            "settled": [
+                {
+                    "status": "settled",
+                    "market": "moneyline",
+                    "result": "win",
+                    "units_staked": 3,
+                    "units_pl": 2.5,
+                    "model_prob": 60,
+                    "edge": 6,
+                    "clv": 0.02,
+                },
+                {
+                    "status": "settled",
+                    "market": "moneyline",
+                    "result": "loss",
+                    "units_staked": 1,
+                    "units_pl": -1,
+                    "model_prob": 55,
+                    "edge": 4,
+                    "clv": -0.01,
+                },
+                {
+                    "status": "settled",
+                    "market": "moneyline",
+                    "result": "push",
+                    "units_staked": 2,
+                    "units_pl": 0,
+                    "model_prob": 70,
+                    "edge": 10,
+                    "clv": 0.10,
+                },
+                {
+                    "status": "settled",
+                    "market": "yrfi",
+                    "result": "win",
+                    "units_staked": 1,
+                    "units_pl": 0.8,
+                    "model_prob": 57,
+                    "edge": 3,
+                    "clv": 0.03,
+                },
+            ]
+        }
+
+        with patch("src.dashboard_service.load_telegram_state", return_value=state):
+            with patch("src.dashboard_service.get_bet_ledger", return_value=ledger):
+                performance = dashboard_service.get_telegram_model_performance()
+
+        self.assertEqual(32.9, performance["overall"]["roi"])
+        self.assertEqual(5.75, performance["overall"]["average_edge"])
+        self.assertEqual(0.035, performance["overall"]["average_clv"])
+        self.assertEqual(75.0, performance["overall"]["clv_hit_rate"])
+        self.assertAlmostEqual(0.2158, performance["overall"]["brier_score"])
+        self.assertAlmostEqual(0.6238, performance["overall"]["log_loss"])
+        self.assertEqual(25.0, performance["by_market"][0]["roi"])
+        self.assertEqual(80.0, performance["by_market"][1]["roi"])
+
     def test_run_dashboard_backtest_replays_history_filtered_by_date(self):
         import json as _json
 
