@@ -30,7 +30,7 @@ from .prediction_pipeline import run_prediction_pipeline
 from .utils import data_path, safe_float
 
 DEFAULT_DASHBOARD_SETTINGS: dict[str, Any] = {
-    "minimum_moneyline_edge": 0.02,
+    "minimum_moneyline_edge": 0.04,
     "minimum_data_quality_score": 60,
     "odds_stale_minutes": 15,
     "weather_stale_minutes": 60,
@@ -290,7 +290,7 @@ def _decision_from_game(game: dict[str, Any], settings: dict[str, Any]) -> tuple
     moneyline_edge = abs(safe_float(game.get("moneyline", {}).get("edge"), 0.0))
     confidence = str(game.get("moneyline", {}).get("confidence") or "Low").lower()
     no_bet_reason = game.get("no_bet_reason") or ""
-    minimum_moneyline_edge = safe_float(settings.get("minimum_moneyline_edge", 0.02), 0.02) * 100
+    minimum_moneyline_edge = safe_float(settings.get("minimum_moneyline_edge", 0.04), 0.04) * 100
 
     if no_bet_reason:
         return "NO BET", no_bet_reason

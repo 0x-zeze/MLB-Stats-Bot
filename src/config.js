@@ -79,10 +79,11 @@ export function loadConfig() {
     postGameAlerts: boolFromEnv(process.env.POST_GAME_ALERTS, true),
     postGamePollMinutes: intFromEnv(process.env.POST_GAME_POLL_MINUTES, 5),
     modelMemory: boolFromEnv(process.env.MODEL_MEMORY, true),
+    minimumMoneylineEdge: numberFromEnv(process.env.MINIMUM_MONEYLINE_EDGE, 0.04),
     interactiveAgent: boolFromEnv(process.env.INTERACTIVE_AGENT, true),
     printAlertToTerminal: boolFromEnv(process.env.PRINT_ALERT_TO_TERMINAL, false),
     maxGamesPerMessage: intFromEnv(process.env.MAX_GAMES_PER_MESSAGE, 8),
-    pythonExecutable: process.env.PYTHON_BIN || 'python',
+    pythonExecutable: process.env.PYTHON_BIN || 'python3',
     dashboard: {
       enabled: boolFromEnv(process.env.DASHBOARD_ENABLED, true),
       host: process.env.DASHBOARD_HOST || '0.0.0.0',

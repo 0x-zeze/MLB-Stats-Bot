@@ -218,10 +218,15 @@ test('lineup alert reservations suppress duplicate both-confirmed alerts', () =>
   const storage = new Storage(statePath);
 
   try {
-    assert.equal(storage.reserveLineupAlert('chat', 'game-1', '2026-06-30T10:00:00.000Z'), true);
-    assert.equal(storage.reserveLineupAlert('chat', 'game-1', '2026-06-30T10:01:00.000Z'), false);
-    assert.equal(storage.reserveLineupAlert('chat', 'game-2', '2026-06-30T10:02:00.000Z'), true);
-    assert.equal(storage.reserveLineupAlert('other-chat', 'game-1', '2026-06-30T10:03:00.000Z'), true);
+    const now = Date.now();
+    const ts1 = new Date(now).toISOString();
+    const ts2 = new Date(now + 60_000).toISOString();
+    const ts3 = new Date(now + 120_000).toISOString();
+    const ts4 = new Date(now + 180_000).toISOString();
+    assert.equal(storage.reserveLineupAlert('chat', 'game-1', ts1), true);
+    assert.equal(storage.reserveLineupAlert('chat', 'game-1', ts2), false);
+    assert.equal(storage.reserveLineupAlert('chat', 'game-2', ts3), true);
+    assert.equal(storage.reserveLineupAlert('other-chat', 'game-1', ts4), true);
   } finally {
     storage.close();
     rmSync(statePath, { force: true });

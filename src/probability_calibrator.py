@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sqlite3
 from bisect import bisect_left
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ _OUTCOMES_PATH = _DATA_DIR / "evolution" / "prediction_outcomes.csv"
 _CALIBRATION_MAP_PATH = _DATA_DIR / "calibration_map.json"
 # Per-market maps: {"moneyline": [[x,y],...], "yrfi": [...]}.
 _CALIBRATION_MAPS_PATH = _DATA_DIR / "calibration_maps.json"
+_SQLITE_PATH = _DATA_DIR / "state.sqlite"
 
 _MARKETS = ("moneyline", "yrfi")
 
@@ -99,6 +101,28 @@ def calibrate(raw_probability: float, market: str = "moneyline") -> float:
         return raw_probability
     calibrated = _interpolate(mapping, raw_probability)
     return clamp(calibrated, 0.05, 0.95)
+
+
+def _normalize_probability(value: Any) -> float | None:
+    """Normalize decimal or percent probability to a clamped decimal."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    parsed = safe_float(value, None)
+    if parsed is None:
+        return None
+    normalized = parsed / 100.0 if abs(parsed) > 1.0 else parsed
+    if normalized < 0.0 or normalized > 1.0:
+        return None
+    return clamp(normalized, 0.05, 0.95)
+
+
+def _normalize_market(value: Any) -> str | None:
+    market = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if market in {"first_inning", "yrfi", "nrfi"}:
+        return "yrfi"
+    if market == "moneyline":
+        return "moneyline"
+    return None
 
 
 def _extract_predicted_probability(row: dict[str, Any]) -> float | None:
@@ -183,7 +207,14 @@ def _fit_market_map(
         binned_points.append((avg_prob, avg_outcome))
 
     if len(binned_points) < 3:
-        return None, {"status": "skipped", "reason": "not enough bins with sufficient data"}
+        return None, {
+            "status": "skipped",
+            "reason": "not enough bins with sufficient data",
+            "samples": len(rows),
+            "buckets": len(buckets),
+            "bins": len(binned_points),
+            "min_bin_count": min_bin_count,
+        }
 
     calibration_map = _make_isotonic(binned_points)
 
@@ -210,51 +241,22 @@ def _fit_market_map(
     }
 
 
-def retrain() -> dict[str, Any]:
-    """Rebuild per-market calibration maps from prediction outcomes."""
+def _write_calibration_maps(
+    maps: dict[str, list[tuple[float, float]]],
+    per_market: dict[str, Any],
+    *,
+    source: str,
+) -> dict[str, Any]:
+    """Persist per-market maps and keep legacy moneyline map synced."""
     global _cached_maps
 
-    if not _OUTCOMES_PATH.exists():
-        return {"status": "error", "reason": "prediction_outcomes.csv not found"}
-
-    rows_by_market: dict[str, list[tuple[float, float]]] = {m: [] for m in _MARKETS}
-    with open(_OUTCOMES_PATH, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            market = row.get("market", "").strip().lower()
-            if market not in rows_by_market:
-                continue
-            result = row.get("result", "").strip().lower()
-            if result not in ("win", "loss"):
-                continue
-            prob = _extract_predicted_probability(row)
-            if prob is None:
-                continue
-            outcome = 1.0 if result == "win" else 0.0
-            rows_by_market[market].append((prob, outcome))
-
-    maps: dict[str, list[tuple[float, float]]] = {}
-    per_market: dict[str, Any] = {}
-    for market in _MARKETS:
-        params = _MARKET_PARAMS.get(market, {})
-        calibration_map, info = _fit_market_map(
-            rows_by_market[market],
-            min_samples=int(params.get("min_samples", _MIN_SAMPLES)),
-            bucket_size=float(params.get("bucket_size", _BUCKET_SIZE)),
-            min_bin_count=int(params.get("min_bin_count", _MIN_BIN_COUNT)),
-        )
-        per_market[market] = info
-        if calibration_map is not None:
-            maps[market] = calibration_map
-
     if not maps:
-        return {"status": "skipped", "reason": "no market had enough samples", "markets": per_market}
+        return {"status": "skipped", "reason": "no market had enough samples", "markets": per_market, "source": source}
 
     _CALIBRATION_MAPS_PATH.parent.mkdir(parents=True, exist_ok=True)
     _CALIBRATION_MAPS_PATH.write_text(
         json.dumps({m: [list(p) for p in pts] for m, pts in maps.items()}, indent=2)
     )
-    # Keep the legacy moneyline-only file in sync for older readers.
     if "moneyline" in maps:
         _CALIBRATION_MAP_PATH.write_text(
             json.dumps([list(p) for p in maps["moneyline"]], indent=2)
@@ -266,7 +268,100 @@ def retrain() -> dict[str, Any]:
         "markets": per_market,
         "calibrated_markets": sorted(maps.keys()),
         "path": str(_CALIBRATION_MAPS_PATH),
+        "source": source,
     }
+
+
+def _fit_all_markets(
+    rows_by_market: dict[str, list[tuple[float, float]]],
+    *,
+    min_samples: int | None = None,
+) -> tuple[dict[str, list[tuple[float, float]]], dict[str, Any]]:
+    maps: dict[str, list[tuple[float, float]]] = {}
+    per_market: dict[str, Any] = {}
+    for market in _MARKETS:
+        params = _MARKET_PARAMS.get(market, {})
+        calibration_map, info = _fit_market_map(
+            rows_by_market[market],
+            min_samples=int(min_samples if min_samples is not None else params.get("min_samples", _MIN_SAMPLES)),
+            bucket_size=float(params.get("bucket_size", _BUCKET_SIZE)),
+            min_bin_count=int(params.get("min_bin_count", _MIN_BIN_COUNT)),
+        )
+        per_market[market] = info
+        if calibration_map is not None:
+            maps[market] = calibration_map
+    return maps, per_market
+
+
+def retrain() -> dict[str, Any]:
+    """Rebuild per-market calibration maps from prediction outcomes."""
+    if not _OUTCOMES_PATH.exists():
+        return {"status": "error", "reason": "prediction_outcomes.csv not found", "source": "CSV prediction_outcomes"}
+
+    rows_by_market: dict[str, list[tuple[float, float]]] = {m: [] for m in _MARKETS}
+    with open(_OUTCOMES_PATH, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            market = _normalize_market(row.get("market", ""))
+            if market not in rows_by_market:
+                continue
+            result = row.get("result", "").strip().lower()
+            if result not in ("win", "loss"):
+                continue
+            prob = _extract_predicted_probability(row)
+            if prob is None:
+                continue
+            outcome = 1.0 if result == "win" else 0.0
+            rows_by_market[market].append((prob, outcome))
+
+    maps, per_market = _fit_all_markets(rows_by_market)
+    return _write_calibration_maps(maps, per_market, source="CSV prediction_outcomes")
+
+
+def retrain_from_sqlite(sqlite_path: str | Path | None = None) -> dict[str, Any]:
+    """Rebuild per-market calibration maps from live bet ledger probabilities."""
+    source = Path(sqlite_path) if sqlite_path is not None else _SQLITE_PATH
+    if not source.exists():
+        return {"status": "error", "reason": f"SQLite database not found: {source}", "source": "SQLite bet_ledger"}
+
+    rows_by_market: dict[str, list[tuple[float, float]]] = {m: [] for m in _MARKETS}
+    try:
+        conn = sqlite3.connect(str(source))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT market, model_prob, result
+                FROM bet_ledger
+                WHERE status = 'settled'
+                  AND result IN ('win', 'loss')
+                """
+            )
+            for row in rows:
+                market = _normalize_market(row["market"])
+                if market not in rows_by_market:
+                    continue
+                prob = _normalize_probability(row["model_prob"])
+                if prob is None:
+                    continue
+                outcome = 1.0 if str(row["result"]).strip().lower() == "win" else 0.0
+                rows_by_market[market].append((prob, outcome))
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return {"status": "error", "reason": f"SQLite read failed: {exc}", "source": "SQLite bet_ledger"}
+
+    maps, per_market = _fit_all_markets(rows_by_market, min_samples=30)
+    return _write_calibration_maps(maps, per_market, source="SQLite bet_ledger")
+
+
+def retrain_default() -> dict[str, Any]:
+    """Prefer live SQLite calibration, falling back to CSV outcomes."""
+    if _SQLITE_PATH.exists():
+        return retrain_from_sqlite(_SQLITE_PATH)
+    return retrain()
+
+
 
 
 if __name__ == "__main__":
@@ -277,7 +372,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.retrain:
-        result = retrain()
+        result = retrain_default()
         print(json.dumps(result, indent=2))
     else:
         parser.print_help()

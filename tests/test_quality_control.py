@@ -200,6 +200,30 @@ class QualityControlTests(unittest.TestCase):
         self.assertEqual(report["score"], 95)
         self.assertEqual(report["opener_situation"], "medium")
 
+    def test_preferred_market_total_adds_quality_note(self) -> None:
+        context = _context()
+        context["market"]["market_total"] = 8.0
+        report = generate_quality_report(context)
+
+        self.assertEqual(report["score"], 100)
+        self.assertIn("market total 8.0-8.5 preferred", report["no_bet_considerations"])
+
+    def test_high_market_total_penalizes_quality_and_adds_caution(self) -> None:
+        context = _context()
+        context["market"]["market_total"] = 10.0
+        report = generate_quality_report(context)
+
+        self.assertEqual(report["score"], 92)
+        self.assertIn("market total above 9.5: high-run environment caution", report["no_bet_considerations"])
+
+    def test_market_total_95_and_missing_total_are_neutral(self) -> None:
+        context = _context()
+        context["market"]["market_total"] = 9.5
+        self.assertEqual(calculate_data_quality_score(context), 95)
+        del context["market"]["market_total"]
+        del context["market"]["current_total"]
+        self.assertEqual(calculate_data_quality_score(context), 95)
+
     def test_missing_probable_pitcher_returns_no_bet(self) -> None:
         context = _context()
         context["probable_pitchers"]["away"] = None
@@ -221,9 +245,24 @@ class QualityControlTests(unittest.TestCase):
         self.assertEqual(result["confidence"], "Medium")
 
     def test_low_edge_returns_no_bet(self) -> None:
-        result = apply_confidence_downgrade(_prediction(model_edge=0.01), generate_quality_report(_context()))
+        result = apply_confidence_downgrade(_prediction(model_edge=0.03), generate_quality_report(_context()))
         self.assertEqual(result["decision"], "NO BET")
-        self.assertIn("model edge below 2%", result["decision_reason"])
+        self.assertIn("model edge below 4%", result["decision_reason"])
+
+    def test_moneyline_edge_threshold_reads_dashboard_settings(self) -> None:
+        import json
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from unittest.mock import patch
+
+        with TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "dashboard_settings.json"
+            settings_path.write_text(json.dumps({"minimum_moneyline_edge": 0.05}))
+            with patch("src.quality_control.data_path", return_value=settings_path):
+                result = apply_confidence_downgrade(_prediction(model_edge=0.045), generate_quality_report(_context()))
+
+        self.assertEqual(result["decision"], "NO BET")
+        self.assertIn("model edge below 5%", result["decision_reason"])
 
     def test_low_data_quality_score_returns_no_bet(self) -> None:
         context = _context()

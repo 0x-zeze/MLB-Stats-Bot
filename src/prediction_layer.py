@@ -74,7 +74,7 @@ def predict_moneyline_from_features(
         "away_win_probability": away_probability,
         "predicted_winner": predicted_winner,
         "final_lean": predicted_winner,
-        "confidence": confidence_label(home_probability),
+        "confidence": confidence_label(raw_home_probability, calibrated_prob=home_probability),
         "components": components | {"defense": 0.0, "injuries_lineup": 0.0, "market_odds": 0.0},
         "market": collected["market"],
         "main_factors": model._main_factors(components, home_probability >= 0.5),

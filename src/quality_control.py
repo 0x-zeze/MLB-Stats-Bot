@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -12,7 +13,7 @@ from .sharp_money import (
     sharp_money_confidence_adjustment,
     sharp_money_risk_factor,
 )
-from .utils import clamp, safe_float
+from .utils import clamp, data_path, safe_float
 
 
 CONFIRMED = "Confirmed"
@@ -25,6 +26,23 @@ STABLE = "Stable"
 MOVED_HEAVILY = "Moved heavily"
 
 _CONFIDENCE_LEVELS = ("Low", "Medium", "High")
+_DEFAULT_MONEYLINE_EDGE_THRESHOLD = 0.04
+
+
+def _moneyline_edge_threshold() -> float:
+    settings_path = data_path("dashboard_settings.json")
+    if not settings_path.exists():
+        return _DEFAULT_MONEYLINE_EDGE_THRESHOLD
+    try:
+        with settings_path.open("r", encoding="utf-8") as handle:
+            settings = json.load(handle)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return _DEFAULT_MONEYLINE_EDGE_THRESHOLD
+    return safe_float(settings.get("minimum_moneyline_edge"), _DEFAULT_MONEYLINE_EDGE_THRESHOLD)
+
+
+def _format_edge_threshold(value: float) -> str:
+    return f"{value * 100:.0f}%"
 
 
 def _as_bool(value: Any) -> bool:
@@ -165,6 +183,28 @@ def _opener_quality_penalty(game_context: dict[str, Any]) -> int:
     return 0
 
 
+def _market_total(game_context: dict[str, Any]) -> float | None:
+    market = game_context.get("market") if isinstance(game_context.get("market"), dict) else {}
+    for value in (
+        market.get("market_total"),
+        market.get("current_total"),
+        game_context.get("market_total"),
+    ):
+        if value not in (None, ""):
+            return safe_float(value, None)
+    return None
+
+
+def _market_total_quality_notes(market_total: float | None) -> list[str]:
+    if market_total is None:
+        return []
+    if 8.0 <= market_total <= 8.5:
+        return ["market total 8.0-8.5 preferred"]
+    if market_total > 9.5:
+        return ["market total above 9.5: high-run environment caution"]
+    return []
+
+
 def _build_sharp_money_signal(game_context: dict[str, Any]) -> dict[str, Any] | None:
     """Build sharp money signal from market data in game context."""
     market = game_context.get("market") or game_context.get("odds") or {}
@@ -239,6 +279,8 @@ def calculate_data_quality_score(game_context: dict[str, Any]) -> int:
         score += 10
     if checks["odds"] == FRESH:
         score += 15
+    if checks["market_odds"] == AVAILABLE:
+        score += 5
     if checks["bullpen_usage"] == AVAILABLE:
         score += 15
     if checks["park_factor"] == AVAILABLE:
@@ -247,6 +289,13 @@ def calculate_data_quality_score(game_context: dict[str, Any]) -> int:
         score += 5
 
     score -= _opener_quality_penalty(game_context)
+
+    market_total = _market_total(game_context)
+    if market_total is not None:
+        if 8.0 <= market_total <= 8.5:
+            score += 5
+        elif market_total > 9.5:
+            score -= 3
 
     return max(0, min(100, score))
 
@@ -284,6 +333,7 @@ def generate_quality_report(game_context: dict[str, Any]) -> dict[str, Any]:
     no_bet_considerations = []
     if opener_confidence in {"high", "medium"}:
         no_bet_considerations.append("opener_situation")
+    no_bet_considerations.extend(_market_total_quality_notes(_market_total(game_context)))
 
     sharp_signal = _build_sharp_money_signal(game_context)
 
@@ -333,6 +383,7 @@ def apply_confidence_downgrade(
     edge = output.get("model_edge")
     edge_value = safe_float(edge, None)
     market_type = str(output.get("market_type", "")).lower()
+    moneyline_edge_threshold = _moneyline_edge_threshold()
 
     if quality_report.get("probable_pitchers") == MISSING:
         no_bet = True
@@ -348,9 +399,9 @@ def apply_confidence_downgrade(
     elif market_type == "yrfi" and abs(edge_value) < 0.06:
         no_bet = True
         reasons.append("YRFI model edge below 6%")
-    elif abs(edge_value) < 0.02:
+    elif market_type != "yrfi" and abs(edge_value) < moneyline_edge_threshold:
         no_bet = True
-        reasons.append("model edge below 2%")
+        reasons.append(f"model edge below {_format_edge_threshold(moneyline_edge_threshold)}")
 
 
 

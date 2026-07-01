@@ -10,11 +10,12 @@ import {
 import { UI_LINE, UI_THIN_LINE, uiBullet, uiKV, uiSection, uiTitle } from './telegramFormat.js';
 import { getEvolutionRule, loadEvolutionControls, moneylineWeightMultiplier } from './evolutionControls.js';
 import { calibratePercent, hasCalibrationMap } from './calibration.js';
+import { loadConfig } from './config.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const GAME_SEPARATOR = UI_LINE;
 const SECTION_SEPARATOR = UI_THIN_LINE;
-const MONEYLINE_VALUE_EDGE_THRESHOLD = 1.5;
+const DEFAULT_MONEYLINE_VALUE_EDGE_THRESHOLD = 4.0;
 const STRONG_VALUE_EDGE_THRESHOLD = 4.0;
 // Calibrated win-probability floor for a graded VALUE bet. Deep analysis of
 // 773 moneyline outcomes showed the model is OVERCONFIDENT at high probs:
@@ -493,12 +494,18 @@ function moneylineValueOption(item, side) {
   };
 }
 
+function moneylineValueEdgeThreshold() {
+  const configured = toNumber(loadConfig().minimumMoneylineEdge, 0.04);
+  return configured <= 1 ? configured * 100 : configured;
+}
+
 function valueSafetyReasons(item, option, evolutionControls = loadEvolutionControls()) {
   const reasons = [];
   if (!option) return ['odds moneyline belum tersedia'];
+  const edgeThreshold = moneylineValueEdgeThreshold();
 
-  if (option.edge < MONEYLINE_VALUE_EDGE_THRESHOLD) {
-    reasons.push(`value edge hanya ${option.edge >= 0 ? '+' : ''}${option.edge.toFixed(1)}%`);
+  if (option.edge < edgeThreshold) {
+    reasons.push(`value edge hanya ${option.edge >= 0 ? '+' : ''}${option.edge.toFixed(1)}% < ${edgeThreshold.toFixed(1)}%`);
   }
 
   // --- TEAM QUALITY GATE ---

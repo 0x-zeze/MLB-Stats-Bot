@@ -91,6 +91,39 @@ test('high-conviction underdog with mispriced odds is graded VALUE when quality 
   assert.equal(game.betDecision.status, 'VALUE');
 });
 
+test('moneyline value gate requires configured 4 percent edge', () => {
+  const game = sampleGame({
+    away: {
+      id: 1,
+      name: 'Away Team',
+      abbreviation: 'AWY',
+      winProbability: 43,
+      starter: { fullName: 'Away Starter' },
+      record: { wins: 35, losses: 40, pct: '.467' }
+    },
+    home: {
+      id: 2,
+      name: 'Thin Favorite',
+      abbreviation: 'THN',
+      winProbability: 56,
+      starter: { fullName: 'Home Starter' },
+      record: { wins: 45, losses: 30, pct: '.600' }
+    },
+    currentOdds: {
+      awayMoneyline: 110,
+      homeMoneyline: -112,
+      moneylineBook: 'FanDuel'
+    }
+  });
+
+  applyMoneylineValueMarket(game);
+
+  assert.equal(game.valuePick.teamName, 'Thin Favorite');
+  assert.equal(game.valuePick.edge, 3.4);
+  assert.equal(game.betDecision.status, 'NO BET');
+  assert.ok(game.betDecision.reasons.some((reason) => /< 4\.0%/.test(reason)));
+});
+
 test('record dominated favorite is downgraded to no bet even with positive value', () => {
   const game = sampleGame({
     away: {

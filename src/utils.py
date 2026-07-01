@@ -63,11 +63,12 @@ def format_probability(probability: float) -> str:
     return f"{probability * 100:.1f}%"
 
 
-def confidence_label(probability: float) -> str:
+def confidence_label(probability: float, calibrated_prob: float | None = None) -> str:
     """Map a win probability to a simple confidence bucket."""
-    edge = abs(probability - 0.5)
+    label_probability = probability if calibrated_prob is None else calibrated_prob
+    edge = abs(label_probability - 0.5)
     if edge < 0.04:
         return "Low"
-    if edge < 0.10:
+    if edge < 0.08:
         return "Medium"
     return "High"

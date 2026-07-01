@@ -1342,9 +1342,39 @@ async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.t
   console.log(`Interactive question handled for ${chatId}.`);
 }
 
+function shouldTriggerCalibrationRetrain(settledCount, alreadyQueued = false) {
+  return !alreadyQueued && settledCount > 0 && settledCount % 25 === 0;
+}
+
+function maybeQueueCalibrationRetrain(alreadyQueued = false) {
+  let settledCount = 0;
+  try {
+    settledCount = storage.readLedger({ status: 'settled' }).length;
+  } catch (error) {
+    console.error('Calibration retrain check failed:', error.message);
+    return false;
+  }
+
+  if (!shouldTriggerCalibrationRetrain(settledCount, alreadyQueued)) return false;
+
+  runPythonModule('src.probability_calibrator', ['--retrain'], {
+    timeoutMessage: 'Calibration retrain timeout. Skipped.',
+    timeoutMs: 120_000
+  })
+    .then((output) => {
+      console.log(`Calibration retrain after ${settledCount} settled bets completed.${output ? ` ${output}` : ''}`);
+    })
+    .catch((error) => {
+      console.error('Calibration retrain after settlement failed:', error.message);
+    });
+
+  return true;
+}
+
 async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcessed = false } = {}) {
   const results = await getFinalGameResults(dateYmd);
   const evaluations = [];
+  let calibrationRetrainQueued = false;
 
   for (const result of results) {
     const prediction = storage.getPrediction(result.gamePk);
@@ -1380,7 +1410,10 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
       storage.recordOutcome(prediction, result, { enabled: config.modelMemory });
       // Settle any open VALUE bet for this game into units P/L (idempotent).
       try {
-        storage.settleBet(prediction, result, clv);
+        const settled = storage.settleBet(prediction, result, clv);
+        if (settled) {
+          calibrationRetrainQueued = maybeQueueCalibrationRetrain(calibrationRetrainQueued);
+        }
       } catch (error) {
         console.error('settleBet failed:', error.message);
       }
@@ -2260,7 +2293,7 @@ async function main() {
   await poll(bot);
 }
 
-export { formatEvolveResult, parseJsonOutput, predictionsHaveRawProbabilities, isClosingCaptureEligible, shouldCaptureClosingNow };
+export { formatEvolveResult, parseJsonOutput, predictionsHaveRawProbabilities, isClosingCaptureEligible, shouldCaptureClosingNow, shouldTriggerCalibrationRetrain };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
