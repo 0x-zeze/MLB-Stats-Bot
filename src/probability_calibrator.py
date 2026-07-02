@@ -196,7 +196,12 @@ def _fit_market_map(
 ) -> tuple[list[tuple[float, float]] | None, dict[str, Any]]:
     """Bin (prob, outcome) pairs and fit an isotonic map for one market."""
     if len(rows) < min_samples:
-        return None, {"status": "skipped", "reason": f"only {len(rows)} samples (need {min_samples})"}
+        return None, {
+            "status": "skipped",
+            "reason": f"only {len(rows)} samples (need {min_samples})",
+            "samples": len(rows),
+            "low_confidence_bins": False,
+        }
 
     buckets: dict[int, list[tuple[float, float]]] = {}
     for prob, outcome in rows:
@@ -204,10 +209,13 @@ def _fit_market_map(
         buckets.setdefault(bucket_idx, []).append((prob, outcome))
 
     binned_points: list[tuple[float, float]] = []
+    low_confidence_bins = False
     for bucket_idx in sorted(buckets):
         points = buckets[bucket_idx]
         if len(points) < min_bin_count:
             continue
+        if len(points) < 3:
+            low_confidence_bins = True
         avg_prob = sum(p[0] for p in points) / len(points)
         avg_outcome = sum(p[1] for p in points) / len(points)
         binned_points.append((avg_prob, avg_outcome))
@@ -220,9 +228,23 @@ def _fit_market_map(
             "buckets": len(buckets),
             "bins": len(binned_points),
             "min_bin_count": min_bin_count,
+            "low_confidence_bins": low_confidence_bins,
         }
 
     calibration_map = _make_isotonic(binned_points)
+
+    # Safety clamp: prevent small-sample bins from producing 0.0/1.0 certainty.
+    # The fewer total samples, the tighter the clamp — a 34-sample fit should never
+    # claim near-certain outcomes, only a fit with hundreds of samples can approach
+    # the extremes.
+    if len(rows) < 100 or low_confidence_bins:
+        clamp_lo, clamp_hi = 0.15, 0.85
+    elif len(rows) < 300:
+        clamp_lo, clamp_hi = 0.08, 0.92
+    else:
+        clamp_lo, clamp_hi = 0.05, 0.95
+
+    calibration_map = [(x, min(max(y, clamp_lo), clamp_hi)) for x, y in calibration_map]
 
     # Degenerate guard: if pool-adjacent-violators collapsed everything to a single
     # flat level (all y within 1e-6), the market has no monotonic signal — the
@@ -237,6 +259,7 @@ def _fit_market_map(
             "reason": "degenerate map (no monotonic signal; falls back to raw)",
             "samples": len(rows),
             "bins": len(binned_points),
+            "low_confidence_bins": low_confidence_bins,
         }
 
     return calibration_map, {
@@ -244,6 +267,7 @@ def _fit_market_map(
         "samples": len(rows),
         "bins": len(binned_points),
         "map_points": len(calibration_map),
+        "low_confidence_bins": low_confidence_bins,
     }
 
 
