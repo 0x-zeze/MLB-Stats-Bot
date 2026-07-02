@@ -6,7 +6,7 @@ import test from 'node:test';
 import { applyMoneylineValueMarket } from '../src/mlb.js';
 
 function sampleGame(overrides = {}) {
-  return {
+  const base = {
     status: 'Scheduled',
     away: {
       id: 1,
@@ -27,7 +27,8 @@ function sampleGame(overrides = {}) {
     currentOdds: {
       awayMoneyline: 160,
       homeMoneyline: -150,
-      moneylineBook: 'FanDuel'
+      moneylineBook: 'FanDuel',
+      oddsFetchedAt: new Date().toISOString()
     },
     modelBreakdown: {
       matchupEdge: 0.3,
@@ -37,8 +38,20 @@ function sampleGame(overrides = {}) {
     lineups: {
       away: { confirmed: true, count: 9 },
       home: { confirmed: true, count: 9 }
-    },
-    ...overrides
+    }
+  };
+
+  return {
+    ...base,
+    ...overrides,
+    away: { ...base.away, ...overrides.away },
+    home: { ...base.home, ...overrides.home },
+    currentOdds: { ...base.currentOdds, ...overrides.currentOdds },
+    modelBreakdown: { ...base.modelBreakdown, ...overrides.modelBreakdown },
+    lineups: {
+      away: { ...base.lineups.away, ...overrides.lineups?.away },
+      home: { ...base.lineups.home, ...overrides.lineups?.home }
+    }
   };
 }
 
@@ -89,6 +102,38 @@ test('high-conviction underdog with mispriced odds is graded VALUE when quality 
   assert.equal(game.valuePick.teamName, 'Away Underdogs');
   assert.equal(game.valuePick.modelProbability, 64);
   assert.equal(game.betDecision.status, 'VALUE');
+});
+
+test('stale moneyline odds downgrade otherwise valid value bet', () => {
+  const previous = process.env.MONEYLINE_ODDS_MAX_AGE_MINUTES;
+  process.env.MONEYLINE_ODDS_MAX_AGE_MINUTES = '10';
+  try {
+    const game = sampleGame({
+      away: {
+        id: 1,
+        name: 'Away Underdogs',
+        abbreviation: 'AWY',
+        winProbability: 64,
+        starter: { fullName: 'Away Starter' },
+        record: { wins: 45, losses: 30, pct: '.600' }
+      },
+      currentOdds: {
+        awayMoneyline: 110,
+        homeMoneyline: -120,
+        moneylineBook: 'FanDuel',
+        oddsFetchedAt: new Date(Date.now() - 11 * 60 * 1000).toISOString()
+      }
+    });
+
+    applyMoneylineValueMarket(game);
+
+    assert.equal(game.valuePick.teamName, 'Away Underdogs');
+    assert.equal(game.betDecision.status, 'NO BET');
+    assert.ok(game.betDecision.reasons.some((reason) => /odds moneyline stale \d+m > 10m/.test(reason)));
+  } finally {
+    if (previous === undefined) delete process.env.MONEYLINE_ODDS_MAX_AGE_MINUTES;
+    else process.env.MONEYLINE_ODDS_MAX_AGE_MINUTES = previous;
+  }
 });
 
 test('moneyline value gate requires configured 4 percent edge', () => {

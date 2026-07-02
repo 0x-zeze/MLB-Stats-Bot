@@ -16,6 +16,7 @@ const state = {
 let missingKeyLogged = false;
 let oddsCache = {
   fetchedAt: 0,
+  dataFetchedAt: 0,
   data: []
 };
 
@@ -26,7 +27,7 @@ export function __setOddsFetchForTest(fn) {
   oddsFetchImpl = fn;
 }
 export function __resetOddsCacheForTest() {
-  oddsCache = { fetchedAt: 0, data: [] };
+  oddsCache = { fetchedAt: 0, dataFetchedAt: 0, data: [] };
   missingKeyLogged = false;
 }
 export async function __fetchOddsForTest() {
@@ -408,12 +409,13 @@ async function fetchOdds() {
       }
 
       const data = await response.json();
-      oddsCache = { fetchedAt: Date.now(), data };
+      const fetchedAt = Date.now();
+      oddsCache = { fetchedAt, dataFetchedAt: fetchedAt, data };
       return data;
     } catch (err) {
       // Transient (network/timeout/non-quota HTTP): back off 1 cache cycle and
       // surface the error. We do NOT rotate keys here — the key is likely fine.
-      oddsCache = { fetchedAt: Date.now(), data: oddsCache.data };
+      oddsCache = { fetchedAt: Date.now(), dataFetchedAt: oddsCache.dataFetchedAt || 0, data: oddsCache.data };
       throw err;
     } finally {
       clearTimeout(timer);
@@ -423,7 +425,7 @@ async function fetchOdds() {
   // Every available key was quota-exhausted this pass. This is a steady state
   // (not a transient error), so return cache-or-empty rather than throwing —
   // callers treat [] as "no odds", and throwing would spam logs every cycle.
-  oddsCache = { fetchedAt: Date.now(), data: oddsCache.data };
+  oddsCache = { fetchedAt: Date.now(), dataFetchedAt: oddsCache.dataFetchedAt || 0, data: oddsCache.data };
   void lastError;
   return oddsCache.data.length ? oddsCache.data : [];
 }
@@ -452,7 +454,7 @@ export async function attachCurrentOdds(games = []) {
       homeMoneylineBook: snapshot.homeMoneylineBook,
       awayMoneyline: snapshot.awayMoneyline,
       homeMoneyline: snapshot.homeMoneyline,
-      oddsFetchedAt: new Date().toISOString()
+      oddsFetchedAt: new Date(oddsCache.dataFetchedAt || oddsCache.fetchedAt || Date.now()).toISOString()
     };
     result.matchedGames += 1;
   }

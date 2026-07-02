@@ -80,6 +80,7 @@ export function loadConfig() {
     postGamePollMinutes: intFromEnv(process.env.POST_GAME_POLL_MINUTES, 5),
     modelMemory: boolFromEnv(process.env.MODEL_MEMORY, true),
     minimumMoneylineEdge: numberFromEnv(process.env.MINIMUM_MONEYLINE_EDGE, 0.04),
+    moneylineOddsMaxAgeMinutes: numberFromEnv(process.env.MONEYLINE_ODDS_MAX_AGE_MINUTES, 10),
     interactiveAgent: boolFromEnv(process.env.INTERACTIVE_AGENT, true),
     printAlertToTerminal: boolFromEnv(process.env.PRINT_ALERT_TO_TERMINAL, false),
     maxGamesPerMessage: intFromEnv(process.env.MAX_GAMES_PER_MESSAGE, 8),

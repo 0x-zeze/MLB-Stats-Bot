@@ -499,9 +499,33 @@ function moneylineValueEdgeThreshold() {
   return configured <= 1 ? configured * 100 : configured;
 }
 
+function moneylineOddsMaxAgeMinutes() {
+  const configured = toNumber(loadConfig().moneylineOddsMaxAgeMinutes, 10);
+  return configured > 0 ? configured : 10;
+}
+
+function moneylineOddsAgeMinutes(item, now = Date.now()) {
+  const timestamp = item?.currentOdds?.oddsFetchedAt || item?.currentOdds?.fetchedAt || item?.currentOdds?.updatedAt;
+  const fetchedAt = Date.parse(timestamp || '');
+  if (!Number.isFinite(fetchedAt)) return null;
+  return Math.max(0, (now - fetchedAt) / 60000);
+}
+
+function moneylineOddsFreshnessReason(item, now = Date.now()) {
+  const ageMinutes = moneylineOddsAgeMinutes(item, now);
+  const maxAgeMinutes = moneylineOddsMaxAgeMinutes();
+  if (ageMinutes === null) return 'odds moneyline timestamp tidak tersedia';
+  if (ageMinutes > maxAgeMinutes) {
+    return `odds moneyline stale ${ageMinutes.toFixed(0)}m > ${maxAgeMinutes.toFixed(0)}m`;
+  }
+  return '';
+}
+
 function valueSafetyReasons(item, option, evolutionControls = loadEvolutionControls()) {
   const reasons = [];
   if (!option) return ['odds moneyline belum tersedia'];
+  const staleOddsReason = moneylineOddsFreshnessReason(item);
+  if (staleOddsReason) reasons.push(staleOddsReason);
   const edgeThreshold = moneylineValueEdgeThreshold();
 
   if (option.edge < edgeThreshold) {

@@ -198,8 +198,18 @@ async function attachOddsContext(predictions) {
   });
 }
 
+function currentOddsNeedsRefresh(prediction, now = Date.now()) {
+  const odds = prediction?.currentOdds;
+  if (!odds?.awayMoneyline || !odds?.homeMoneyline) return true;
+  const fetchedAt = Date.parse(odds.oddsFetchedAt || odds.fetchedAt || odds.updatedAt || '');
+  if (!Number.isFinite(fetchedAt)) return true;
+  const maxAgeMinutes = Number(config.moneylineOddsMaxAgeMinutes);
+  const maxAgeMs = (Number.isFinite(maxAgeMinutes) && maxAgeMinutes > 0 ? maxAgeMinutes : 10) * 60_000;
+  return now - fetchedAt > maxAgeMs;
+}
+
 async function attachMarketContext(predictions) {
-  if (!predictions.some((prediction) => prediction.currentOdds)) {
+  if (predictions.some((prediction) => currentOddsNeedsRefresh(prediction))) {
     await attachOddsContext(predictions);
   }
 
@@ -207,10 +217,12 @@ async function attachMarketContext(predictions) {
   const marketOddsMultiplier = moneylineWeightMultiplier(evolutionControls, 'market_odds');
 
   for (const prediction of predictions) {
+    const currentOddsFresh = !currentOddsNeedsRefresh(prediction);
+
     // Bayesian prior: blend model probability with market-implied probability.
     // Market odds are the single best predictor; even a small blend (10-15%)
     // improves calibration and reduces overconfidence.
-    if (prediction.currentOdds && marketOddsMultiplier > 0) {
+    if (currentOddsFresh && prediction.currentOdds && marketOddsMultiplier > 0) {
       const homeImplied = americanImpliedProbability(prediction.currentOdds.homeMoneyline);
       const awayImplied = americanImpliedProbability(prediction.currentOdds.awayMoneyline);
       if (homeImplied != null && awayImplied != null) {
@@ -220,12 +232,13 @@ async function attachMarketContext(predictions) {
         const awayNorm = (awayImplied / totalImplied) * 100;
         // Blend weight: base 0.12 scaled by evolution multiplier
         const w = Math.min(0.25, 0.12 * marketOddsMultiplier);
-        const rawHome = Number(prediction.home?.winProbabilityRaw ?? prediction.home?.winProbability);
-        const rawAway = Number(prediction.away?.winProbabilityRaw ?? prediction.away?.winProbability);
+        const rawHome = Number(prediction.modelBreakdown?.rawHomeProbability ?? prediction.home?.winProbabilityRaw ?? prediction.home?.winProbability);
+        const rawAway = Number(prediction.modelBreakdown?.rawAwayProbability ?? prediction.away?.winProbabilityRaw ?? prediction.away?.winProbability);
         if (Number.isFinite(rawHome) && Number.isFinite(rawAway)) {
           const blendedHome = rawHome * (1 - w) + homeNorm * w;
           const blendedAway = rawAway * (1 - w) + awayNorm * w;
-          // Re-calibrate the blended probabilities
+          // Re-calibrate the blended probabilities. Keep winProbabilityRaw anchored
+          // to the original model so repeated /picks calls do not compound-blend.
           const calibrated = hasCalibrationMap('moneyline');
           const newHome = calibrated
             ? Math.round(Math.max(30, Math.min(70, calibratePercent(blendedHome, 'moneyline'))))
@@ -233,8 +246,10 @@ async function attachMarketContext(predictions) {
           const newAway = 100 - newHome;
           prediction.home.winProbability = newHome;
           prediction.away.winProbability = newAway;
-          prediction.home.winProbabilityRaw = blendedHome;
-          prediction.away.winProbabilityRaw = blendedAway;
+          if (prediction.modelBreakdown) {
+            prediction.modelBreakdown.marketBlendedHomeProbability = blendedHome;
+            prediction.modelBreakdown.marketBlendedAwayProbability = blendedAway;
+          }
           // Update winner based on new probabilities
           if (newHome >= newAway) {
             prediction.winner = prediction.home;
@@ -246,9 +261,9 @@ async function attachMarketContext(predictions) {
     }
 
     // Sharp money detection: compare opening odds vs current odds
-    // Now that odds are attached, we can detect line movement before VALUE gating.
+    // Now that fresh odds are attached, we can detect line movement before VALUE gating.
     const openingOdds = prediction.openingOdds || storage.openingOddsFromSnapshots(prediction.gamePk);
-    const currentOdds = prediction.currentOdds;
+    const currentOdds = currentOddsFresh ? prediction.currentOdds : null;
     if (openingOdds && currentOdds && prediction.modelBreakdown) {
       const pickName = prediction.winner?.name ||
         (prediction.home?.winProbability >= prediction.away?.winProbability ? prediction.home?.name : prediction.away?.name);
@@ -1241,10 +1256,13 @@ async function handlePicksCommand(bot, chatId, question, dateYmd = dateInTimezon
     // Work with the in-memory version so raw conviction is preserved for /picks.
     predictions = await getMlbPredictions(dateYmd, config.modelMemory ? storage.getMemory() : {});
     predictions = predictions || [];
-    await attachMarketContext(predictions);
-    storage.savePredictions(dateYmd, predictions);
-    setCachedPredictions(chatId, dateYmd, predictions);
   }
+
+  // Re-run market context on cached predictions too. Cached odds can age past the
+  // freshness window; stale prices must refresh or get downgraded before ledger.
+  await attachMarketContext(predictions);
+  storage.savePredictions(dateYmd, predictions);
+  setCachedPredictions(chatId, dateYmd, predictions);
 
   // Record each VALUE bet at decision time (idempotent on game+market) so the
   // /ledger can later settle it to units P/L. NO BET / leans are skipped inside
