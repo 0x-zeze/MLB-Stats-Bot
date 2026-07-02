@@ -245,10 +245,8 @@ async function attachMarketContext(predictions) {
       }
     }
 
-    applyMoneylineValueMarket(prediction);
-
     // Sharp money detection: compare opening odds vs current odds
-    // Now that odds are attached, we can detect line movement properly.
+    // Now that odds are attached, we can detect line movement before VALUE gating.
     const openingOdds = prediction.openingOdds || storage.openingOddsFromSnapshots(prediction.gamePk);
     const currentOdds = prediction.currentOdds;
     if (openingOdds && currentOdds && prediction.modelBreakdown) {
@@ -279,6 +277,8 @@ async function attachMarketContext(predictions) {
         }
       }
     }
+
+    applyMoneylineValueMarket(prediction);
   }
 
   return predictions;

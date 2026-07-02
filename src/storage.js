@@ -1519,6 +1519,7 @@ export class Storage {
     const decision = prediction?.betDecision;
     const value = prediction?.valuePick;
     if (!decision || decision.status !== 'VALUE') return null;
+    if (Array.isArray(decision.reasons) && decision.reasons.length > 0) return null;
     if (!value || !(Number(value.kellyStakePercent) > 0)) return null;
 
     const gamePk = String(prediction.gamePk || '');
