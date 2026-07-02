@@ -93,7 +93,8 @@ test('high-conviction underdog with mispriced odds is graded VALUE when quality 
     currentOdds: {
       awayMoneyline: 110,
       homeMoneyline: -120,
-      moneylineBook: 'FanDuel'
+      moneylineBook: 'FanDuel',
+      oddsFetchedAt: new Date().toISOString()
     }
   });
 
@@ -102,6 +103,124 @@ test('high-conviction underdog with mispriced odds is graded VALUE when quality 
   assert.equal(game.valuePick.teamName, 'Away Underdogs');
   assert.equal(game.valuePick.modelProbability, 64);
   assert.equal(game.betDecision.status, 'VALUE');
+  assert.ok(!game.betDecision.reasons.some((reason) => /odds moneyline/.test(reason)));
+});
+
+test('market-informed display probability does not change moneyline value edge', () => {
+  const pureGame = sampleGame({
+    away: {
+      id: 1,
+      name: 'Away Underdogs',
+      abbreviation: 'AWY',
+      winProbability: 64,
+      pureModelProbability: 64,
+      marketInformedProbability: null,
+      starter: { fullName: 'Away Starter' },
+      record: { wins: 45, losses: 30, pct: '.600' }
+    },
+    home: {
+      id: 2,
+      name: 'Home Favorites',
+      abbreviation: 'HOM',
+      winProbability: 36,
+      pureModelProbability: 36,
+      marketInformedProbability: null,
+      starter: { fullName: 'Home Starter' },
+      record: { wins: 42, losses: 33, pct: '.560' }
+    },
+    currentOdds: {
+      awayMoneyline: 110,
+      homeMoneyline: -120,
+      moneylineBook: 'FanDuel',
+      oddsFetchedAt: new Date().toISOString()
+    },
+    modelBreakdown: {
+      matchupEdge: 0.3,
+      recordContextEdge: 0.02,
+      recordDominated: false,
+      pureAwayProbability: 64,
+      pureHomeProbability: 36
+    }
+  });
+  const displayedBlendGame = sampleGame({
+    away: {
+      id: 1,
+      name: 'Away Underdogs',
+      abbreviation: 'AWY',
+      winProbability: 58,
+      pureModelProbability: 64,
+      marketInformedProbability: 58,
+      starter: { fullName: 'Away Starter' },
+      record: { wins: 45, losses: 30, pct: '.600' }
+    },
+    home: {
+      id: 2,
+      name: 'Home Favorites',
+      abbreviation: 'HOM',
+      winProbability: 42,
+      pureModelProbability: 36,
+      marketInformedProbability: 42,
+      starter: { fullName: 'Home Starter' },
+      record: { wins: 42, losses: 33, pct: '.560' }
+    },
+    currentOdds: {
+      awayMoneyline: 110,
+      homeMoneyline: -120,
+      moneylineBook: 'FanDuel',
+      oddsFetchedAt: new Date().toISOString()
+    },
+    modelBreakdown: {
+      matchupEdge: 0.3,
+      recordContextEdge: 0.02,
+      recordDominated: false,
+      pureAwayProbability: 64,
+      pureHomeProbability: 36,
+      marketInformedAwayProbability: 58,
+      marketInformedHomeProbability: 42
+    }
+  });
+
+  assert.notEqual(pureGame.away.winProbability, displayedBlendGame.away.winProbability);
+
+  applyMoneylineValueMarket(pureGame);
+  applyMoneylineValueMarket(displayedBlendGame);
+
+  assert.equal(pureGame.valuePick.side, 'away');
+  assert.equal(displayedBlendGame.valuePick.side, 'away');
+  assert.equal(pureGame.valuePick.modelProbability, 64);
+  assert.equal(displayedBlendGame.valuePick.modelProbability, 64);
+  assert.equal(displayedBlendGame.away.winProbability, 58);
+  assert.equal(pureGame.valuePick.edge, displayedBlendGame.valuePick.edge);
+  assert.equal(pureGame.betDecision.modelProbability, displayedBlendGame.betDecision.modelProbability);
+  assert.equal(pureGame.betDecision.edge, displayedBlendGame.betDecision.edge);
+});
+
+test('missing moneyline odds timestamp downgrades otherwise valid value bet', () => {
+  const game = sampleGame({
+    away: {
+      id: 1,
+      name: 'Away Underdogs',
+      abbreviation: 'AWY',
+      winProbability: 64,
+      starter: { fullName: 'Away Starter' },
+      record: { wins: 45, losses: 30, pct: '.600' }
+    },
+    currentOdds: {
+      awayMoneyline: 110,
+      homeMoneyline: -120,
+      moneylineBook: 'FanDuel',
+      oddsFetchedAt: undefined,
+      fetchedAt: undefined,
+      updatedAt: undefined
+    }
+  });
+
+  applyMoneylineValueMarket(game);
+
+  assert.equal(game.valuePick.teamName, 'Away Underdogs');
+  assert.equal(game.betDecision.status, 'NO BET');
+  assert.ok(game.betDecision.reasons.includes('odds moneyline timestamp tidak tersedia'));
+  assert.equal(game.betDecision.reason, 'odds moneyline timestamp tidak tersedia');
 });
 
 test('stale moneyline odds downgrade otherwise valid value bet', () => {

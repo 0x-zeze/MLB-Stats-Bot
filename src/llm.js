@@ -657,17 +657,24 @@ function supportingFactors(prediction, side, limit = 3) {
     .map((item) => item.label);
 }
 
-// Returns the model-vs-market edge for the picked side recomputed against the
-// CALIBRATED probability, plus the odds context, when a price is available.
-function calibratedEdge(prediction, calibratedProbability) {
-  const decision = prediction.betDecision || {};
-  const implied = toNumber(decision.impliedProbability, NaN);
-  if (!Number.isFinite(implied)) return null;
+// Returns the stored pure-model-vs-market edge for the picked side, plus the odds
+// context, when a price is available. Do not recompute from winProbability here:
+// the live bot may have already blended market odds into that display field.
+function calibratedEdge(prediction, pick) {
+  const options = Array.isArray(prediction.moneylineValueOptions) ? prediction.moneylineValueOptions : [];
+  const valuePick = prediction.valuePick || null;
+  const decision = prediction.betDecision || null;
+  const option = options.find((candidate) => String(candidate.teamId) === String(pick?.id)) ||
+    (String(valuePick?.teamId) === String(pick?.id) ? valuePick : null) ||
+    (String(decision?.teamId) === String(pick?.id) ? decision : null);
+  const edge = toNumber(option?.edge, NaN);
+  const implied = toNumber(option?.fairProbability ?? option?.impliedProbability, NaN);
+  if (!Number.isFinite(edge) || !Number.isFinite(implied)) return null;
   return {
-    edge: Math.round((calibratedProbability - implied) * 10) / 10,
+    edge: Math.round(edge * 10) / 10,
     implied: Math.round(implied * 10) / 10,
-    odds: decision.odds,
-    book: decision.book
+    odds: option.odds,
+    book: option.book
   };
 }
 
@@ -692,7 +699,7 @@ function topPickCandidate(prediction) {
     probability
   );
   const confidence = prediction.agentAnalysis?.confidence || deterministicConfidenceFromPrediction(prediction, rawProbability);
-  const calibratedEdgeInfo = calibratedEdge(prediction, probability);
+  const calibratedEdgeInfo = calibratedEdge(prediction, pick);
   // Prefer the calibrated edge; fall back to the stored raw edge when no odds.
   const edge = calibratedEdgeInfo
     ? calibratedEdgeInfo.edge

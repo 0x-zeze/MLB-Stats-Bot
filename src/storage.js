@@ -261,6 +261,8 @@ function compactPrediction(prediction, dateYmd) {
       abbreviation: prediction.away.abbreviation,
       winProbability: awayProbability,
       winProbabilityRaw: prediction.away.winProbabilityRaw ?? awayProbability,
+      pureModelProbability: prediction.away.pureModelProbability ?? prediction.modelBreakdown?.pureAwayProbability ?? awayProbability,
+      marketInformedProbability: prediction.away.marketInformedProbability ?? prediction.modelBreakdown?.marketInformedAwayProbability ?? null,
       record: prediction.away.record || null
     },
     home: {
@@ -269,6 +271,8 @@ function compactPrediction(prediction, dateYmd) {
       abbreviation: prediction.home.abbreviation,
       winProbability: homeProbability,
       winProbabilityRaw: prediction.home.winProbabilityRaw ?? homeProbability,
+      pureModelProbability: prediction.home.pureModelProbability ?? prediction.modelBreakdown?.pureHomeProbability ?? homeProbability,
+      marketInformedProbability: prediction.home.marketInformedProbability ?? prediction.modelBreakdown?.marketInformedHomeProbability ?? null,
       record: prediction.home.record || null
     },
     pick: {

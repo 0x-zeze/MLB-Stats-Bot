@@ -218,6 +218,27 @@ async function attachMarketContext(predictions) {
 
   for (const prediction of predictions) {
     const currentOddsFresh = !currentOddsNeedsRefresh(prediction);
+    const pureHome = Number(prediction.home?.pureModelProbability ?? prediction.modelBreakdown?.pureHomeProbability ?? prediction.home?.winProbability);
+    const pureAway = Number(prediction.away?.pureModelProbability ?? prediction.modelBreakdown?.pureAwayProbability ?? prediction.away?.winProbability);
+    if (Number.isFinite(pureHome)) prediction.home.pureModelProbability = pureHome;
+    if (Number.isFinite(pureAway)) prediction.away.pureModelProbability = pureAway;
+    if (prediction.modelBreakdown) {
+      if (Number.isFinite(pureHome)) prediction.modelBreakdown.pureHomeProbability = pureHome;
+      if (Number.isFinite(pureAway)) prediction.modelBreakdown.pureAwayProbability = pureAway;
+    }
+    if (Number.isFinite(pureHome)) prediction.home.winProbability = pureHome;
+    if (Number.isFinite(pureAway)) prediction.away.winProbability = pureAway;
+    if (Number.isFinite(pureHome) && Number.isFinite(pureAway)) {
+      prediction.winner = pureHome >= pureAway ? prediction.home : prediction.away;
+    }
+    prediction.home.marketInformedProbability = null;
+    prediction.away.marketInformedProbability = null;
+    if (prediction.modelBreakdown) {
+      prediction.modelBreakdown.marketBlendedHomeProbability = null;
+      prediction.modelBreakdown.marketBlendedAwayProbability = null;
+      prediction.modelBreakdown.marketInformedHomeProbability = null;
+      prediction.modelBreakdown.marketInformedAwayProbability = null;
+    }
 
     // Bayesian prior: blend model probability with market-implied probability.
     // Market odds are the single best predictor; even a small blend (10-15%)
@@ -244,11 +265,15 @@ async function attachMarketContext(predictions) {
             ? Math.round(Math.max(30, Math.min(70, calibratePercent(blendedHome, 'moneyline'))))
             : Math.round(Math.max(30, Math.min(70, blendedHome)));
           const newAway = 100 - newHome;
+          prediction.home.marketInformedProbability = newHome;
+          prediction.away.marketInformedProbability = newAway;
           prediction.home.winProbability = newHome;
           prediction.away.winProbability = newAway;
           if (prediction.modelBreakdown) {
             prediction.modelBreakdown.marketBlendedHomeProbability = blendedHome;
             prediction.modelBreakdown.marketBlendedAwayProbability = blendedAway;
+            prediction.modelBreakdown.marketInformedHomeProbability = newHome;
+            prediction.modelBreakdown.marketInformedAwayProbability = newAway;
           }
           // Update winner based on new probabilities
           if (newHome >= newAway) {

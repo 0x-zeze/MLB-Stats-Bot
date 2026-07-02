@@ -435,12 +435,12 @@ function americanProfitMultiple(value) {
   return odds > 0 ? odds / 100 : 100 / Math.abs(odds);
 }
 
-// Quarter-Kelly stake as a % of bankroll, computed from the CALIBRATED model
-// probability (winProbability, not winProbabilityRaw) and the offered American
-// odds. Calibration deliberately compresses model overconfidence; sizing off
-// raw conviction would re-inflate the edge and oversize bets. Quarter-Kelly
-// (fraction 0.25) matches the bot's risk_management.py default. Returns null
-// when there is no positive-EV stake.
+// Quarter-Kelly stake as a % of bankroll, computed from the pure CALIBRATED
+// model probability (not winProbabilityRaw and not market-informed display odds)
+// and the offered American odds. Calibration deliberately compresses model
+// overconfidence; sizing off raw conviction would re-inflate the edge and
+// oversize bets. Quarter-Kelly (fraction 0.25) matches the bot's
+// risk_management.py default. Returns null when there is no positive-EV stake.
 const KELLY_FRACTION = 0.25;
 function quarterKellyPercent(modelProbabilityPercent, odds) {
   const b = americanProfitMultiple(odds);
@@ -453,12 +453,12 @@ function quarterKellyPercent(modelProbabilityPercent, odds) {
   return round1(fullKelly * KELLY_FRACTION * 100);
 }
 
-function displayedProbabilityForSide(item, side) {
-  if (side === 'away') {
-    return toNumber(item.agentAnalysis?.awayProbability ?? item.away?.winProbability, 50);
-  }
-
-  return toNumber(item.agentAnalysis?.homeProbability ?? item.home?.winProbability, 50);
+function pureModelProbabilityForSide(item, side) {
+  const team = side === 'away' ? item.away : item.home;
+  const breakdownProbability = side === 'away'
+    ? item.modelBreakdown?.pureAwayProbability
+    : item.modelBreakdown?.pureHomeProbability;
+  return toNumber(team?.pureModelProbability ?? breakdownProbability ?? team?.winProbability, 50);
 }
 
 function moneylineValueOption(item, side) {
@@ -467,7 +467,7 @@ function moneylineValueOption(item, side) {
   if (!Number.isFinite(Number(odds)) || impliedProbability === null) return null;
 
   const team = side === 'away' ? item.away : item.home;
-  const modelProbability = displayedProbabilityForSide(item, side);
+  const modelProbability = pureModelProbabilityForSide(item, side);
 
   // Edge against the no-vig fair line when both sides are available; otherwise
   // fall back to raw implied (single-sided) so a missing opposite price doesn't
@@ -554,7 +554,7 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
   // When the model's favored side disagrees with the market favorite,
   // the model is wrong more often than right. Require the model's pick
   // to be the market favorite (or near-even) to stake.
-  const modelFavoredSide = toNumber(item.home?.winProbability, 50) >= toNumber(item.away?.winProbability, 50) ? 'home' : 'away';
+  const modelFavoredSide = pureModelProbabilityForSide(item, 'home') >= pureModelProbabilityForSide(item, 'away') ? 'home' : 'away';
   if (option.side !== modelFavoredSide) {
     reasons.push('pick berlawanan dengan model favored side');
   }
@@ -3013,6 +3013,8 @@ function predictGame(
     recordDominated,
     rawHomeProbability,
     rawAwayProbability,
+    pureHomeProbability: homeProbability,
+    pureAwayProbability: awayProbability,
     activeWeightVersion: evolutionControls.activeWeightVersion,
     situationalWeights: sitWeights,
     predictionTier: determinePredictionTier(game.gameDate),
@@ -3035,7 +3037,9 @@ function predictGame(
     starterEra: homePitcherStats ? statEra(homePitcherStats) : null,
     openerSituation: homeOpenerSituation,
     winProbability: homeProbability,
-    winProbabilityRaw: rawHomeProbability
+    winProbabilityRaw: rawHomeProbability,
+    pureModelProbability: homeProbability,
+    marketInformedProbability: null
   };
   const away = {
     id: awayTeam.id,
@@ -3049,7 +3053,9 @@ function predictGame(
     starterEra: awayPitcherStats ? statEra(awayPitcherStats) : null,
     openerSituation: awayOpenerSituation,
     winProbability: awayProbability,
-    winProbabilityRaw: rawAwayProbability
+    winProbabilityRaw: rawAwayProbability,
+    pureModelProbability: awayProbability,
+    marketInformedProbability: null
   };
 
   const reasons = createReasons({
