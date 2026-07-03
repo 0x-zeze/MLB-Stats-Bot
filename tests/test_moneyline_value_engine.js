@@ -195,6 +195,62 @@ test('market-informed display probability does not change moneyline value edge',
   assert.equal(pureGame.betDecision.edge, displayedBlendGame.betDecision.edge);
 });
 
+test('moneyline value edge uses pure probability instead of market-blended probability', () => {
+  const game = sampleGame({
+    away: {
+      id: 1,
+      name: 'Away Favorites',
+      abbreviation: 'AWY',
+      winProbability: 48,
+      pureModelProbability: 36,
+      marketInformedProbability: 48,
+      starter: { fullName: 'Away Starter' },
+      record: { wins: 42, losses: 33, pct: '.560' }
+    },
+    home: {
+      id: 2,
+      name: 'Home Underdogs',
+      abbreviation: 'HOM',
+      winProbability: 52,
+      pureModelProbability: 64,
+      marketInformedProbability: 52,
+      starter: { fullName: 'Home Starter' },
+      record: { wins: 45, losses: 30, pct: '.600' }
+    },
+    currentOdds: {
+      awayMoneyline: -120,
+      homeMoneyline: 110,
+      moneylineBook: 'FanDuel',
+      oddsFetchedAt: new Date().toISOString()
+    },
+    modelBreakdown: {
+      matchupEdge: 0.3,
+      recordContextEdge: 0.02,
+      recordDominated: false,
+      pureAwayProbability: 36,
+      pureHomeProbability: 64,
+      marketBlendedAwayProbability: 48,
+      marketBlendedHomeProbability: 52,
+      marketInformedAwayProbability: 48,
+      marketInformedHomeProbability: 52
+    }
+  });
+
+  applyMoneylineValueMarket(game);
+
+  const pureEdge = Number((game.home.pureModelProbability - game.valuePick.fairProbability).toFixed(1));
+  const blendedEdge = Number((game.modelBreakdown.marketBlendedHomeProbability - game.valuePick.fairProbability).toFixed(1));
+
+  assert.equal(game.valuePick.side, 'home');
+  assert.equal(game.valuePick.modelProbability, 64);
+  assert.equal(game.home.winProbability, 52);
+  assert.equal(game.modelBreakdown.marketBlendedHomeProbability, 52);
+  assert.equal(game.valuePick.edge, pureEdge);
+  assert.notEqual(game.valuePick.edge, blendedEdge);
+  assert.equal(Number((game.valuePick.edge / 100).toFixed(3)), Number(((game.home.pureModelProbability / 100) - (game.valuePick.fairProbability / 100)).toFixed(3)));
+  assert.notEqual(Number((game.valuePick.edge / 100).toFixed(3)), Number(((game.modelBreakdown.marketBlendedHomeProbability / 100) - (game.valuePick.fairProbability / 100)).toFixed(3)));
+});
+
 test('missing moneyline odds timestamp downgrades otherwise valid value bet', () => {
   const game = sampleGame({
     away: {
