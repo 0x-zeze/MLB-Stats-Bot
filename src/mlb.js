@@ -2975,19 +2975,18 @@ function predictGame(
   const rawAwayProbability = 100 - rawHomeProbability;
   // Calibrate at the source so every surface (cards, /picks, auto-alert, stored
   // picks, dashboard) shows the same honest, observed-frequency probability.
-  // Calibrate the favored side and derive the other as its complement so the two
-  // always sum to 100. Keep the raw model probability for conviction-based
-  // confidence/tiering (the calibration map compresses the scale toward 50).
+  // Moneyline uses low-sample shrinkage until the metadata says its isotonic map
+  // has enough settled samples. Calibrate the favored side and derive the other
+  // as its complement so the two always sum to 100. Keep the raw model probability
+  // for conviction-based confidence/tiering.
   let homeProbability = rawHomeProbability;
   let awayProbability = rawAwayProbability;
-  if (hasCalibrationMap('moneyline')) {
-    if (rawHomeProbability >= 50) {
-      homeProbability = clamp(calibratePercent(rawHomeProbability, 'moneyline'), 30, 70);
-      awayProbability = 100 - homeProbability;
-    } else {
-      awayProbability = clamp(calibratePercent(rawAwayProbability, 'moneyline'), 30, 70);
-      homeProbability = 100 - awayProbability;
-    }
+  if (rawHomeProbability >= 50) {
+    homeProbability = clamp(calibratePercent(rawHomeProbability, 'moneyline'), 30, 70);
+    awayProbability = 100 - homeProbability;
+  } else {
+    awayProbability = clamp(calibratePercent(rawAwayProbability, 'moneyline'), 30, 70);
+    homeProbability = 100 - awayProbability;
   }
   const modelBreakdown = {
     rawEdge: edge,

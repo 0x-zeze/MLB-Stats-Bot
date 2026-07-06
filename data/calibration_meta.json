@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "source": "SQLite bet_ledger",
+  "calibrated_markets": [
+    "moneyline",
+    "yrfi"
+  ],
+  "markets": {
+    "moneyline": {
+      "status": "success",
+      "samples": 38,
+      "bins": 4,
+      "map_points": 4,
+      "low_confidence_bins": true
+    },
+    "yrfi": {
+      "status": "success",
+      "samples": 409,
+      "bins": 3,
+      "map_points": 3,
+      "low_confidence_bins": false
+    }
+  },
+  "policies": {
+    "moneyline": {
+      "min_samples_for_isotonic": 150,
+      "low_sample_strategy": "shrink_toward_50",
+      "shrinkage_factor": 0.5
+    },
+    "yrfi": {
+      "min_samples_for_isotonic": 40,
+      "low_sample_strategy": "isotonic"
+    }
+  }
+}

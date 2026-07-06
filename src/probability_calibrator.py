@@ -22,6 +22,8 @@ _OUTCOMES_PATH = _DATA_DIR / "evolution" / "prediction_outcomes.csv"
 _CALIBRATION_MAP_PATH = _DATA_DIR / "calibration_map.json"
 # Per-market maps: {"moneyline": [[x,y],...], "yrfi": [...]}.
 _CALIBRATION_MAPS_PATH = _DATA_DIR / "calibration_maps.json"
+# Per-market fit metadata, including sample counts used by runtime policy gates.
+_CALIBRATION_META_PATH = _DATA_DIR / "calibration_meta.json"
 _SQLITE_PATH = _DATA_DIR / "state.sqlite"
 
 _MARKETS = ("moneyline", "yrfi")
@@ -43,13 +45,51 @@ _SQLITE_MARKET_PARAMS: dict[str, dict[str, float]] = {
     "yrfi": {"min_samples": 30, "bucket_size": 0.05, "min_bin_count": 2},
 }
 
+_MIN_ISOTONIC_SAMPLES_FOR_TRUST = {
+    "moneyline": 150,  # isotonic overfits below this; use shrinkage instead
+    "yrfi": 40,
+}
+
+_SHRINKAGE_FACTOR = {
+    "moneyline": 0.5,  # pull raw probability 50% of the way toward 0.5
+}
+
 _cached_maps: dict[str, list[tuple[float, float]]] | None = None
+_cached_disk_maps: dict[str, list[tuple[float, float]]] | None = None
+_cached_maps_path: Path | None = None
+_cached_meta: dict[str, Any] | None = None
+_cached_meta_path: Path | None = None
+
+
+def _calibration_meta_path() -> Path:
+    return _CALIBRATION_MAPS_PATH.with_name(_CALIBRATION_META_PATH.name)
+
+
+def _load_calibration_meta() -> dict[str, Any]:
+    global _cached_meta, _cached_meta_path
+    meta_path = _calibration_meta_path()
+    if _cached_meta is not None and _cached_meta_path == meta_path:
+        return _cached_meta
+
+    meta: dict[str, Any] = {}
+    if meta_path.exists():
+        try:
+            raw = json.loads(meta_path.read_text())
+            if isinstance(raw, dict):
+                meta = raw
+        except (json.JSONDecodeError, OSError, TypeError):
+            meta = {}
+
+    _cached_meta = meta
+    _cached_meta_path = meta_path
+    return meta
 
 
 def _load_calibration_maps() -> dict[str, list[tuple[float, float]]]:
-    global _cached_maps
+    global _cached_maps, _cached_disk_maps, _cached_maps_path
     if _cached_maps is not None:
-        return _cached_maps
+        if _cached_maps is not _cached_disk_maps or _cached_maps_path == _CALIBRATION_MAPS_PATH:
+            return _cached_maps
 
     maps: dict[str, list[tuple[float, float]]] = {}
     # Prefer the per-market file; fall back to the legacy moneyline-only file.
@@ -68,7 +108,29 @@ def _load_calibration_maps() -> dict[str, list[tuple[float, float]]]:
             pass
 
     _cached_maps = maps
+    _cached_disk_maps = maps
+    _cached_maps_path = _CALIBRATION_MAPS_PATH
     return maps
+
+
+def _shrink_toward_half(raw_probability: float, market: str) -> float:
+    """Safe fallback calibration that can only compress toward 0.5."""
+    factor = _SHRINKAGE_FACTOR.get(market, 0.5)
+    return 0.5 + (raw_probability - 0.5) * (1.0 - factor)
+
+
+def _uses_low_sample_shrinkage(market: str) -> bool:
+    threshold = _MIN_ISOTONIC_SAMPLES_FOR_TRUST.get(market)
+    if threshold is None or market not in _SHRINKAGE_FACTOR:
+        return False
+    if _cached_maps is not None and _cached_maps is not _cached_disk_maps:
+        return False
+    samples = _load_calibration_meta().get("markets", {}).get(market, {}).get("samples")
+    try:
+        sample_count = int(samples)
+    except (TypeError, ValueError):
+        return False
+    return sample_count < threshold
 
 
 def _interpolate(mapping: list[tuple[float, float]], raw: float) -> float:
@@ -101,7 +163,12 @@ def calibrate(raw_probability: float, market: str = "moneyline") -> float:
     market (e.g. not enough samples yet), so an uncalibrated market is never
     worse than the model's own estimate.
     """
-    mapping = _load_calibration_maps().get(str(market).strip().lower())
+    market_key = str(market).strip().lower()
+    if _uses_low_sample_shrinkage(market_key):
+        calibrated = _shrink_toward_half(raw_probability, market_key)
+        return clamp(calibrated, 0.05, 0.95)
+
+    mapping = _load_calibration_maps().get(market_key)
     if not mapping:
         return raw_probability
     calibrated = _interpolate(mapping, raw_probability)
@@ -278,12 +345,33 @@ def _write_calibration_maps(
     source: str,
 ) -> dict[str, Any]:
     """Persist per-market maps and keep legacy moneyline map synced."""
-    global _cached_maps
+    global _cached_maps, _cached_disk_maps, _cached_maps_path, _cached_meta, _cached_meta_path
 
-    if not maps:
-        return {"status": "skipped", "reason": "no market had enough samples", "markets": per_market, "source": source}
+    calibrated_markets = sorted(maps.keys())
+    meta = {
+        "version": 1,
+        "source": source,
+        "calibrated_markets": calibrated_markets,
+        "markets": per_market,
+        "policies": {
+            "moneyline": {
+                "min_samples_for_isotonic": _MIN_ISOTONIC_SAMPLES_FOR_TRUST["moneyline"],
+                "low_sample_strategy": "shrink_toward_50",
+                "shrinkage_factor": _SHRINKAGE_FACTOR["moneyline"],
+            },
+            "yrfi": {
+                "min_samples_for_isotonic": _MIN_ISOTONIC_SAMPLES_FOR_TRUST["yrfi"],
+                "low_sample_strategy": "isotonic",
+            },
+        },
+    }
 
     _CALIBRATION_MAPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    meta_path = _calibration_meta_path()
+    meta_path.write_text(json.dumps(meta, indent=2))
+    _cached_meta = meta
+    _cached_meta_path = meta_path
+
     _CALIBRATION_MAPS_PATH.write_text(
         json.dumps({m: [list(p) for p in pts] for m, pts in maps.items()}, indent=2)
     )
@@ -291,13 +379,29 @@ def _write_calibration_maps(
         _CALIBRATION_MAP_PATH.write_text(
             json.dumps([list(p) for p in maps["moneyline"]], indent=2)
         )
+    elif _CALIBRATION_MAP_PATH.exists():
+        _CALIBRATION_MAP_PATH.unlink()
     _cached_maps = maps
+    _cached_disk_maps = maps
+    _cached_maps_path = _CALIBRATION_MAPS_PATH
+
+    if not maps:
+        return {
+            "status": "skipped",
+            "reason": "no market had enough samples",
+            "markets": per_market,
+            "calibrated_markets": calibrated_markets,
+            "path": str(_CALIBRATION_MAPS_PATH),
+            "meta_path": str(meta_path),
+            "source": source,
+        }
 
     return {
         "status": "success",
         "markets": per_market,
-        "calibrated_markets": sorted(maps.keys()),
+        "calibrated_markets": calibrated_markets,
         "path": str(_CALIBRATION_MAPS_PATH),
+        "meta_path": str(meta_path),
         "source": source,
     }
 
