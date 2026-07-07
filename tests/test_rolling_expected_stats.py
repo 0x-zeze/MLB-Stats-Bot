@@ -101,8 +101,8 @@ class TestXstatsOffenseAdjustment(unittest.TestCase):
             sample_size=200,
         )
         result = xstats_offense_adjustment(stats)
-        self.assertLessEqual(result, 0.40)
-        self.assertGreaterEqual(result, -0.40)
+        self.assertLessEqual(result, 0.45)  # clamp widened for sweet-spot + distance signals
+        self.assertGreaterEqual(result, -0.45)
 
 
 if __name__ == "__main__":

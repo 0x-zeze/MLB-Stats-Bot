@@ -57,7 +57,7 @@ test('recordBet logs a VALUE bet and settleBet pays a win in units', () => {
 
   storage.savePredictions('2026-06-12', [pred]);
   const id = storage.recordBet(pred);
-  assert.equal(id, '2026-06-12-moneyline-01');
+  assert.equal(id, '2026-06-12-moneyline-10');
 
   let rows = storage.readLedger();
   assert.equal(rows.length, 1);
@@ -103,7 +103,7 @@ test('recordBet is idempotent and settleBet does not double-count', () => {
   storage.savePredictions('2026-06-12', [pred]);
   const id1 = storage.recordBet(pred);
   const id2 = storage.recordBet(pred); // re-run /picks
-  assert.equal(id1, '2026-06-12-moneyline-01');
+  assert.equal(id1, '2026-06-12-moneyline-30');
   assert.equal(id2, null); // no duplicate
   assert.equal(storage.readLedger().length, 1);
 
@@ -124,7 +124,7 @@ test('recordBet skips NO BET and zero-stake picks', () => {
   assert.equal(storage.readLedger().length, 0);
 });
 
-test('decision_id increments per same-day same-market bet', () => {
+test('decision_id is unique per game for same-day same-market bets', () => {
   const { storage } = freshStorage();
   const a = team(1, 'Aces', 'ACE');
   const b = team(2, 'Bats', 'BAT');
@@ -133,8 +133,8 @@ test('decision_id increments per same-day same-market bet', () => {
   const p1 = valuePrediction(50, '2026-06-12', a, b, 'away', { odds: 150, stake: 2, model: 57, fair: 51 });
   const p2 = valuePrediction(51, '2026-06-12', c, d, 'home', { odds: 120, stake: 1.5, model: 55, fair: 50 });
   storage.savePredictions('2026-06-12', [p1, p2]);
-  assert.equal(storage.recordBet(p1), '2026-06-12-moneyline-01');
-  assert.equal(storage.recordBet(p2), '2026-06-12-moneyline-02');
+  assert.equal(storage.recordBet(p1), '2026-06-12-moneyline-50');
+  assert.equal(storage.recordBet(p2), '2026-06-12-moneyline-51');
 });
 
 test('formatLedgerReport renders open, settled record, and ROI', () => {

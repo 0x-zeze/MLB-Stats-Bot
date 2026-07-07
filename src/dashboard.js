@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, resolve } from 'node:path';
+import { extname, join, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -571,7 +571,14 @@ function serveStatic(request, response, url) {
   const relativePath = pathname === '/' ? 'index.html' : pathname.slice(1);
   const filePath = resolve(join(rootDir, relativePath));
 
-  if (!filePath.startsWith(rootDir) || !existsSync(filePath)) {
+  // Use a path separator to prevent prefix bypass (e.g. /dashboard-evil/...
+  // would otherwise satisfy startsWith(rootDir) without the trailing sep).
+  if (!filePath.startsWith(rootDir + sep) && filePath !== rootDir) {
+    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Not found');
+    return;
+  }
+  if (!existsSync(filePath)) {
     response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     response.end('Not found');
     return;

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { ANALYST_SKILL_VERSION, buildAnalystSkillSummary } from './analystSkill.js';
-import { calibratePercent, hasCalibrationMap } from './calibration.js';
+import { calibratePercent, hasCalibrationMap, resetCalibrationCache } from './calibration.js';
 import { buildEvolutionContext } from './evolutionContext.js';
 import { loadEvolutionControls, moneylineWeightMultiplier } from './evolutionControls.js';
 import {
@@ -1406,6 +1406,11 @@ function maybeQueueCalibrationRetrain(alreadyQueued = false) {
   })
     .then((output) => {
       console.log(`Calibration retrain after ${settledCount} settled bets completed.${output ? ` ${output}` : ''}`);
+      try {
+        resetCalibrationCache();
+      } catch (resetError) {
+        console.error('Calibration cache reset failed:', resetError.message);
+      }
     })
     .catch((error) => {
       console.error('Calibration retrain after settlement failed:', error.message);
@@ -1525,9 +1530,11 @@ function formatPostGameRecap(dateYmd, evaluations) {
     const { prediction, result, correct, learned } = item;
     const scoreLine = `${result.away.abbreviation || result.away.name} ${result.away.score} - ${result.home.score} ${result.home.abbreviation || result.home.name}`;
     const firstInningActual =
-      result.firstInning?.anyRun === null ? 'unavailable' : result.firstInning.anyRun ? 'YES' : 'NO';
+      result.firstInning?.anyRun === null || result.firstInning?.anyRun === undefined
+        ? 'unavailable'
+        : result.firstInning.anyRun ? 'YES' : 'NO';
     const firstInningCorrect =
-      prediction.firstInning && result.firstInning?.anyRun !== null
+      prediction.firstInning && result.firstInning?.anyRun !== null && result.firstInning?.anyRun !== undefined
         ? prediction.firstInning.pick === firstInningActual
         : null;
     const memoryLine = learned
@@ -1656,9 +1663,16 @@ async function handleMessage(bot, message) {
   if (command === '/kb' || command === '/knowledge') {
     const query = args.join(' ').trim();
     if (!query) {
-      await bot.sendMessage(chatId, uiTitle('📚', 'Pilih Topik | knowledge'), {
-        reply_markup: agentKnowledgeKeyboard()
-      });
+      await bot.sendMessage(
+        chatId,
+        [
+          uiTitle('📚', 'Knowledge Base'),
+          '',
+          uiSection('🔎', 'Cara pakai'),
+          uiBullet('•', `/kb <topik> — contoh: /kb weather wind di Wrigley`),
+          uiBullet('•', 'Topik: weather, umpire, park, bullpen, lineup, platoon, sharp money, travel')
+        ].join('\n')
+      );
       return;
     }
     await sendKnowledgeAnswer(bot, chatId, query);

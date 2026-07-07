@@ -101,7 +101,7 @@ class TestTravelFatigueAdjustment(unittest.TestCase):
             consecutive_road_days=12,
         )
         result = travel_fatigue_adjustment(ctx)
-        self.assertGreaterEqual(result, -0.40)
+        self.assertGreaterEqual(result, -0.45)  # clamp widened to accommodate coast-to-coast + late arrival
 
 
 class TestDayAfterNightPenalty(unittest.TestCase):

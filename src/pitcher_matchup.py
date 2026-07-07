@@ -20,6 +20,8 @@ class PitcherMatchupContext:
     pitch_count_trend: list[int] | None = None
     whiff_rate: float | None = None
     chase_rate: float | None = None
+    stuff_profile: Any = None  # PitcherStuffProfile from stuff_plus.py
+    bayesian_stats: dict[str, float] | None = None  # shrunk stats from bayesian_shrinkage.py
 
 
 def platoon_adjustment(pitcher: PitcherStats, opponent_handedness: str) -> float:
@@ -129,16 +131,33 @@ def pitch_mix_quality(whiff_rate: float | None, chase_rate: float | None) -> flo
 
 
 def enhanced_pitcher_score(context: PitcherMatchupContext) -> float:
-    """Pitcher score incorporating platoon, TTO, trajectory, and pitch mix.
+    """Pitcher score incorporating platoon, TTO, trajectory, pitch mix, and Stuff+.
 
     Builds on the base pitcher_score and adds matchup-specific adjustments.
+    Optionally integrates Bayesian-shrunk stats and Statcast Stuff+ data.
     """
     pitcher = context.pitcher
-    xfip = safe_float(getattr(pitcher, "xfip", None), None)
+
+    # Use Bayesian-shrunk stats if available (reduces small-sample noise)
+    if context.bayesian_stats:
+        era = context.bayesian_stats.get("era", pitcher.era)
+        whip = context.bayesian_stats.get("whip", pitcher.whip)
+        fip = context.bayesian_stats.get("fip", pitcher.fip)
+        k_bb = context.bayesian_stats.get("k_rate", 0.22) / max(
+            context.bayesian_stats.get("bb_rate", 0.085), 0.01
+        )
+        xfip = context.bayesian_stats.get("fip")
+    else:
+        era = pitcher.era
+        whip = pitcher.whip
+        fip = pitcher.fip
+        k_bb = pitcher.k_bb_ratio
+        xfip = safe_float(getattr(pitcher, "xfip", None), None)
+
     base = (
-        pitcher_score_with_xfip(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio, xfip)
+        pitcher_score_with_xfip(era, whip, fip, k_bb, xfip)
         if xfip is not None
-        else pitcher_score(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio)
+        else pitcher_score(era, whip, fip, k_bb)
     )
 
     platoon_adj = platoon_adjustment(pitcher, context.opponent_lineup_handedness)
@@ -152,7 +171,14 @@ def enhanced_pitcher_score(context: PitcherMatchupContext) -> float:
     chase = context.chase_rate if context.chase_rate is not None else getattr(pitcher, "chase_rate", None)
     mix_adj = pitch_mix_quality(whiff, chase)
 
-    enhanced = base + platoon_adj + tto_adj + trajectory_adj + mix_adj
+    # Stuff+ integration: adds pitch-quality signal from Statcast
+    stuff_adj = 0.0
+    if context.stuff_profile is not None:
+        from .stuff_plus import stuff_plus_score, platoon_stuff_adjustment
+        stuff_adj = stuff_plus_score(context.stuff_profile) * 0.15
+        stuff_adj += platoon_stuff_adjustment(context.stuff_profile, context.opponent_lineup_handedness)
+
+    enhanced = base + platoon_adj + tto_adj + trajectory_adj + mix_adj + stuff_adj
 
     return clamp(enhanced, -1.0, 1.0)
 

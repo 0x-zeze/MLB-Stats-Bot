@@ -84,17 +84,19 @@ export function timeInTimezone(timeZone, date = new Date()) {
   return `${byType.hour}:${byType.minute}`;
 }
 
-export function formatGameTime(dateTime) {
+export function formatGameTime(dateTime, timeZone) {
   if (!dateTime) return 'TBD';
 
   try {
-    return new Intl.DateTimeFormat('en-US', {
+    const options = {
       month: 'short',
       day: '2-digit',
       hour: 'numeric',
       minute: '2-digit',
       timeZoneName: 'short'
-    }).format(new Date(dateTime));
+    };
+    if (timeZone) options.timeZone = timeZone;
+    return new Intl.DateTimeFormat('en-US', options).format(new Date(dateTime));
   } catch {
     return dateTime;
   }

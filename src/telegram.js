@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { splitIntoTelegramMessages } from './utils.js';
 
 const DEFAULT_WEBHOOK_PATH = '/telegram/webhook';
@@ -148,7 +149,13 @@ export async function setupWebhook(
 
     if (secret) {
       const token = request.headers['x-telegram-bot-api-secret-token'];
-      if (token !== secret) {
+      // Use timing-safe comparison to avoid leaking the secret via timing.
+      const tokenBuf = Buffer.from(String(token || ''));
+      const secretBuf = Buffer.from(String(secret));
+      const matches =
+        tokenBuf.length === secretBuf.length
+        && (tokenBuf.length === 0 || timingSafeEqual(tokenBuf, secretBuf));
+      if (!matches) {
         response.writeHead(403, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({ ok: false, error: 'invalid_secret_token' }));
         return;

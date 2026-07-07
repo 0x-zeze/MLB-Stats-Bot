@@ -101,7 +101,9 @@ def build_umpire_context(umpire_data: dict[str, Any] | None) -> UmpireContext | 
 
     zone = str(umpire_data.get("zone_tendency", "")).lower()
     if zone not in ("tight", "wide", "neutral"):
-        zone = classify_zone_tendency(k_adj, -bb_adj)
+        # bb_adj already represents the deviation from league-average walk rate,
+        # so pass it directly (negating it would flip tight/wide classification).
+        zone = classify_zone_tendency(k_adj, bb_adj)
 
     return UmpireContext(
         umpire_name=name,

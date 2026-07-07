@@ -63,6 +63,13 @@ def compare_markets(
     moneyline_comparison = compare_moneyline_market(predictions["moneyline"], market)
     model_pick = predictions["moneyline"].get("predicted_winner", "")
     model_prob = predictions["moneyline"].get("home_win_probability", 0.5)
+    # predicted_winner is a team name; odds below are keyed by "home"/"away".
+    # Resolve the pick side so sharp-money detection looks up the right odds.
+    pick_side = (
+        "home" if model_pick and model_pick == market.get("home_team")
+        else "away" if model_pick and model_pick == market.get("away_team")
+        else "home"
+    )
     opening_odds = {
         "home": market.get("opening_home_moneyline") or market.get("home_moneyline"),
         "away": market.get("opening_away_moneyline") or market.get("away_moneyline"),
@@ -76,6 +83,7 @@ def compare_markets(
         model_probability=model_prob,
         opening_odds=opening_odds,
         closing_odds=closing_odds,
+        pick_side=pick_side,
     )
 
     return {

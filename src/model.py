@@ -54,7 +54,11 @@ class PredictionResult:
 
 
 class BaselinePredictionModel:
-    """Rule-based MLB model using sabermetric weighted components."""
+    """Rule-based MLB model using sabermetric weighted components.
+
+    Enhanced with Elo rating integration for strength-of-schedule and
+    momentum tracking.
+    """
 
     DEFAULT_WEIGHTS = {
         "team_strength": 0.28,
@@ -65,10 +69,16 @@ class BaselinePredictionModel:
         "home_field": 0.05,
         "platoon_advantage": 0.04,
         "rest_day_factor": 0.04,
+        "elo_strength": 0.05,
     }
 
     def __init__(self, weights: dict[str, float] | None = None) -> None:
         self.weights = weights or self.DEFAULT_WEIGHTS.copy()
+        self.elo_history: Any = None
+
+    def set_elo_history(self, history: Any) -> None:
+        """Attach an EloHistory for strength-of-schedule-aware predictions."""
+        self.elo_history = history
 
     @staticmethod
     def _team_strength(team: TeamStats) -> float:
@@ -118,6 +128,12 @@ class BaselinePredictionModel:
         if schedule_data:
             rest_factor = safe_float(schedule_data.get("home", 0.0)) - safe_float(schedule_data.get("away", 0.0))
 
+        # Elo strength component (optional, requires elo_history attached)
+        elo_signal = 0.0
+        if self.elo_history is not None:
+            from .elo_rating import elo_strength_adjustment
+            elo_signal = elo_strength_adjustment(home_team.team, away_team.team, self.elo_history)
+
         components = {
             "team_strength": (log5_home - 0.5) * 5.0,
             "starting_pitcher": self._pitcher(home_pitcher) - self._pitcher(away_pitcher),
@@ -127,6 +143,7 @@ class BaselinePredictionModel:
             "home_field": home_field_adjustment(True),
             "platoon_advantage": platoon_adv,
             "rest_day_factor": rest_factor,
+            "elo_strength": elo_signal,
         }
         rating_difference = sum(
             weights.get(name, 0.0) * value for name, value in components.items()
@@ -157,6 +174,7 @@ class BaselinePredictionModel:
             "home_field": "Slight home field edge",
             "platoon_advantage": "Platoon matchup advantage against opposing lineup",
             "rest_day_factor": "Rest/fatigue advantage",
+            "elo_strength": "Elo strength-of-schedule and momentum advantage",
         }
         directional = []
         for name, value in components.items():

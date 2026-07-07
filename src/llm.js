@@ -15,7 +15,7 @@ function trimSlash(value) {
 function llmBaseUrl(config) {
   if (config.openai.baseUrl) return trimSlash(config.openai.baseUrl);
 
-  const keyLooksLikeGateway = config.openai.apiKey.startsWith('sk-or-');
+  const keyLooksLikeGateway = String(config.openai.apiKey || '').startsWith('sk-or-');
   const modelLooksLikeGateway = config.openai.model.includes('/');
   if (keyLooksLikeGateway || modelLooksLikeGateway) {
     return 'https://openrouter.ai/api/v1';
@@ -485,7 +485,7 @@ function applyAgentBetOverride(prediction, raw, analysis) {
 function sanitizeAnalysis(prediction, raw) {
   const awayId = prediction.away.id;
   const homeId = prediction.home.id;
-  const pickTeamId = prediction.winner.id === awayId ? awayId : homeId;
+  const pickTeamId = prediction.winner?.id === awayId ? awayId : homeId;
   const awayProbability = normalizeProbability(prediction.away.winProbability, 50);
   const homeProbability = normalizeProbability(prediction.home.winProbability, 50);
   const total = awayProbability + homeProbability;

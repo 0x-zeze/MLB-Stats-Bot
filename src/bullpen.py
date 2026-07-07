@@ -21,10 +21,20 @@ class BullpenUsage:
     back_to_back_usage: int = 0
     bullpen_era_last_7: float = 4.10
     arm_tiers: dict[str, list[str]] | None = None
+    closer_pitch_count_yesterday: int = 0
+    setup_pitch_count_yesterday: int = 0
+    high_leverage_appearances_3d: int = 0
+    total_pitches_3d: int = 0
+    consecutive_appearances: int = 0
+    rest_hours_last_appearance: float = 24.0
 
 
 def bullpen_fatigue_adjustment(bullpen: BullpenUsage | None) -> float:
-    """Return opponent team-runs adjustment from bullpen fatigue."""
+    """Return opponent team-runs adjustment from bullpen fatigue.
+
+    Enhanced with pitch-count tracking, consecutive appearance detection,
+    and high-leverage workload from the last 3 days.
+    """
     if bullpen is None:
         return 0.0
 
@@ -34,10 +44,37 @@ def bullpen_fatigue_adjustment(bullpen: BullpenUsage | None) -> float:
     leverage_adj = 0.16 if not bullpen.high_leverage_available else 0.0
     back_to_back_adj = bullpen.back_to_back_usage * 0.08
     era_adj = max(0.0, bullpen.bullpen_era_last_7 - 4.10) * 0.08
+
+    # High pitch count yesterday → fatigue compounds
+    closer_fatigue = 0.0
+    if bullpen.closer_pitch_count_yesterday > 25:
+        closer_fatigue = clamp((bullpen.closer_pitch_count_yesterday - 25) * 0.008, 0.0, 0.10)
+    setup_fatigue = 0.0
+    if bullpen.setup_pitch_count_yesterday > 25:
+        setup_fatigue = clamp((bullpen.setup_pitch_count_yesterday - 25) * 0.006, 0.0, 0.08)
+
+    # High-leverage overuse in last 3 days
+    leverage_overuse = max(0, bullpen.high_leverage_appearances_3d - 3) * 0.05
+
+    # Total pitch load
+    total_pitch_fatigue = max(0.0, bullpen.total_pitches_3d - 150) * 0.0008
+
+    # Consecutive appearances (3+ days in a row = significant fatigue)
+    consecutive_adj = 0.0
+    if bullpen.consecutive_appearances >= 3:
+        consecutive_adj = clamp((bullpen.consecutive_appearances - 2) * 0.06, 0.0, 0.15)
+
+    # Short rest since last appearance
+    rest_adj = 0.0
+    if bullpen.rest_hours_last_appearance < 18:
+        rest_adj = clamp((18 - bullpen.rest_hours_last_appearance) * 0.008, 0.0, 0.12)
+
     return clamp(
-        innings_adj + reliever_adj + closer_adj + leverage_adj + back_to_back_adj + era_adj,
+        innings_adj + reliever_adj + closer_adj + leverage_adj + back_to_back_adj + era_adj
+        + closer_fatigue + setup_fatigue + leverage_overuse + total_pitch_fatigue
+        + consecutive_adj + rest_adj,
         0.0,
-        1.2,
+        1.5,
     )
 
 

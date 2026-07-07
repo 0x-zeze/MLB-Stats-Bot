@@ -229,11 +229,17 @@ def _build_sharp_money_signal(game_context: dict[str, Any]) -> dict[str, Any] | 
     model_pick = game_context.get("predicted_winner") or game_context.get("model_pick") or "home"
     model_prob = safe_float(game_context.get("home_win_probability", 0.5))
 
+    # opening_odds/closing_odds are keyed by "home"/"away", but model_pick is a
+    # team name (or the default "home" string). Resolve the pick side from the
+    # model probability so the sharp-money lookup targets the correct side.
+    pick_side = "home" if model_prob >= 0.5 else "away"
+
     signal = detect_sharp_money_signal(
         model_pick=model_pick,
         model_probability=model_prob,
         opening_odds=opening_odds,
         closing_odds=closing_odds,
+        pick_side=pick_side,
     )
 
     return {

@@ -305,6 +305,49 @@ function bestMoneylineForTeam(bookmakers, teamName) {
   return best;
 }
 
+// Sharp reference: Pinnacle/Circa lines are the most efficient (sharpest) books.
+// Comparing the model pick's odds at a sharp book vs the retail book (The Odds API
+// aggregate) detects steam moves and sharp money more reliably than retail-only.
+const SHARP_BOOK_KEYS = new Set(['pinnacle', 'pinnacle_es', 'circa', 'circa_sports']);
+const SHARP_BOOK_TITLES = new Set(['pinnacle', 'circa']);
+
+function sharpBookMoneyline(bookmakers, teamName) {
+  let sharp = null;
+  for (const bookmaker of bookmakers || []) {
+    const key = String(bookmaker.key || '').toLowerCase();
+    const title = String(bookmaker.title || '').toLowerCase();
+    if (!SHARP_BOOK_KEYS.has(key) && !SHARP_BOOK_TITLES.has(title)) continue;
+    const market = (bookmaker.markets || []).find((item) => item.key === 'h2h');
+    if (!market?.outcomes?.length) continue;
+    const outcome = findOutcome(market.outcomes, teamName);
+    const price = toFiniteNumber(outcome?.price);
+    if (price === null) continue;
+    const decimal = americanToDecimal(price);
+    if (decimal === null) continue;
+    if (!sharp || decimal > sharp.decimal) {
+      sharp = { price, decimal, book: bookmaker.title || bookmaker.key || 'sharp' };
+    }
+  }
+  return sharp;
+}
+
+// Detect sharp-vs-retail line divergence: if Pinnacle moved but retail books
+// haven't followed yet, the retail line is stale and the model pick may have
+// more (or less) value than it appears.
+function sharpRetailDivergence(bookmakers, teamName) {
+  const sharp = sharpBookMoneyline(bookmakers, teamName);
+  const retail = bestMoneylineForTeam(bookmakers, teamName);
+  if (!sharp || !retail) return null;
+  const diff = sharp.price - retail.price;
+  if (Math.abs(diff) < 5) return null;
+  return {
+    sharpPrice: sharp.price,
+    retailPrice: retail.price,
+    divergence: diff,
+    direction: diff > 0 ? 'sharp_higher' : 'sharp_lower'
+  };
+}
+
 function toFiniteNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -339,6 +382,13 @@ function buildSnapshot(game, event) {
   const bestAway = bestMoneylineForTeam(event.bookmakers, game.away?.name);
   const moneylineBook = bestHome?.book || bestAway?.book || h2h?.bookmaker?.title || h2h?.bookmaker?.key || 'bookmaker';
 
+  // Sharp book reference: Pinnacle/Circa lines detect steam moves earlier
+  // than retail books (The Odds API aggregate).
+  const sharpHome = sharpBookMoneyline(event.bookmakers, game.home?.name);
+  const sharpAway = sharpBookMoneyline(event.bookmakers, game.away?.name);
+  const sharpDivergenceHome = sharpRetailDivergence(event.bookmakers, game.home?.name);
+  const sharpDivergenceAway = sharpRetailDivergence(event.bookmakers, game.away?.name);
+
   return {
     gamePk: String(game.gamePk || game.game_id || game.id || ''),
     matchup: `${game.away?.name || event.away_team} @ ${game.home?.name || event.home_team}`,
@@ -351,6 +401,9 @@ function buildSnapshot(game, event) {
     homeMoneylineBook: bestHome?.book || null,
     awayMoneylineBook: bestAway?.book || null,
     moneylineBook,
+    sharpHomeMoneyline: sharpHome?.price || null,
+    sharpAwayMoneyline: sharpAway?.price || null,
+    sharpDivergence: sharpDivergenceHome || sharpDivergenceAway,
     originalModelEdge: originalModelEdge(game)
   };
 }
@@ -413,9 +466,9 @@ async function fetchOdds() {
       oddsCache = { fetchedAt, dataFetchedAt: fetchedAt, data };
       return data;
     } catch (err) {
-      // Transient (network/timeout/non-quota HTTP): back off 1 cache cycle and
-      // surface the error. We do NOT rotate keys here — the key is likely fine.
-      oddsCache = { fetchedAt: Date.now(), dataFetchedAt: oddsCache.dataFetchedAt || 0, data: oddsCache.data };
+      // Transient (network/timeout/non-quota HTTP): surface the error without
+      // touching the cache. Resetting fetchedAt here would re-arm the TTL and
+      // serve stale data for another full cycle on every transient failure.
       throw err;
     } finally {
       clearTimeout(timer);

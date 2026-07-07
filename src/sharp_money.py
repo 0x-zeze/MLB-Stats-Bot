@@ -29,13 +29,29 @@ def detect_sharp_money_signal(
     closing_odds: dict[str, Any] | None = None,
     public_betting_pct: dict[str, float] | None = None,
     multi_book_lines: list[dict[str, Any]] | None = None,
+    pick_side: str | None = None,
 ) -> LineMovementSignal:
-    """Detect sharp money indicators from line movement patterns."""
+    """Detect sharp money indicators from line movement patterns.
+
+    ``model_pick`` historically held a team name used as the lookup key into
+    ``opening_odds``/``closing_odds``. Callers that key odds by ``"home"``/
+    ``"away"`` should pass ``pick_side`` instead (or in addition) so the lookup
+    succeeds regardless of whether the odds dict is keyed by side or name.
+    """
     if not opening_odds or not closing_odds:
         return LineMovementSignal()
 
-    opening_line = safe_float(opening_odds.get(model_pick), None)
-    closing_line = safe_float(closing_odds.get(model_pick), None)
+    # Resolve the lookup key: prefer an explicit side, then the team name,
+    # finally fall back to "home" so a missing pick never silently disables
+    # sharp-money detection.
+    lookup_key = pick_side or model_pick or "home"
+    if lookup_key not in opening_odds and "home" in opening_odds:
+        # Odds are keyed by side but the caller passed a team name — fall back
+        # to "home" rather than returning an empty signal.
+        lookup_key = "home"
+
+    opening_line = safe_float(opening_odds.get(lookup_key), None)
+    closing_line = safe_float(closing_odds.get(lookup_key), None)
 
     if opening_line is None or closing_line is None:
         return LineMovementSignal()

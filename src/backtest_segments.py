@@ -18,6 +18,10 @@ SEGMENTS = {
     "total_range": ["low_6_7", "mid_8_9", "high_10_plus"],
     "confidence": ["low", "medium", "high"],
     "edge_size": ["small_2_4", "medium_4_7", "large_7_plus"],
+    "pitcher_type": ["ace", "solid", "average", "weak", "opener"],
+    "rest_days": ["short_rest", "normal_rest", "extra_rest"],
+    "rivalry": ["divisional", "non_divisional"],
+    "clv_bucket": ["strong_clv", "neutral_clv", "weak_clv"],
 }
 
 DIVISION_TEAMS = {
@@ -97,6 +101,55 @@ def tag_game_segments(game: dict[str, Any]) -> dict[str, str]:
         tags["edge_size"] = "medium_4_7"
     else:
         tags["edge_size"] = "small_2_4"
+
+    # Pitcher type classification from ERA
+    pick_era = safe_float(game.get("pick_pitcher_era"), None)
+    if pick_era is not None:
+        if pick_era <= 3.00:
+            tags["pitcher_type"] = "ace"
+        elif pick_era <= 3.75:
+            tags["pitcher_type"] = "solid"
+        elif pick_era <= 4.50:
+            tags["pitcher_type"] = "average"
+        elif pick_era <= 5.50:
+            tags["pitcher_type"] = "weak"
+        else:
+            tags["pitcher_type"] = "opener"
+    else:
+        tags["pitcher_type"] = "unknown"
+
+    # Rest days
+    rest = safe_float(game.get("pitcher_rest_days"), None)
+    if rest is not None:
+        if rest <= 3:
+            tags["rest_days"] = "short_rest"
+        elif rest >= 6:
+            tags["rest_days"] = "extra_rest"
+        else:
+            tags["rest_days"] = "normal_rest"
+    else:
+        tags["rest_days"] = "unknown"
+
+    # Divisional rivalry
+    if home and away:
+        pick_team = pick if pick else home
+        tags["rivalry"] = "divisional" if _get_division(pick_team) == _get_division(
+            away if pick.upper() == home.upper() else home
+        ) else "non_divisional"
+    else:
+        tags["rivalry"] = "unknown"
+
+    # CLV bucket
+    clv = safe_float(game.get("closing_line_value"), None)
+    if clv is not None:
+        if clv >= 2.0:
+            tags["clv_bucket"] = "strong_clv"
+        elif clv <= -2.0:
+            tags["clv_bucket"] = "weak_clv"
+        else:
+            tags["clv_bucket"] = "neutral_clv"
+    else:
+        tags["clv_bucket"] = "unknown"
 
     return tags
 

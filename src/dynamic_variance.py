@@ -22,6 +22,8 @@ class VarianceContext:
     away_pitcher_era_stddev: float = 0.0
     projected_total: float = 8.8
     win_probability_edge: float = 0.0
+    home_pitcher_volatility: float = 1.0  # multiplier from PitcherVarianceProfile
+    away_pitcher_volatility: float = 1.0
 
 
 def compute_dynamic_variance(context: VarianceContext) -> float:
@@ -29,28 +31,44 @@ def compute_dynamic_variance(context: VarianceContext) -> float:
 
     Replaces the fixed formula: max(projected_total * 1.25, projected_total + 1.0)
     with a context-aware calculation that accounts for bullpen fatigue,
-    park volatility, weather uncertainty, and pitcher consistency.
+    park volatility, weather uncertainty, pitcher consistency, and pitcher
+    start-to-start volatility.
     """
     base_variance = context.projected_total * 1.15 + 0.8
 
     bullpen_factor = 1.0 + (context.home_bullpen_fatigue + context.away_bullpen_fatigue) * 0.12
 
-    park_factor = 0.9 + context.park_volatility * 0.2
+    # park_volatility is a 1.0-centered ratio (1.0 = neutral). A neutral park
+    # must not inflate variance, so the multiplier is centered at 1.0.
+    park_factor = 1.0 + (context.park_volatility - 1.0) * 0.2
 
     weather_factor = 1.0 + context.weather_uncertainty * 0.15
 
+    # Pitcher consistency: high ERA stddev = more variance
     pitcher_consistency = (
         context.home_pitcher_era_stddev + context.away_pitcher_era_stddev
     ) * 0.08
     pitcher_factor = 1.0 + min(pitcher_consistency, 0.25)
 
+    # Pitcher volatility multiplier from historical start-to-start variance
+    # High-variance pitchers (Glasnow, Snell) widen the run distribution
+    volatility_factor = (context.home_pitcher_volatility + context.away_pitcher_volatility) / 2.0
+
     blowout_adj = blowout_correlation_adjustment(
         context.projected_total, context.win_probability_edge
     )
 
-    dynamic = base_variance * bullpen_factor * park_factor * weather_factor * pitcher_factor + blowout_adj
+    dynamic = (
+        base_variance
+        * bullpen_factor
+        * park_factor
+        * weather_factor
+        * pitcher_factor
+        * volatility_factor
+        + blowout_adj
+    )
 
-    return clamp(dynamic, context.projected_total * 1.05, context.projected_total * 2.0)
+    return clamp(dynamic, context.projected_total * 1.05, context.projected_total * 2.5)
 
 
 def blowout_correlation_adjustment(

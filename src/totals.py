@@ -84,6 +84,17 @@ def _value(obj: Any, name: str, default: float = 0.0) -> float:
     return safe_float(getattr(obj, name, None), default)
 
 
+def _normalize_park_volatility(run_factor: float) -> float:
+    """Normalize a park run factor to a 1.0-centered volatility ratio.
+
+    ``run_factor`` is stored on a 100-scale (100 = neutral, 105 = +5%).
+    Returns 1.0 for a neutral park so variance is unaffected.
+    """
+    if run_factor > 10:
+        return run_factor / 100.0
+    return run_factor
+
+
 def _offense_adjustment(team: TeamStats, opponent_pitcher: PitcherStats | None) -> float:
     pitcher_hand = "rhp"
     split_ops = _value(team, "ops_vs_rhp", _value(team, "ops", 0.720))
@@ -319,7 +330,7 @@ def predict_total_runs(
     variance_ctx = VarianceContext(
         home_bullpen_fatigue=bullpen_fatigue_adjustment(context.home_bullpen),
         away_bullpen_fatigue=bullpen_fatigue_adjustment(context.away_bullpen),
-        park_volatility=_value(context.park, "run_factor", 100.0) / 100.0 if context.park else 1.0,
+        park_volatility=_normalize_park_volatility(_value(context.park, "run_factor", 100.0)) if context.park else 1.0,
         weather_uncertainty=abs(weather_adjustment(context.weather)) * 0.5 if context.weather else 0.0,
         home_pitcher_era_stddev=0.0,
         away_pitcher_era_stddev=0.0,

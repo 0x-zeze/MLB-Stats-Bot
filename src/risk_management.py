@@ -24,6 +24,7 @@ DEFAULT_RISK_SETTINGS: dict[str, Any] = {
     "max_pick_confidence": 0.64,
     "minimum_data_quality_score": 60,
     "no_bet_on_stale_fields": ("lineup", "probable_pitchers", "odds"),
+    "correlation_adjustment": True,
 }
 
 
@@ -131,7 +132,12 @@ def apply_risk_framework(
     quality_report: dict[str, Any],
     settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Apply no-bet, confidence-cap, and staking controls to a prediction."""
+    """Apply no-bet, confidence-cap, and staking controls to a prediction.
+
+    Enhanced with parlay correlation awareness: if a prediction shares
+    correlation with other active picks (same game, same park, same weather),
+    the stake is reduced to manage aggregate risk.
+    """
     config = _merge_settings(settings)
     output = deepcopy(prediction)
     warnings: list[str] = []
@@ -175,6 +181,21 @@ def apply_risk_framework(
     else:
         stake = 0.0
 
+    # Apply correlation adjustment if multiple picks are active
+    correlation_multiplier = 1.0
+    correlation_warning = ""
+    if config.get("correlation_adjustment", True) and stake > 0:
+        slate_picks = config.get("active_slate_picks", [])
+        if slate_picks:
+            from .parlay_correlation import aggregate_correlation_risk
+            analysis = aggregate_correlation_risk(slate_picks + [output])
+            correlation_multiplier = safe_float(analysis.get("aggregate_stake_multiplier"), 1.0)
+            correlation_warning = analysis.get("warning", "")
+            if correlation_multiplier < 1.0:
+                stake = round(stake * correlation_multiplier, 3)
+                if correlation_warning:
+                    warnings.append(correlation_warning)
+
     output["decision"] = decision
     if reasons:
         reason_text = "; ".join(dict.fromkeys(reason for reason in reasons if reason))
@@ -190,6 +211,7 @@ def apply_risk_framework(
         "current_daily_exposure_units": safe_float(config.get("current_daily_exposure_units"), 0.0),
         "raw_model_probability": round(raw_probability, 4) if raw_probability is not None else None,
         "capped_model_probability": capped_probability,
+        "correlation_multiplier": round(correlation_multiplier, 3),
         "warnings": warnings,
         "risk_warning": RISK_WARNING,
     }

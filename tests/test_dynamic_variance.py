@@ -62,7 +62,7 @@ class TestComputeDynamicVariance(unittest.TestCase):
             win_probability_edge=0.30,
         )
         result = compute_dynamic_variance(ctx)
-        self.assertLessEqual(result, 9.0 * 2.0)
+        self.assertLessEqual(result, 9.0 * 2.5)  # clamp widened for pitcher volatility multiplier
 
 
 class TestBlowoutCorrelationAdjustment(unittest.TestCase):

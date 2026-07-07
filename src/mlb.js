@@ -13,6 +13,8 @@ import { calibratePercent, hasCalibrationMap } from './calibration.js';
 import { loadConfig } from './config.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
+const _mlbConfig = loadConfig();
+const MLB_TIMEZONE = _mlbConfig.timezone;
 const GAME_SEPARATOR = UI_LINE;
 const SECTION_SEPARATOR = UI_THIN_LINE;
 const DEFAULT_MONEYLINE_VALUE_EDGE_THRESHOLD = 4.0;
@@ -969,8 +971,12 @@ function ratePct(value, fallback = 0) {
 function parseInnings(value) {
   if (value === null || value === undefined || value === '') return 0;
   const [whole, partial = '0'] = String(value).split('.');
-  const outs = Number.parseInt(whole, 10) * 3 + Number.parseInt(partial, 10);
-  return Number.isFinite(outs) ? outs / 3 : 0;
+  const wholeNum = Number.parseInt(whole, 10);
+  const partialNum = Number.parseInt(partial, 10);
+  const safeWhole = Number.isFinite(wholeNum) ? wholeNum : 0;
+  const safePartial = Number.isFinite(partialNum) ? partialNum : 0;
+  const outs = safeWhole * 3 + safePartial;
+  return outs / 3;
 }
 
 function ymdOffset(dateYmd, offsetDays) {
@@ -3106,7 +3112,7 @@ function predictGame(
   return {
     gamePk: game.gamePk,
     status: game.status?.detailedState || 'Scheduled',
-    start: formatGameTime(game.gameDate),
+    start: formatGameTime(game.gameDate, MLB_TIMEZONE),
     startTime: game.gameDate || null,
     venue: game.venue?.name || 'TBD',
     away,
@@ -3308,7 +3314,7 @@ export async function getMlbScheduleChoices(dateYmd = dateInTimezone('Asia/Jakar
     gamePk: game.gamePk,
     status: game.status?.detailedState || 'Scheduled',
     abstractGameState: game.status?.abstractGameState || '',
-    start: formatGameTime(game.gameDate),
+    start: formatGameTime(game.gameDate, MLB_TIMEZONE),
     startTime: game.gameDate || null,
     venue: game.venue?.name || 'TBD',
     away: {

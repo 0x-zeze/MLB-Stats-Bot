@@ -1531,10 +1531,10 @@ export class Storage {
     const dateYmd = prediction.dateYmd || '';
     if (!gamePk) return null;
 
-    const count = this.db
-      .prepare('SELECT COUNT(*) AS count FROM bet_ledger WHERE date_ymd = ? AND market = ?')
-      .get(dateYmd, market).count;
-    const decisionId = `${dateYmd}-${market}-${String(count + 1).padStart(2, '0')}`;
+    // decision_id is derived from the natural key (game_pk + market), which the
+    // UNIQUE constraint already guarantees. A per-date counter could collide
+    // when two recordBet() calls race for different games on the same date.
+    const decisionId = `${dateYmd}-${market}-${gamePk}`;
     const now = new Date().toISOString();
 
     const info = this.db

@@ -38,6 +38,9 @@ class TravelContext:
     day_game_after_night: bool = False
     consecutive_road_days: int = 0
     miles_traveled_last_3_days: float = 0.0
+    arrival_hour_local: float = 0.0  # hour of day at destination
+    travel_day_before_game: bool = False  # flew in day-of
+    coast_to_coast: bool = False
 
 
 def _timezone_offset(tz: str) -> int:
@@ -63,6 +66,7 @@ def travel_fatigue_adjustment(context: TravelContext | None) -> float:
 
     Returns a negative value (runs suppressed) when fatigue is present.
     West-to-East travel is harder (losing hours, earlier body clock).
+    Enhanced with miles, arrival time, and coast-to-coast detection.
     """
     if context is None:
         return 0.0
@@ -82,15 +86,40 @@ def travel_fatigue_adjustment(context: TravelContext | None) -> float:
     elif context.zones_crossed == 1:
         penalty += -0.03
 
+    # Coast-to-coast penalty (3+ zones, regardless of direction)
+    if context.coast_to_coast:
+        penalty -= 0.05
+
+    # Day game after night
     if context.day_game_after_night:
         penalty += -0.15
 
+    # Consecutive road days
     if context.consecutive_road_days >= 10:
         penalty += -0.08
     elif context.consecutive_road_days >= 7:
         penalty += -0.04
 
-    return clamp(penalty, -0.40, 0.0)
+    # Miles traveled (quantified): >1000 miles = significant
+    miles = context.miles_traveled_last_3_days
+    if miles > 1500:
+        penalty -= 0.06
+    elif miles > 1000:
+        penalty -= 0.04
+    elif miles > 500:
+        penalty -= 0.02
+
+    # Late arrival (after 2 AM local) = sleep deprivation
+    if context.arrival_hour_local > 2 and context.arrival_hour_local < 6:
+        penalty -= 0.05
+    elif context.arrival_hour_local >= 6 and context.arrival_hour_local < 9:
+        penalty -= 0.03
+
+    # Travel day (flew in same day as game)
+    if context.travel_day_before_game:
+        penalty -= 0.04
+
+    return clamp(penalty, -0.45, 0.0)
 
 
 def day_after_night_penalty(
