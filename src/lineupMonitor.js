@@ -147,7 +147,7 @@ function starterText(predictionTeam, boxStarter) {
   return null;
 }
 
-function appendTeamLineup(lines, label, predictionTeam, lineup) {
+export function appendTeamLineup(lines, label, predictionTeam, lineup) {
   if (!lineup?.confirmed) return;
   lines.push(uiKV('📋', `${label}`, `confirmed ${lineup.count}/9`));
 
@@ -161,7 +161,7 @@ function appendTeamLineup(lines, label, predictionTeam, lineup) {
   lines.push('');
 }
 
-function formatLineupAlert(game, awayLineup, homeLineup) {
+export function formatLineupAlert(game, awayLineup, homeLineup) {
   const away = game.away?.abbreviation || game.away?.name || 'Away';
   const home = game.home?.abbreviation || game.home?.name || 'Home';
 

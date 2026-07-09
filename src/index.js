@@ -36,6 +36,7 @@ import {
   stopLineMonitorForChat
 } from './lineMovement.js';
 import {
+  appendTeamLineup,
   configureLineupMonitor,
   lineupMonitorSettings,
   startLineupMonitor,
@@ -165,7 +166,7 @@ function dateForPrediction(prediction) {
   return dateInTimezone(config.timezone);
 }
 
-async function sendBothLineupsPregameAlert(bot, chatId, game) {
+async function sendBothLineupsPregameAlert(bot, chatId, game, awayLineup, homeLineup) {
   const dateYmd = dateForPrediction(game);
   const gamePk = String(game?.gamePk || game?.game_id || game?.id || '');
   if (!gamePk) return false;
@@ -178,16 +179,45 @@ async function sendBothLineupsPregameAlert(bot, chatId, game) {
   storage.savePredictions(dateYmd, predictions);
 
   const prediction = predictions.find((item) => String(item.gamePk || item.game_id || item.id || '') === gamePk);
-  if (!prediction) return false;
 
-  const text = [
-    uiTitle('📋', 'Lineup Confirmed | Pre-game Prediction'),
+  const awayLabel = prediction?.away?.abbreviation || prediction?.away?.name || game?.away?.abbreviation || game?.away?.name || 'Away';
+  const homeLabel = prediction?.home?.abbreviation || prediction?.home?.name || game?.home?.abbreviation || game?.home?.name || 'Home';
+
+  const lines = [
+    uiTitle('📋', `Lineup Confirmed | ${awayLabel} @ ${homeLabel}`),
     uiBullet('✅', 'Kedua tim sudah announce lineup. Model re-run dengan lineup terbaru.'),
-    '',
-    formatPredictions(dateYmd, [prediction], { maxGames: 1, includeAdvanced: false })
-  ].join('\n');
+    ''
+  ];
 
-  await bot.sendMessage(chatId, text);
+  if (awayLineup?.confirmed || homeLineup?.confirmed) {
+    appendTeamLineup(lines, awayLabel, prediction?.away || game?.away, awayLineup);
+    appendTeamLineup(lines, homeLabel, prediction?.home || game?.home, homeLineup);
+  }
+
+  if (prediction) {
+    const pick = prediction.winner;
+    const pickName = pick?.name || pick?.abbreviation || 'TBD';
+    const homeProb = Number(prediction.home?.winProbability ?? 0);
+    const awayProb = Number(prediction.away?.winProbability ?? 0);
+    const pickProb = pick && pick === prediction.home ? homeProb : awayProb;
+    const confirmationEdge = Number(prediction.modelBreakdown?.confirmationEdge ?? 0);
+    const bothConfirmed = awayLineup?.confirmed && homeLineup?.confirmed;
+
+    lines.push(uiSection('🎯', 'Pick Model (lineup confirmed)'));
+    lines.push(uiKV('✅', 'Pick', `${pickName} ${pickProb.toFixed(1)}%`));
+    lines.push(uiKV('📊', 'Probabilitas', `${awayLabel} ${awayProb.toFixed(1)}% | ${homeLabel} ${homeProb.toFixed(1)}%`));
+    if (bothConfirmed && Math.abs(confirmationEdge) >= 0.005) {
+      const edgeLabel = confirmationEdge > 0 ? homeLabel : awayLabel;
+      lines.push(uiKV('📋', 'Lineup edge', `+${(Math.abs(confirmationEdge) * 100).toFixed(1)}% ke ${edgeLabel} (lineup confirmed menguatkan edge model)`));
+    } else if (bothConfirmed) {
+      lines.push(uiKV('📋', 'Lineup edge', 'netral (matchup terlalu tipis untuk dikuatkan)'));
+    }
+    lines.push('');
+
+    lines.push(formatPredictions(dateYmd, [prediction], { maxGames: 1, includeAdvanced: false }));
+  }
+
+  await bot.sendMessage(chatId, lines.join('\n'));
   return true;
 }
 
@@ -2377,7 +2407,7 @@ async function main() {
     bot,
     storage,
     config,
-    onBothLineupsConfirmed: ({ chatId, game }) => sendBothLineupsPregameAlert(bot, chatId, game)
+    onBothLineupsConfirmed: ({ chatId, game, awayLineup, homeLineup }) => sendBothLineupsPregameAlert(bot, chatId, game, awayLineup, homeLineup)
   });
   startScheduler(bot);
 

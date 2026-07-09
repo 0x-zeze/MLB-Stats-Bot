@@ -2860,7 +2860,19 @@ function predictGame(
     platoonEdge;
   const recordDominated =
     Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
-  const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent + weatherComponent;
+
+  // Lineup confirmation edge: when both teams post confirmed nine-hitter
+  // lineups, the model's existing matchup edge (starter/offense/bullpen)
+  // becomes more reliable because a key source of pre-game uncertainty
+  // (replacement-level fill-ins, late scratches) is removed. We amplify the
+  // existing directional edge by a small, capped amount toward the favored
+  // side — never a free bump to either side, never overrides a near-pickem.
+  const bothConfirmed = bothLineupsConfirmed({ away: awayLineup, home: homeLineup });
+  const confirmationEdge = bothConfirmed
+    ? clamp(Math.sign(matchupEdge) * Math.min(Math.abs(matchupEdge) * 0.08, 0.04), -0.04, 0.04)
+    : 0;
+
+  const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent + weatherComponent + confirmationEdge;
 
   // Edge dampening: the model is systematically overconfident at higher edges.
   // Analysis of 773 moneyline outcomes + 59 staked bets:
@@ -2902,7 +2914,8 @@ function predictGame(
     offenseEdge: offenseComponent,
     preventionEdge: preventionComponent,
     starterEdge: starterComponent,
-    lineupEdge: lineupEdge * (bothLineupsConfirmed({ away: awayLineup, home: homeLineup }) ? 0.95 : 0.85),
+    lineupEdge: lineupEdge * (bothConfirmed ? 0.95 : 0.85),
+    confirmationEdge,
     bullpenEdge: bullpenComponent,
     fatigueEdge: fatigueEdge * 0.7,
     winPctEdge,
@@ -3048,8 +3061,11 @@ function predictGame(
       edgeComponentText('record/H2H', modelBreakdown.recordContextEdge, away, home),
       edgeComponentText('SP', modelBreakdown.starterEdge, away, home),
       edgeComponentText('lineup', modelBreakdown.lineupEdge, away, home),
-      edgeComponentText('bullpen', modelBreakdown.bullpenEdge, away, home)
-    ].join(' | '),
+      edgeComponentText('bullpen', modelBreakdown.bullpenEdge, away, home),
+      bothConfirmed && Math.abs(confirmationEdge) >= 0.005
+        ? edgeComponentText('lineup✓', confirmationEdge, away, home)
+        : null
+    ].filter(Boolean).join(' | '),
     modelBreakdown,
     modelReference: {
       awayPythagoreanPct: Math.round(awayPythagoreanPct * 100),
