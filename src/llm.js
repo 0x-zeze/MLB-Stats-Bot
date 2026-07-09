@@ -291,7 +291,12 @@ function multiFactorConfidence(prediction, probability, evolutionControls) {
 
   score += edge >= 12 ? 4 : edge >= 8 ? 3 : edge >= 5 ? 2 : edge >= 3 ? 1 : 0;
 
-  const pickDirection = normalizeProbability(probability, 50) >= 50 ? 1 : -1;
+  // Direction must track the PICKED side, not `probability >= 50`. The picked
+  // team's probability is always >= 50 by construction, so the old test was
+  // effectively always +1 and counted the HOME-favoring breakdown components as
+  // "agreeing" even for away picks. Positive breakdown edges favor home, so flip
+  // for an away pick — mirroring supportingFactors().
+  const pickDirection = teamSideForPick(prediction) === 'home' ? 1 : -1;
   const components = [
     toNumber(breakdown.matchupEdge, 0),
     toNumber(breakdown.starterEdge, 0),

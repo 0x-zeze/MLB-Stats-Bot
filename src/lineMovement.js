@@ -331,20 +331,53 @@ function sharpBookMoneyline(bookmakers, teamName) {
   return sharp;
 }
 
+// Best retail (non-sharp) moneyline for a team. Separating sharp books out is
+// required for a meaningful sharp-vs-retail comparison: bestMoneylineForTeam
+// can return a Pinnacle/Circa price, which would make "divergence" zero or noise.
+function bestRetailMoneylineForTeam(bookmakers, teamName) {
+  let best = null;
+  for (const bookmaker of bookmakers || []) {
+    const key = String(bookmaker.key || '').toLowerCase();
+    const title = String(bookmaker.title || '').toLowerCase();
+    if (SHARP_BOOK_KEYS.has(key) || SHARP_BOOK_TITLES.has(title)) continue;
+    const market = (bookmaker.markets || []).find((item) => item.key === 'h2h');
+    if (!market?.outcomes?.length) continue;
+    const outcome = findOutcome(market.outcomes, teamName);
+    const price = toFiniteNumber(outcome?.price);
+    if (price === null) continue;
+    const decimal = americanToDecimal(price);
+    if (decimal === null) continue;
+    if (!best || decimal > best.decimal) {
+      best = { price, decimal, book: bookmaker.title || bookmaker.key || 'bookmaker' };
+    }
+  }
+  return best;
+}
+
 // Detect sharp-vs-retail line divergence: if Pinnacle moved but retail books
 // haven't followed yet, the retail line is stale and the model pick may have
 // more (or less) value than it appears.
+// Compare on IMPLIED PROBABILITY, not American odds. Subtracting American
+// prices across the sign boundary (+150 - (-110) = 260) is not a meaningful
+// probability gap and mislabels direction.
 function sharpRetailDivergence(bookmakers, teamName) {
   const sharp = sharpBookMoneyline(bookmakers, teamName);
-  const retail = bestMoneylineForTeam(bookmakers, teamName);
+  const retail = bestRetailMoneylineForTeam(bookmakers, teamName);
   if (!sharp || !retail) return null;
-  const diff = sharp.price - retail.price;
-  if (Math.abs(diff) < 5) return null;
+  const sharpImplied = americanImpliedProbability(sharp.price);
+  const retailImplied = americanImpliedProbability(retail.price);
+  if (sharpImplied === null || retailImplied === null) return null;
+  // Positive = sharp prices the team as MORE likely than retail (retail is soft
+  // if we want the other side; retail is a better bettor price if we want this side).
+  const diffPp = Math.round((sharpImplied - retailImplied) * 1000) / 10; // percentage points
+  if (Math.abs(diffPp) < 1.0) return null; // ignore <1pp noise
   return {
     sharpPrice: sharp.price,
     retailPrice: retail.price,
-    divergence: diff,
-    direction: diff > 0 ? 'sharp_higher' : 'sharp_lower'
+    sharpImplied: Math.round(sharpImplied * 1000) / 10,
+    retailImplied: Math.round(retailImplied * 1000) / 10,
+    divergence: diffPp,
+    direction: diffPp > 0 ? 'sharp_higher' : 'sharp_lower'
   };
 }
 
@@ -447,8 +480,11 @@ async function fetchOdds() {
       });
 
       if (!response.ok) {
-        // Distinguish quota-exhaustion (rotate to next key) from transient
-        // errors like 429/5xx (do NOT burn keys — just back off and retry later).
+        // Quota exhaustion: cool the key down and try the next one.
+        // Transient HTTP (429/5xx/timeouts): also try the next key — a single
+        // flaky key must not skip the rest of a healthy pool for this cycle.
+        // Permanent client errors (400/403) are not key-specific either, so
+        // rotate once more rather than short-circuiting the whole fetch.
         const bodyText = await response.text().catch(() => '');
         const isQuota =
           response.status === 401 && /OUT_OF_USAGE_CREDITS|usage quota/i.test(bodyText);
@@ -456,9 +492,11 @@ async function fetchOdds() {
           markKeyExhausted(key);
           console.warn(`Odds API key exhausted (quota); rotating. ${availableOddsApiKeys().length} key(s) left.`);
           lastError = new Error(`${response.status} quota exhausted`);
-          continue; // try next key
+          continue;
         }
-        throw new Error(`${response.status} ${response.statusText}`);
+        lastError = new Error(`${response.status} ${response.statusText}`);
+        console.warn(`Odds API key failed (${response.status}); trying next key if any.`);
+        continue;
       }
 
       const data = await response.json();
@@ -466,20 +504,25 @@ async function fetchOdds() {
       oddsCache = { fetchedAt, dataFetchedAt: fetchedAt, data };
       return data;
     } catch (err) {
-      // Transient (network/timeout/non-quota HTTP): surface the error without
-      // touching the cache. Resetting fetchedAt here would re-arm the TTL and
+      // Network/abort/parse failure on this key: keep going to the next key.
+      // Do NOT reset oddsCache.fetchedAt here — that would re-arm the TTL and
       // serve stale data for another full cycle on every transient failure.
-      throw err;
+      lastError = err;
+      console.warn(`Odds API key threw (${err?.message || err}); trying next key if any.`);
+      continue;
     } finally {
       clearTimeout(timer);
     }
   }
 
-  // Every available key was quota-exhausted this pass. This is a steady state
-  // (not a transient error), so return cache-or-empty rather than throwing —
-  // callers treat [] as "no odds", and throwing would spam logs every cycle.
+  // Every available key failed this pass (quota, HTTP, or network). Return
+  // cache-or-empty rather than throwing — callers treat [] as "no odds", and
+  // throwing would spam logs every cycle. Keep prior dataFetchedAt so a
+  // subsequent success can still report real freshness.
+  if (lastError) {
+    console.warn(`Odds API: all keys failed this cycle (${lastError.message || lastError}); serving cache.`);
+  }
   oddsCache = { fetchedAt: Date.now(), dataFetchedAt: oddsCache.dataFetchedAt || 0, data: oddsCache.data };
-  void lastError;
   return oddsCache.data.length ? oddsCache.data : [];
 }
 

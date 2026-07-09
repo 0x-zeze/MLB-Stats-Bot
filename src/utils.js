@@ -72,6 +72,15 @@ export function dateInTimezone(timeZone, date = new Date()) {
   return `${byType.year}-${byType.month}-${byType.day}`;
 }
 
+// Day of week (0=Sunday..6=Saturday) evaluated in the given IANA timezone, so
+// day-of-week gates line up with the same zone used for the hour/date rather
+// than the server's local zone (which can differ by a calendar day).
+export function weekdayInTimezone(timeZone, date = new Date()) {
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(date);
+  const index = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[weekday];
+  return index ?? date.getDay();
+}
+
 export function timeInTimezone(timeZone, date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone,

@@ -1569,7 +1569,12 @@ export class Storage {
   // Record a VALUE bet at decision time. Idempotent on (game_pk, market): a
   // re-run of /picks for the same game never creates a duplicate ledger row.
   // Only VALUE picks with a positive Kelly stake are recorded.
-  recordBet(prediction) {
+  // `dateYmd` should be passed explicitly by the caller: raw predictGame objects
+  // carry only `startTime` (no `dateYmd`), and savePredictions writes a compact
+  // COPY without mutating the in-memory object — so relying on prediction.dateYmd
+  // alone stored an empty date_ymd and a "-moneyline-<pk>" decision_id, which
+  // broke every date-scoped ledger query (readLedger({sinceDays})).
+  recordBet(prediction, dateYmd = prediction?.dateYmd || '') {
     const decision = prediction?.betDecision;
     const value = prediction?.valuePick;
     if (!decision || decision.status !== 'VALUE') return null;
@@ -1578,7 +1583,6 @@ export class Storage {
 
     const gamePk = String(prediction.gamePk || '');
     const market = 'moneyline';
-    const dateYmd = prediction.dateYmd || '';
     if (!gamePk) return null;
 
     // decision_id is derived from the natural key (game_pk + market), which the

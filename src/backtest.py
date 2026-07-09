@@ -82,19 +82,45 @@ def filter_games(
     return filtered
 
 
+def _market_matchup_key(away_team: str, home_team: str) -> str:
+    return f"{clean_name(away_team)}@{clean_name(home_team)}"
+
+
+def _market_date_key(date: str, away_team: str, home_team: str) -> str:
+    return f"{str(date or '').strip()}|{_market_matchup_key(away_team, home_team)}"
+
+
 def market_lookup(path: str | Path | None = None) -> dict[str, dict[str, str]]:
-    """Load market rows keyed by away@home."""
+    """Load market rows keyed by date|away@home when date is present, else away@home.
+
+    Matchup-only keys collide whenever the same teams play twice (doubleheader,
+    multi-day series, multi-season samples). Prefer the date-qualified key so
+    each game resolves its own odds row; keep the bare matchup key as a fallback
+    for legacy CSVs that only carry team names.
+    """
     source = Path(path) if path else data_path("sample_market_totals.csv")
     rows = read_csv(source)
-    return {
-        f"{clean_name(row.get('away_team', ''))}@{clean_name(row.get('home_team', ''))}": row
-        for row in rows
-    }
+    markets: dict[str, dict[str, str]] = {}
+    for row in rows:
+        away = row.get("away_team", "")
+        home = row.get("home_team", "")
+        matchup_key = _market_matchup_key(away, home)
+        date = str(row.get("date") or row.get("game_date") or "").strip()
+        if date:
+            markets[_market_date_key(date, away, home)] = row
+        # Bare matchup fallback: first row wins so a dated file that also writes
+        # this key does not silently overwrite an earlier series opener with a
+        # later game's line when the caller has no date to disambiguate.
+        markets.setdefault(matchup_key, row)
+    return markets
 
 
 def market_for_game(game: GameRow, markets: dict[str, dict[str, str]]) -> dict[str, str] | None:
-    """Return market row for a game."""
-    return markets.get(f"{clean_name(game.away_team)}@{clean_name(game.home_team)}")
+    """Return market row for a game, preferring the date-qualified key."""
+    date_key = _market_date_key(game.date, game.away_team, game.home_team)
+    if date_key in markets:
+        return markets[date_key]
+    return markets.get(_market_matchup_key(game.away_team, game.home_team))
 
 
 def confidence_below(confidence: str, threshold: str = "low") -> bool:

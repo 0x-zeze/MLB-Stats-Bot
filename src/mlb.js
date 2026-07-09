@@ -2174,8 +2174,14 @@ function finalGameResult(game, dateYmd) {
   const homeScore = toNumber(game.teams?.home?.score, Number.NaN);
   const awayTeam = game.teams.away.team;
   const homeTeam = game.teams.home.team;
-  const winnerTeam = awayScore > homeScore ? awayTeam : homeTeam;
-  const loserTeam = awayScore > homeScore ? homeTeam : awayTeam;
+  // A tie (equal finite scores) or non-finite scores has no winner. Emitting a
+  // concrete home "winner" here would settle a staked bet as a win/loss instead
+  // of a push and corrupt the ledger. Return null-id winner/loser so settleBet's
+  // (winnerId == null → push) branch fires. Regular-season ties are rare but
+  // suspended/shortened finals with equal scores do occur.
+  const decided = Number.isFinite(awayScore) && Number.isFinite(homeScore) && awayScore !== homeScore;
+  const winnerTeam = decided ? (awayScore > homeScore ? awayTeam : homeTeam) : null;
+  const loserTeam = decided ? (awayScore > homeScore ? homeTeam : awayTeam) : null;
   const first = game.linescore?.innings?.[0];
   const firstInningAwayRuns = toNumber(first?.away?.runs, 0);
   const firstInningHomeRuns = toNumber(first?.home?.runs, 0);
@@ -2197,14 +2203,14 @@ function finalGameResult(game, dateYmd) {
       score: homeScore
     },
     winner: {
-      id: winnerTeam.id,
-      name: winnerTeam.name,
-      abbreviation: winnerTeam.abbreviation
+      id: winnerTeam?.id ?? null,
+      name: winnerTeam?.name ?? null,
+      abbreviation: winnerTeam?.abbreviation ?? null
     },
     loser: {
-      id: loserTeam.id,
-      name: loserTeam.name,
-      abbreviation: loserTeam.abbreviation
+      id: loserTeam?.id ?? null,
+      name: loserTeam?.name ?? null,
+      abbreviation: loserTeam?.abbreviation ?? null
     },
     firstInning: {
       awayRuns: firstInningAwayRuns,
@@ -3008,6 +3014,11 @@ function predictGame(
     start: formatGameTime(game.gameDate, MLB_TIMEZONE),
     startTime: game.gameDate || null,
     venue: game.venue?.name || 'TBD',
+    // Surface the raw weather payload and computed park-factor context so the
+    // dashboard quality report can honestly reflect which inputs were present
+    // (previously it read weather_detail/park_detail, fields that never existed).
+    weather: game.weather || null,
+    parkFactor: parkFactorContext(homeTeam),
     away,
     home,
     contextLine: `${standingContext(away, awayStanding, 'away')} | ${standingContext(home, homeStanding, 'home')}`,

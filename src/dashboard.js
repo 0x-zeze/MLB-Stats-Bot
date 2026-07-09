@@ -155,7 +155,7 @@ async function sampleAnalysis(gameId) {
   return runPythonJson(
     [
       'import json, sys',
-      'from src.agent_tools import get_game_context, predict_moneyline, explain_prediction',
+      'from src.agent_tools import get_game_context, predict_moneyline, predict_yrfi, explain_prediction',
       'gid = sys.argv[1]',
       'payload = {',
       '  "context": get_game_context(gid),',
@@ -258,10 +258,12 @@ function liveQualityReport(prediction, fetchedAt) {
     awayStarter && homeStarter && !awayStarter.includes('TBD') && !homeStarter.includes('TBD');
   const lineupConfirmed = awayLineup?.confirmed && homeLineup?.confirmed;
   const lineupPartial = Boolean(awayLineup || homeLineup);
-  const weatherAvailable = prediction.weather_detail !== undefined;
+  const weatherAvailable = Boolean(prediction.weather);
   const bullpenAvailable = Boolean(prediction.bullpenLine);
-  const parkAvailable = Boolean(prediction.park_detail);
-  const marketOddsAvailable = Boolean(prediction.moneyline?.current_odds);
+  const parkAvailable = Boolean(prediction.parkFactor);
+  const marketOddsAvailable = Boolean(
+    prediction.currentOdds?.homeMoneyline != null || prediction.currentOdds?.awayMoneyline != null
+  );
   const injuryAvailable = Boolean(prediction.injuryDetailLines?.length || prediction.injuryLine);
   const missingFields = [];
   const confidenceAdjustments = [];
@@ -319,13 +321,17 @@ function liveQualityReport(prediction, fetchedAt) {
     park: fieldStatus(
       'Park factor',
       parkAvailable ? 'Available' : 'Missing',
-      prediction.park_detail || ''
+      prediction.parkFactor
+        ? `${prediction.parkFactor.label} (run factor ${prediction.parkFactor.runFactorPct}%)`
+        : ''
     ),
     marketOdds: fieldStatus(
       'Market odds',
       marketOddsAvailable ? 'Available' : 'Missing',
       marketOddsAvailable
-        ? `Current moneyline odds: ${prediction.moneyline?.current_odds || 'N/A'}`
+        ? `Current moneyline: ${prediction.away?.abbreviation || 'Away'} ${
+            prediction.currentOdds?.awayMoneyline ?? 'N/A'
+          } | ${prediction.home?.abbreviation || 'Home'} ${prediction.currentOdds?.homeMoneyline ?? 'N/A'}`
         : ''
     ),
   };

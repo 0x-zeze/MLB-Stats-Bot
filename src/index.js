@@ -21,7 +21,7 @@ import {
 import { Storage } from './storage.js';
 import { setupWebhook, TelegramBot } from './telegram.js';
 import { UI_LINE, UI_THIN_LINE, uiBullet, uiCommand, uiKV, uiSection, uiTitle } from './telegramFormat.js';
-import { dateInTimezone, isValidDateYmd, percent, timeInTimezone } from './utils.js';
+import { dateInTimezone, isValidDateYmd, percent, timeInTimezone, weekdayInTimezone } from './utils.js';
 import { startDashboard } from './dashboard.js';
 import { formatLedgerReport } from './ledgerReport.js';
 import {
@@ -1299,7 +1299,9 @@ async function handlePicksCommand(bot, chatId, question, dateYmd = dateInTimezon
   // recordBet. Errors here must never block the /picks answer.
   for (const prediction of predictions) {
     try {
-      storage.recordBet(prediction);
+      // Pass dateYmd explicitly: raw predictGame objects have no dateYmd field,
+      // so relying on prediction.dateYmd would store an empty ledger date.
+      storage.recordBet(prediction, dateYmd);
     } catch (error) {
       console.error('recordBet failed:', error.message);
     }
@@ -1980,7 +1982,11 @@ async function startWebhookMode(bot) {
 
 async function processPendingPostGames(bot) {
   if (postGameCheckRunning) return;
-  if (targetChatIds().length === 0) return;
+  // NOTE: settlement, memory learning and auto-evolution must run regardless of
+  // whether there are chat recipients. Only the recap *send* is gated on having
+  // targets below — the old early-return here left open bets unsettled and the
+  // ledger/units P/L frozen in allowlist-only setups with no TELEGRAM_CHAT_ID.
+  const hasChatTargets = targetChatIds().length > 0;
 
   postGameCheckRunning = true;
   let newGamesLearned = 0;
@@ -1990,9 +1996,13 @@ async function processPendingPostGames(bot) {
       if (evaluations.length === 0) continue;
 
       newGamesLearned += evaluations.filter((evaluation) => evaluation.learned).length;
-      const text = formatPostGameRecap(dateYmd, evaluations);
-      const sent = await sendTextToAll(bot, text);
-      console.log(`Post-game recap ${dateYmd} terkirim ke ${sent} chat.`);
+      if (hasChatTargets) {
+        const text = formatPostGameRecap(dateYmd, evaluations);
+        const sent = await sendTextToAll(bot, text);
+        console.log(`Post-game recap ${dateYmd} terkirim ke ${sent} chat.`);
+      } else {
+        console.log(`Post-game ${dateYmd}: ${evaluations.length} game(s) settled/learned (no chat targets, recap skipped).`);
+      }
     }
 
     if (newGamesLearned > 0) {
@@ -2121,11 +2131,16 @@ function formatWeeklyRecap(stats) {
 }
 
 function computeWeeklyStats() {
-  const today = new Date();
+  // Build the 7-day window in config.timezone, matching how predictions are
+  // keyed (dateInTimezone). Using UTC toISOString() dates here could shift the
+  // window a day on a server whose local/UTC zone differs from config.timezone.
+  // Anchor at UTC noon so day arithmetic never crosses a DST/midnight boundary.
+  const todayYmd = dateInTimezone(config.timezone);
+  const anchor = new Date(`${todayYmd}T12:00:00Z`);
   const dates = [];
   for (let i = 7; i >= 1; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
+    const d = new Date(anchor);
+    d.setUTCDate(d.getUTCDate() - i);
     dates.push(d.toISOString().slice(0, 10));
   }
 
@@ -2180,8 +2195,11 @@ function computeWeeklyStats() {
 }
 
 async function processWeeklyRecap(bot) {
+  // Evaluate BOTH the day-of-week and the hour in config.timezone. Mixing a
+  // server-local getDay() with a timezone-local hour let the Sunday 09:00-10:00
+  // window fire on the wrong calendar day (or be skipped) on a UTC-clock server.
   const now = new Date();
-  const dayOfWeek = now.getDay();
+  const dayOfWeek = weekdayInTimezone(config.timezone, now);
   const hour = Number(timeInTimezone(config.timezone).split(':')[0]);
 
   if (dayOfWeek !== 0 || hour < 9 || hour > 10) return;

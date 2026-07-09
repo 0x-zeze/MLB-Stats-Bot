@@ -137,6 +137,27 @@ test('decision_id is unique per game for same-day same-market bets', () => {
   assert.equal(storage.recordBet(p2), '2026-06-12-moneyline-51');
 });
 
+test('recordBet uses explicit dateYmd when the prediction object lacks one', () => {
+  const { storage } = freshStorage();
+  const a = team(1, 'Aces', 'ACE');
+  const b = team(2, 'Bats', 'BAT');
+  // Mirror the live path: raw predictGame objects carry no dateYmd field.
+  const pred = valuePrediction(70, '2026-06-12', a, b, 'away', { odds: 150, stake: 2, model: 57, fair: 51 });
+  delete pred.dateYmd;
+
+  // savePredictions runs first in the live path (bet_ledger.game_pk → picks FK).
+  storage.savePredictions('2026-06-12', [pred]);
+  const id = storage.recordBet(pred, '2026-06-12');
+  assert.equal(id, '2026-06-12-moneyline-70', 'decision_id must include the explicit date');
+
+  const row = storage.readLedger()[0];
+  assert.equal(row.date_ymd, '2026-06-12', 'date_ymd must be persisted, not empty');
+  // A date-scoped read must return the bet. With the old bug (date_ymd=''), the
+  // '' >= cutoff string comparison is always false, so every real bet was
+  // silently excluded from sinceDays queries. A wide window includes the fixture.
+  assert.equal(storage.readLedger({ sinceDays: 100000 }).length, 1);
+});
+
 test('formatLedgerReport renders open, settled record, and ROI', () => {
   const rows = [
     { status: 'open', team: 'Phillies', odds: 210, edge: 8.5, units_staked: 2.9, date_ymd: '2026-06-12', market: 'moneyline' },

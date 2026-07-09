@@ -96,14 +96,32 @@ test('rotation: first key quota-exhausted -> falls through to the next key', asy
   clearEnv();
 });
 
-test('transient 429 does NOT exhaust the key (throws, key still available)', async () => {
+test('transient 429 does NOT exhaust the key (returns empty, key still available)', async () => {
   clearEnv();
   process.env.ODDS_API_KEYS = 'k1';
   __setOddsFetchForTest(fakeFetchByKey({ k1: 'rate_limit' }));
 
-  await assert.rejects(() => __fetchOddsForTest(), /429/);
-  // Key must remain available (not burned by a transient error).
+  // Single-key transient failure: no throw, cache-or-empty. Key is not burned.
+  const data = await __fetchOddsForTest();
+  assert.deepEqual(data, []);
   assert.deepEqual(parseOddsApiKeys(), ['k1']);
+  clearEnv();
+});
+
+test('transient 429 on first key falls through to the next key', async () => {
+  clearEnv();
+  process.env.ODDS_API_KEYS = 'flaky,good';
+  const calls = [];
+  __setOddsFetchForTest(fakeFetchByKey({ flaky: 'rate_limit', good: 'ok' }, calls));
+
+  const data = await __fetchOddsForTest();
+  assert.deepEqual(data, [{ id: 'evt-good' }]);
+  assert.deepEqual(calls, ['flaky', 'good']);
+  // flaky was NOT put in cooldown — next cycle still tries it first.
+  __resetOddsCacheForTest();
+  calls.length = 0;
+  await __fetchOddsForTest();
+  assert.deepEqual(calls, ['flaky', 'good']);
   clearEnv();
 });
 
