@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from .data_freshness import check_data_freshness
+from .rule_engine import evaluate_moneyline
 from .sharp_money import (
     LineMovementSignal,
     detect_sharp_money_signal,
@@ -382,39 +383,14 @@ def apply_confidence_downgrade(
     output = deepcopy(prediction)
     original_confidence = _normalize_confidence(output.get("confidence"))
     confidence = original_confidence
-    adjustments: list[str] = []
-    reasons: list[str] = []
-    no_bet = False
 
     edge = output.get("model_edge")
     edge_value = safe_float(edge, None)
     market_type = str(output.get("market_type", "")).lower()
     moneyline_edge_threshold = _moneyline_edge_threshold()
 
-    if quality_report.get("probable_pitchers") == MISSING:
-        no_bet = True
-        reasons.append("probable pitcher missing")
-
     consideration_notes = list(quality_report.get("no_bet_considerations") or [])
-    if "opener_situation" in consideration_notes:
-        adjustments.append("opener situation: SP role unclear")
-
-    if edge_value is None:
-        no_bet = True
-        reasons.append("model edge unavailable")
-    elif market_type == "yrfi" and abs(edge_value) < 0.06:
-        no_bet = True
-        reasons.append("YRFI model edge below 6%")
-    elif market_type != "yrfi" and abs(edge_value) < moneyline_edge_threshold:
-        no_bet = True
-        reasons.append(f"model edge below {_format_edge_threshold(moneyline_edge_threshold)}")
-
-
-
     score = int(quality_report.get("score", 0))
-    if score < 60:
-        no_bet = True
-        reasons.append("data quality score below 60")
 
     sharp_signal = quality_report.get("sharp_money_signal")
     if isinstance(sharp_signal, dict):
@@ -424,46 +400,33 @@ def apply_confidence_downgrade(
     else:
         sharp_adj = "no_change"
 
-    if sharp_adj == "downgrade_two":
-        confidence = _downgrade(_downgrade(confidence))
-        adjustments.append("sharp money strongly against pick: confidence downgraded x2")
-    elif sharp_adj == "downgrade_one":
-        confidence = _downgrade(confidence)
-        adjustments.append("sharp money against pick: confidence downgraded")
-
-    if quality_report.get("odds") == STALE:
-        confidence = _downgrade(confidence)
-        adjustments.append("odds stale: confidence downgraded")
-
-    if quality_report.get("weather") == STALE and quality_report.get("weather_outdoor"):
-        confidence = _downgrade(confidence)
-        adjustments.append("outdoor weather stale: confidence downgraded")
-
-    if quality_report.get("lineup") in {PROJECTED, MISSING}:
-        new_confidence = _cap_confidence(confidence, "Medium")
-        if new_confidence != confidence:
-            adjustments.append("lineup not confirmed: confidence capped at Medium")
-        confidence = new_confidence
-
-    if quality_report.get("probable_pitchers") == PROJECTED:
-        new_confidence = _cap_confidence(confidence, "Medium")
-        if new_confidence != confidence:
-            adjustments.append("probable pitcher projected: confidence capped at Medium")
-        confidence = new_confidence
-
-    if 60 <= score < 75:
-        new_confidence = _cap_confidence(confidence, "Low")
-        if new_confidence != confidence:
-            adjustments.append("data quality 60-74: confidence capped at Low")
-        confidence = new_confidence
-    elif 75 <= score < 85:
-        new_confidence = _cap_confidence(confidence, "Medium")
-        if new_confidence != confidence:
-            adjustments.append("data quality 75-84: confidence capped at Medium")
-        confidence = new_confidence
-    elif score >= 85 and confidence == "High" and not quality_report.get("calibration_supports_high"):
-        confidence = "Medium"
-        adjustments.append("calibration does not support High: confidence capped at Medium")
+    # Delegate the ordered no-bet / downgrade / cap logic to the shared rule
+    # engine. The engine reads data/rules/moneyline_rules.json (single source of
+    # truth with the JS side) and threads a running confidence across CAP/ADJUST
+    # handlers in ascending rule `order`, reproducing this function's original
+    # inline block byte-for-byte. Everything else (decision label, output.update)
+    # stays in this host.
+    engine_result = evaluate_moneyline(
+        {
+            "confidence": confidence,
+            "probable_pitchers": quality_report.get("probable_pitchers"),
+            "no_bet_considerations": consideration_notes,
+            "edge_value": edge_value,
+            "market_type": market_type,
+            "edge_threshold": moneyline_edge_threshold,
+            "score": score,
+            "sharp_adj": sharp_adj,
+            "odds": quality_report.get("odds"),
+            "weather": quality_report.get("weather"),
+            "weather_outdoor": quality_report.get("weather_outdoor"),
+            "lineup": quality_report.get("lineup"),
+            "calibration_supports_high": quality_report.get("calibration_supports_high"),
+        }
+    )
+    no_bet = engine_result["no_bet"]
+    confidence = engine_result["confidence"]
+    reasons = engine_result["reasons"]
+    adjustments = engine_result["adjustments"]
 
     raw_lean = output.get("final_lean") or output.get("predicted_winner") or output.get("lean")
     if no_bet:

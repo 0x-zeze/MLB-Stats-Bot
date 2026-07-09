@@ -1602,23 +1602,38 @@ async function handleMessage(bot, message) {
     return;
   }
 
-  if (command === '/today' || command === '/deep') {
+  if (command === '/today') {
     const maybeDate = args[0];
     const dateYmd = isValidDateYmd(maybeDate) ? maybeDate : dateInTimezone(config.timezone);
     if (!acquireCommandLock(chatId, 'today')) return;
     try {
-      const { text, predictions } = await buildAlertPayload(dateYmd, { includeAdvanced: false });
+      const { text: alertText, predictions } = await buildAlertPayload(dateYmd, { includeAdvanced: false });
       const gameButtons = predictions.slice(0, 12).map((p) => [{
         text: `${p.away.abbreviation || p.away.name} @ ${p.home.abbreviation || p.home.name}`,
         callback_data: `${PREDICT_CALLBACK_PREFIX}${dateYmd}:${p.gamePk}`
       }]);
-      await bot.sendMessage(chatId, text, {
+      await bot.sendMessage(chatId, alertText, {
         reply_markup: gameButtons.length ? { inline_keyboard: gameButtons } : undefined
       });
       maybeStartLineMonitor(predictions, chatId, dateYmd);
       console.log(`Alert ${dateYmd} sent to ${chatId}.`);
     } finally {
       releaseCommandLock(chatId, 'today');
+    }
+    return;
+  }
+
+  if (command === '/deep') {
+    const maybeDate = args[0];
+    const dateYmd = isValidDateYmd(maybeDate) ? maybeDate : dateInTimezone(config.timezone);
+    if (!acquireCommandLock(chatId, 'deep')) return;
+    try {
+      const { text: alertText, predictions } = await buildAlertPayload(dateYmd, { includeAdvanced: true });
+      await bot.sendMessage(chatId, alertText);
+      maybeStartLineMonitor(predictions, chatId, dateYmd);
+      console.log(`Deep alert ${dateYmd} sent to ${chatId}.`);
+    } finally {
+      releaseCommandLock(chatId, 'deep');
     }
     return;
   }
@@ -1912,7 +1927,11 @@ async function poll(bot) {
       const updates = await bot.getUpdates({ offset, timeout: 30 });
       for (const update of updates) {
         offset = update.update_id + 1;
-        await processTelegramUpdate(bot, update);
+        // Process concurrently so a slow command (e.g. /deep fetching odds + agent
+        // analysis) does not block polling and make other commands appear dead.
+        processTelegramUpdate(bot, update).catch((error) => {
+          console.error('Update processing error:', error);
+        });
       }
     } catch (error) {
       console.error('Polling error:', error.message);

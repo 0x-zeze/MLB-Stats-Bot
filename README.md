@@ -972,6 +972,22 @@ No-bet: YES/NO
 
 Prinsip penting: agent tidak boleh memberi `High` confidence jika lineup belum confirmed, probable pitcher missing/projected, odds stale, weather stale untuk outdoor stadium, atau calibration belum mendukung high confidence.
 
+### Declarative moneyline rules (single source of truth)
+
+Ambang batas, urutan, dan message untuk kedua moneyline decision engine tersimpan di satu katalog: `data/rules/moneyline_rules.json` (`version: "moneyline-rules-v1"`). Dua interpreter membaca file ini:
+
+- `src/rule_engine.js` -> dipakai live JS engine (`src/mlb.js` `valueSafetyReasons` / `applyMoneylineValueMarket`).
+- `src/rule_engine.py` -> dipakai offline Python engine (`src/quality_control.py` `apply_confidence_downgrade`).
+
+Invariant yang WAJIB dijaga (di-enforce oleh schema test + parity test di kedua sisi):
+
+1. Rule dievaluasi berdasarkan `order` menaik. `order` meniru urutan baris kode asli agar output reason/adjustment tetap byte-identical. `tier` (1/2/3) hanya metadata deskriptif dari taxonomy input-signal (Tier 1 pitcher/offense/bullpen/park/odds; Tier 2 weather/lineup/form; Tier 3 umpire/public/H2H) dan TIDAK memengaruhi urutan evaluasi.
+2. Logika predikat hidup di handler per-bahasa (`JS_HANDLERS` / `PY_HANDLERS`); hanya threshold, message, order, scope, dan tier yang tinggal di JSON.
+3. Setiap `handler` sebuah rule harus terdaftar di registry engine yang men-scope-nya, dan setiap handler terdaftar harus dirujuk oleh sebuah rule (bijection, dites dua arah).
+4. Format angka tinggal di handler karena JS (`.toFixed`) dan Python (`:.0f`) berbeda.
+
+Perubahan `id`/`engines`/`tier`/`order`/`action`/`message` harus menjaga kedua schema test (`tests/test_rule_schema.js`, `tests/test_rule_schema.py`) dan kedua parity suite (`tests/test_rule_engine_parity.js`, `tests/test_rule_engine_parity.py`) tetap hijau. Blok `_doc` di dalam JSON adalah salinan ringkas kontrak ini; jaga keduanya sinkron.
+
 ## Modular Agent Pipeline
 
 Agent sekarang memakai pipeline berlapis supaya tidak bingung oleh terlalu banyak sinyal:

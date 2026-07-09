@@ -1,7 +1,10 @@
 # PROGRESS — Deterministic rule support (moneyline engine + evolution manual candidates)
 
-**Status:** WIP. STEP 1.0–1.2 done (JS live engine refactored + green). STEP 1.3 in progress.
-STEP 1.4 / 1.5 / STEP 2 pending. This file is a handoff so work can resume cold.
+**Status:** COMPLETE. STEP 1.0–1.5 done + STEP 2 done. All gates green:
+`npm run check` OK; Python `541 passed`; my JS tests `7/7`. The full JS suite
+shows 23 pre-existing sqlite ABI failures (see §4) that are NOT mine — proven by
+reverting the tracked edits and re-running (identical 23 fails). This file is a
+handoff so work can resume cold.
 
 Approved plan: `/root/.claude/plans/i-want-to-add-velvety-taco.md`.
 Branch: `main` (WIP committed here per request).
@@ -188,16 +191,34 @@ Constants still in `mlb.js` (unchanged, read by handlers via ctx):
 - JS suite result: **17/17 my tests green.** (23 unrelated failures are pre-existing
   better-sqlite3 ABI mismatch — see §4.)
 
-### PENDING
-- **STEP 1.3** (in progress): `src/rule_engine.py` (`lru_cache` loader + `evaluate_moneyline`
-  + `PY_HANDLERS`) and `tests/test_rule_schema.py`. NOT wired into quality_control.py.
-- **STEP 1.4**: capture Py goldens from OLD `apply_confidence_downgrade` (verify green vs OLD
-  first), add `tests/test_rule_engine_parity.py`, THEN refactor middle block 394-466 to
-  delegate to `evaluate_moneyline`. Run pytest.
-- **STEP 1.5**: full gate (`npm test`), README invariant + confirm `_doc` sync contract.
-- **STEP 2**: `src/evolution/add_manual_candidate.py` CLI (append `source:"manual"` candidate
-  via `memory_store.append_jsonl`) + `tests/test_add_manual_candidate.py` (assert schema,
-  `source=="manual"`, flows through gate as deferred, no bypass).
+### DONE (STEP 1.3–1.5 + STEP 2, all green)
+- **STEP 1.3**: `src/rule_engine.py` — `@lru_cache` loader (`load_moneyline_rules`, keyed on
+  resolved path; honors `MLB_RULES_FILE`), `evaluate_moneyline(ctx)` (filters `"py" in engines`,
+  sorts by `order`, threads running `confidence`, returns `{no_bet,reasons,adjustments,confidence}`),
+  12 `PY_HANDLERS`. Confidence ladder helpers (`_cap_confidence`/`_downgrade`/`_normalize_confidence`)
+  are DUPLICATED here to avoid an import cycle back into quality_control — must stay byte-identical.
+  `tests/test_rule_schema.py` (6 tests): pinned version, typed fields, unique ids, unique
+  (engine,order), py handler↔rule bijection. PASS.
+- **STEP 1.4**: `tests/fixtures/moneyline_py_corpus.py` (29 `(prediction, quality_report)` cases
+  covering every py branch + boundaries + compounding) and `tests/fixtures/moneyline_py_goldens.json`
+  (captured from OLD `apply_confidence_downgrade`, proven green vs OLD FIRST). Then refactored the
+  middle block (was 394-466) to build a ctx and delegate to `evaluate_moneyline`; decision-label
+  block + `output.update` stay in the host. `tests/test_rule_engine_parity.py` compares the FULL
+  output dict. Existing `tests/test_quality_control.py` (incl. dashboard-settings patch) still green.
+  NOTE: `_cap_confidence`/`_downgrade`/`_format_edge_threshold` in quality_control.py are now dead
+  (logic moved to the engine) but LEFT in place — no Python linter in the gate, minimal diff. Only
+  `_normalize_confidence` and `_moneyline_edge_threshold` are still used by the host.
+- **STEP 1.5**: README "Declarative moneyline rules (single source of truth)" subsection added
+  (Indonesian, mirrors the JSON `_doc` 4-invariant contract — keep both in sync). Full gate green.
+- **STEP 2**: `src/evolution/add_manual_candidate.py` — `build_manual_candidate` (canonical
+  generator schema + `source:"manual"`, id prefix `manual-<sha1>`, does NOT stamp `created_at`),
+  `add_manual_candidate` (idempotent by candidate_id via `read_jsonl` scan, persists through
+  `append_jsonl`), `detect_unsafe_wording` (pre-warns on gate-rejected text; gate still enforces),
+  `main()` CLI (`--rule/--market/--type/--reason/--source-lesson/--source-loss/--dry-run`).
+  `tests/test_add_manual_candidate.py` (12 tests): schema==generator+source, manual- id prefix,
+  no created_at, invalid/empty rejected, all VALID_TYPES, unsafe-wording, persist pending,
+  idempotent, and **flows through `backtest_candidates()` as insufficient_data/deferred with NO
+  entry in approved_rules** (no-bypass proof). PASS.
 
 ---
 
@@ -229,34 +250,24 @@ Constants still in `mlb.js` (unchanged, read by handlers via ctx):
 
 ---
 
-## 5. Exact next action on resume
+## 5. Status — all steps complete
 
-**STEP 1.3 — write the Python evaluator + schema test (NOT wired yet):**
+Nothing pending. The approved plan is fully implemented and verified. If resuming to extend:
 
-1. Create `src/rule_engine.py` mirroring `src/rule_engine.js`:
-   - `@functools.lru_cache(maxsize=1)` `_load_rules()` reading `data_path("rules/moneyline_rules.json")`.
-   - `evaluate_moneyline(ctx)`: filter to `"py" in rule["engines"]`, sort by `rule["order"]`
-     (NOT tier), thread a running `confidence` so CAP/ADJUST compound in source order; return
-     `{no_bet, reasons, adjustments, confidence}`.
-   - `PY_HANDLERS` registry with the 12 py handlers (see JSON): probablePitcherMissing(10),
-     openerConsideration(15), edgeUnavailable(20), yrfiEdgeFloor(21), edgeFloor(22),
-     dataQualityFloor(30), sharpDowngrade(40), oddsStaleDowngrade(50), weatherStaleDowngrade(60),
-     lineupCap(70), pitcherProjectedCap(80), scoreBandCap(90 w/ params.bands).
-   - Edge threshold is passed IN via ctx (from `_moneyline_edge_threshold()`), NOT cached in
-     rule_engine, so the dashboard_settings patch test keeps working.
-2. Create `tests/test_rule_schema.py` mirroring `test_rule_schema.js`: pinned version, typed
-   fields, unique ids, unique (engine,order), **py rule ids ↔ PY_HANDLERS keys bijection**.
-3. Run + show: `node scripts/run_python.js -m pytest tests/test_rule_schema.py`
-   and `node --test tests/test_rule_schema.js tests/test_rule_engine_parity.js`.
-4. Then STEP 1.4: capture Py goldens from OLD `apply_confidence_downgrade` (assert green vs
-   OLD), add `tests/test_rule_engine_parity.py`, refactor middle block 394-466 to delegate,
-   re-run pytest. Keep `tests/test_quality_control.py` green untouched.
+- Edge threshold is passed IN via `ctx` (from `_moneyline_edge_threshold()`), NOT cached inside
+  rule_engine.py, so the `dashboard_settings` patch test keeps working. Keep it that way.
+- If you add a py rule, add its handler to `PY_HANDLERS` (schema test enforces bijection both ways)
+  and re-capture goldens ONLY if production behavior intentionally changes (never to hide a regress).
+- To wire the manual-candidate CLI into an operator flow, it is already importable:
+  `from src.evolution.add_manual_candidate import add_manual_candidate` or run
+  `node scripts/run_python.js -m src.evolution.add_manual_candidate --rule "..." [--dry-run]`.
 
-**Verification cadence (per standing constraint, run after every change, show results):**
+**Verification cadence (run after every change, show results):**
 ```
-npm run check
-node --test tests/*.js                 # my parity/schema green; sqlite ABI failures are pre-existing
-node scripts/run_python.js -m pytest
+npm run check                          # OK
+node --test tests/test_rule_schema.js tests/test_rule_engine_parity.js   # 7/7 green
+node --test tests/*.js                 # 66 pass / 23 pre-existing sqlite ABI fails (NOT mine, see §4)
+node scripts/run_python.js -m pytest   # 541 passed
 ```
 Respond in Indonesian. No live BET/LEAN/NO_BET output may change unless a rule is promoted
 through the gate.
