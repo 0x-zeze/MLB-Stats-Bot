@@ -1,0 +1,328 @@
+{
+  "version": "moneyline-rules-v1",
+  "_doc": "Single source of truth for BOTH moneyline decision engines: the live JS engine (src/mlb.js valueSafetyReasons / applyMoneylineValueMarket) and the offline Python engine (src/quality_control.py apply_confidence_downgrade). Two interpreters read this file: src/rule_engine.js and src/rule_engine.py. INVARIANTS: (1) Rules are evaluated in ascending `order`, which mirrors the ORIGINAL source line sequence so reason/adjustment output stays byte-identical; `tier` is descriptive metadata per the README input-signal taxonomy (Tier1 pitcher/offense/bullpen/park/odds; Tier2 weather/lineup/form; Tier3 umpire/public/H2H) and does NOT affect evaluation order. (2) Predicate logic lives in per-language handlers (the `handler` key names the function); thresholds, messages, ordering, scope and tier live ONLY here. (3) Every rule's `handler` must exist in the registry of each engine it is scoped to, and every registered handler must be referenced by a rule (schema tests enforce both directions). (4) Numeric formatting stays in the handlers because JS (.toFixed) and Python (:.0f) format differently. Changing any id/engines/tier/order/action/message must keep both schema tests and both parity suites green.",
+  "config_refs": {
+    "js_edge_threshold": "config.minimumMoneylineEdge (src/config.js) -> moneylineValueEdgeThreshold() in src/mlb.js; default 0.04 (scaled to percent)",
+    "js_odds_max_age": "config.moneylineOddsMaxAgeMinutes -> moneylineOddsMaxAgeMinutes() in src/mlb.js; default 10",
+    "py_edge_threshold": "dashboard_settings.json minimum_moneyline_edge -> _moneyline_edge_threshold() in src/quality_control.py; default 0.04"
+  },
+  "rules": [
+    {
+      "id": "js.stale_odds",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 20,
+      "action": "NO_BET",
+      "handler": "staleOdds",
+      "params": {},
+      "message": "{freshnessReason}",
+      "notes": "Fires when moneylineOddsFreshnessReason(item) is non-empty. Handler returns that pre-built string as an override (either 'odds moneyline timestamp tidak tersedia' or 'odds moneyline stale {n}m > {max}m')."
+    },
+    {
+      "id": "js.edge_floor",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 30,
+      "action": "NO_BET",
+      "handler": "edgeFloor",
+      "params": { "source": "config", "default_pct": 4.0 },
+      "message": "value edge hanya {sign}{edge}% < {threshold}%",
+      "notes": "option.edge < edgeThreshold. edgeThreshold = moneylineValueEdgeThreshold() (configurable), passed in via ctx.edgeThreshold."
+    },
+    {
+      "id": "js.team_quality",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 40,
+      "action": "NO_BET",
+      "handler": "teamQuality",
+      "params": { "min_win_pct": 0.520 },
+      "message": "team win% {pct}% < {floor}% quality floor",
+      "notes": "pickedTeamWinPct < min_win_pct. pct = (winPct*100).toFixed(0); floor = (min_win_pct*100).toFixed(0)."
+    },
+    {
+      "id": "js.away_underdog",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 50,
+      "action": "NO_BET",
+      "handler": "awayUnderdog",
+      "params": { "max_odds": 115 },
+      "message": "away underdog +{odds} exceeds +{max} limit",
+      "notes": "option.side === 'away' && Number(option.odds) > max_odds."
+    },
+    {
+      "id": "js.market_agreement",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 60,
+      "action": "NO_BET",
+      "handler": "marketAgreement",
+      "params": {},
+      "message": "pick berlawanan dengan model favored side",
+      "notes": "option.side !== ctx.modelFavoredSide (computed in host from pureModelProbabilityForSide)."
+    },
+    {
+      "id": "js.conviction_floor",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 70,
+      "action": "NO_BET",
+      "handler": "convictionFloor",
+      "params": { "min_probability": 52 },
+      "message": "model conviction {prob}% < {floor}% floor",
+      "notes": "option.modelProbability < min_probability. prob = modelProbability.toFixed(1); floor renders as String(min_probability) == '52' to match template-literal ${MIN_VALUE_PROBABILITY}."
+    },
+    {
+      "id": "js.sharp_contra",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 80,
+      "action": "NO_BET",
+      "handler": "sharpContra",
+      "params": { "min_magnitude": 10 },
+      "message": "sharp money contra: line moved {magnitude} cents against pick",
+      "notes": "item.modelBreakdown.sharpMoney.direction === 'against_model' && magnitude >= min_magnitude."
+    },
+    {
+      "id": "js.record_dominance",
+      "engines": ["js"],
+      "tier": 3,
+      "order": 90,
+      "action": "NO_BET",
+      "handler": "recordDominance",
+      "params": { "record_multiplier": 1.35, "max_matchup_edge": 0.2 },
+      "message": "record/H2H lebih dominan daripada matchup hari ini",
+      "notes": "recordDominated || (recordContextEdge > matchupEdge*record_multiplier && matchupEdge < max_matchup_edge)."
+    },
+    {
+      "id": "js.audit_record_bias",
+      "engines": ["js"],
+      "tier": 3,
+      "order": 100,
+      "action": "NO_BET",
+      "handler": "auditRecordBias",
+      "params": {
+        "evolution_rule_key": "audit:confidence_cap:record_bias",
+        "default_record_context_multiplier": 1.25,
+        "default_max_matchup_edge": 0.18
+      },
+      "message": "audit guardrail: record/recent-form bias aktif",
+      "notes": "Only when the evolution rule is active (getEvolutionRule). Reads its .parameters (record_context_multiplier, max_matchup_edge) with the defaults above. Pushed as a reason AND surfaced in auditAdjustments by the host string-match on 'audit guardrail'."
+    },
+    {
+      "id": "js.thin_matchup",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 110,
+      "action": "NO_BET",
+      "handler": "thinMatchup",
+      "params": { "max_matchup_edge": 0.08, "strong_edge": 4.0 },
+      "message": "matchup edge game ini masih tipis",
+      "notes": "abs(matchupEdge) < max_matchup_edge && option.edge < strong_edge (hardcoded STRONG_VALUE_EDGE_THRESHOLD, NOT the configurable edge floor)."
+    },
+    {
+      "id": "js.factor_agreement",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 120,
+      "action": "NO_BET",
+      "handler": "factorAgreement",
+      "params": { "min_agreeing": 3, "agree_threshold": 0.02, "strong_edge": 4.0 },
+      "message": "kurang dari 3 faktor model setuju dengan pick ini",
+      "notes": "factorsAgreeing < min_agreeing && option.edge < strong_edge. factorsAgreeing = count of [matchup,starter,offense,bullpen,lineup]Edge * pickDir > agree_threshold."
+    },
+    {
+      "id": "js.audit_weak_edge",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 130,
+      "action": "NO_BET",
+      "handler": "auditWeakEdge",
+      "params": {
+        "evolution_rule_key": "audit:no_bet:weak_edge",
+        "default_max_value_edge": 1.0,
+        "default_max_probability_edge": 3.0,
+        "default_max_matchup_edge": 0.05
+      },
+      "message": "audit guardrail: edge model/value masih lemah",
+      "notes": "Only when the evolution rule is active. (option.edge < max_value_edge || modelProbabilityEdge < max_probability_edge) && matchupEdge < max_matchup_edge. modelProbabilityEdge = abs(modelProbability - 50)."
+    },
+    {
+      "id": "js.lineup_incomplete",
+      "engines": ["js"],
+      "tier": 2,
+      "order": 140,
+      "action": "NO_BET",
+      "handler": "lineupIncomplete",
+      "params": { "min_count": 9, "strong_edge": 4.0 },
+      "message": "lineup belum confirmed penuh",
+      "notes": "some lineup not confirmed or count < min_count, AND option.edge < strong_edge."
+    },
+    {
+      "id": "js.opener",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 150,
+      "action": "NO_BET",
+      "handler": "openerRisk",
+      "params": { "confidences": ["high", "medium"] },
+      "message": "opener/bulk pitcher membuat SP signal tidak bersih",
+      "notes": "some team openerSituation.isOpener with confidence in `confidences`."
+    },
+    {
+      "id": "js.no_probable_pitcher",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 160,
+      "action": "NO_BET",
+      "handler": "noProbablePitcher",
+      "params": { "strong_edge": 4.0 },
+      "message": "probable pitcher belum jelas",
+      "notes": "(!item.away.starter || !item.home.starter) && option.edge < strong_edge."
+    },
+
+    {
+      "id": "py.probable_pitcher_missing",
+      "engines": ["py"],
+      "tier": 1,
+      "order": 10,
+      "action": "NO_BET",
+      "handler": "probablePitcherMissing",
+      "params": {},
+      "message": "probable pitcher missing",
+      "notes": "quality_report.probable_pitchers == MISSING."
+    },
+    {
+      "id": "py.opener_consideration",
+      "engines": ["py"],
+      "tier": 1,
+      "order": 15,
+      "action": "ADJUST",
+      "handler": "openerConsideration",
+      "params": {},
+      "message": "opener situation: SP role unclear",
+      "notes": "'opener_situation' in quality_report.no_bet_considerations. Adjustment note only; does NOT set no_bet or change confidence."
+    },
+    {
+      "id": "py.edge_unavailable",
+      "engines": ["py"],
+      "tier": 1,
+      "order": 20,
+      "action": "NO_BET",
+      "handler": "edgeUnavailable",
+      "params": {},
+      "message": "model edge unavailable",
+      "notes": "edge_value is None. First branch of the edge if/elif; mutually exclusive with yrfi/edge_floor."
+    },
+    {
+      "id": "py.yrfi_edge_floor",
+      "engines": ["py"],
+      "tier": 1,
+      "order": 21,
+      "action": "NO_BET",
+      "handler": "yrfiEdgeFloor",
+      "params": { "threshold": 0.06 },
+      "message": "YRFI model edge below 6%",
+      "notes": "edge_value is not None && market_type == 'yrfi' && abs(edge_value) < threshold."
+    },
+    {
+      "id": "py.edge_floor",
+      "engines": ["py"],
+      "tier": 1,
+      "order": 22,
+      "action": "NO_BET",
+      "handler": "edgeFloor",
+      "params": { "source": "dashboard_settings", "default": 0.04 },
+      "message": "model edge below {threshold_pct}",
+      "notes": "edge_value is not None && market_type != 'yrfi' && abs(edge_value) < threshold. threshold = _moneyline_edge_threshold() passed via ctx. threshold_pct = f'{threshold*100:.0f}%'."
+    },
+    {
+      "id": "py.data_quality_floor",
+      "engines": ["py"],
+      "tier": 1,
+      "order": 30,
+      "action": "NO_BET",
+      "handler": "dataQualityFloor",
+      "params": { "min_score": 60 },
+      "message": "data quality score below 60",
+      "notes": "int(quality_report.score) < min_score."
+    },
+    {
+      "id": "py.sharp_downgrade",
+      "engines": ["py"],
+      "tier": 1,
+      "order": 40,
+      "action": "ADJUST",
+      "handler": "sharpDowngrade",
+      "params": {},
+      "message": "{sharp_message}",
+      "notes": "ctx.sharp_adj: 'downgrade_two' -> two _downgrade + 'sharp money strongly against pick: confidence downgraded x2'; 'downgrade_one' -> one _downgrade + 'sharp money against pick: confidence downgraded'. Always appends when it fires."
+    },
+    {
+      "id": "py.odds_stale_cap",
+      "engines": ["py"],
+      "tier": 1,
+      "order": 50,
+      "action": "CAP",
+      "handler": "oddsStaleDowngrade",
+      "cap": "downgrade",
+      "params": {},
+      "message": "odds stale: confidence downgraded",
+      "notes": "quality_report.odds == STALE. One _downgrade; always appends the message."
+    },
+    {
+      "id": "py.weather_stale_cap",
+      "engines": ["py"],
+      "tier": 2,
+      "order": 60,
+      "action": "CAP",
+      "handler": "weatherStaleDowngrade",
+      "cap": "downgrade",
+      "params": {},
+      "message": "outdoor weather stale: confidence downgraded",
+      "notes": "quality_report.weather == STALE && quality_report.weather_outdoor. One _downgrade; always appends."
+    },
+    {
+      "id": "py.lineup_cap",
+      "engines": ["py"],
+      "tier": 2,
+      "order": 70,
+      "action": "CAP",
+      "handler": "lineupCap",
+      "cap": "Medium",
+      "params": {},
+      "message": "lineup not confirmed: confidence capped at Medium",
+      "notes": "quality_report.lineup in {PROJECTED, MISSING}. _cap_confidence(conf,'Medium'); append ONLY if it changed."
+    },
+    {
+      "id": "py.pitcher_projected_cap",
+      "engines": ["py"],
+      "tier": 1,
+      "order": 80,
+      "action": "CAP",
+      "handler": "pitcherProjectedCap",
+      "cap": "Medium",
+      "params": {},
+      "message": "probable pitcher projected: confidence capped at Medium",
+      "notes": "quality_report.probable_pitchers == PROJECTED. _cap_confidence(conf,'Medium'); append ONLY if it changed."
+    },
+    {
+      "id": "py.score_band_cap",
+      "engines": ["py"],
+      "tier": 1,
+      "order": 90,
+      "action": "CAP",
+      "handler": "scoreBandCap",
+      "params": {
+        "bands": [
+          { "min": 60, "max": 75, "cap": "Low", "message": "data quality 60-74: confidence capped at Low" },
+          { "min": 75, "max": 85, "cap": "Medium", "message": "data quality 75-84: confidence capped at Medium" },
+          { "min": 85, "max": 101, "cap": "Medium", "requires_calibration": true, "message": "calibration does not support High: confidence capped at Medium" }
+        ]
+      },
+      "message": "",
+      "notes": "elif chain on score. 60-74 cap Low (append if changed); 75-84 cap Medium (append if changed); 85+ ONLY when confidence=='High' && !calibration_supports_high -> set Medium + append. At most one band applies (ranges disjoint)."
+    }
+  ]
+}

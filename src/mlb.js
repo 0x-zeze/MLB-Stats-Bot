@@ -11,6 +11,7 @@ import { UI_LINE, UI_THIN_LINE, uiBullet, uiKV, uiSection, uiTitle } from './tel
 import { getEvolutionRule, loadEvolutionControls, moneylineWeightMultiplier } from './evolutionControls.js';
 import { calibratePercent, hasCalibrationMap } from './calibration.js';
 import { loadConfig } from './config.js';
+import { evaluateMoneyline } from './rule_engine.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const _mlbConfig = loadConfig();
@@ -523,134 +524,26 @@ function moneylineOddsFreshnessReason(item, now = Date.now()) {
   return '';
 }
 
+// Thin adapter over the declarative rule engine (src/rule_engine.js). The
+// predicate logic and reason strings now live in data/rules/moneyline_rules.json
+// + the JS_HANDLERS registry; this function only assembles the evaluation
+// context (host-computed helpers the handlers depend on) and delegates. The
+// early return for a missing option is kept here because it precedes any rule
+// context. See tests/test_rule_engine_parity.js for the byte-identical contract.
 function valueSafetyReasons(item, option, evolutionControls = loadEvolutionControls()) {
-  const reasons = [];
   if (!option) return ['odds moneyline belum tersedia'];
-  const staleOddsReason = moneylineOddsFreshnessReason(item);
-  if (staleOddsReason) reasons.push(staleOddsReason);
-  const edgeThreshold = moneylineValueEdgeThreshold();
-
-  if (option.edge < edgeThreshold) {
-    reasons.push(`value edge hanya ${option.edge >= 0 ? '+' : ''}${option.edge.toFixed(1)}% < ${edgeThreshold.toFixed(1)}%`);
-  }
-
-  // --- TEAM QUALITY GATE ---
-  // Analysis of 773 outcomes: picks on teams with .520+ WR = 70.2% accuracy.
-  // Picks on sub-.500 teams = 35.2%. The market prices weak teams correctly;
-  // the model's "value" on bad teams is fake overconfidence.
   const pickedTeamRecord = option.side === 'home' ? item.home?.record : item.away?.record;
-  const pickedTeamWinPct = leagueRecordPct(pickedTeamRecord);
-  if (pickedTeamWinPct < MIN_TEAM_QUALITY_PCT) {
-    reasons.push(`team win% ${(pickedTeamWinPct * 100).toFixed(0)}% < ${(MIN_TEAM_QUALITY_PCT * 100).toFixed(0)}% quality floor`);
-  }
-
-  // --- AWAY UNDERDOG BLOCKER ---
-  // 93.8% of staked bets were on AWAY teams. AWAY+VALUE = 44.9% WR (disaster).
-  // Away underdogs with plus odds > +115 are the model's biggest leak:
-  // it overestimates their strength, the market is right, model loses.
-  if (option.side === 'away' && Number(option.odds) > MAX_AWAY_UNDERDOG_ODDS) {
-    reasons.push(`away underdog +${option.odds} exceeds +${MAX_AWAY_UNDERDOG_ODDS} limit`);
-  }
-
-  // --- MARKET AGREEMENT CHECK ---
-  // When the model's favored side disagrees with the market favorite,
-  // the model is wrong more often than right. Require the model's pick
-  // to be the market favorite (or near-even) to stake.
-  const modelFavoredSide = pureModelProbabilityForSide(item, 'home') >= pureModelProbabilityForSide(item, 'away') ? 'home' : 'away';
-  if (option.side !== modelFavoredSide) {
-    reasons.push('pick berlawanan dengan model favored side');
-  }
-
-  // Conviction floor: below this floor the pick is a coin-flip
-  // dressed up by a wide market price, so it stays a lean, never a graded bet.
-  if (toNumber(option.modelProbability, 0) < MIN_VALUE_PROBABILITY) {
-    reasons.push(`model conviction ${toNumber(option.modelProbability, 0).toFixed(1)}% < ${MIN_VALUE_PROBABILITY}% floor`);
-  }
-
-  // Sharp money hard filter: when the closing line has moved significantly
-  // against the model's pick, sharp bettors are disagreeing with our side.
-  // CLV data shows picks with negative CLV (line moved against us) have lower WR
-  // (53.8% vs 56.0% for positive CLV). Aggressive reverse line movement (>=10
-  // cents against) is a strong contraindication — downgrade to NO BET.
-  const sharpMoney = item.modelBreakdown?.sharpMoney;
-  if (sharpMoney && sharpMoney.direction === 'against_model' && sharpMoney.magnitude >= 10) {
-    reasons.push(`sharp money contra: line moved ${sharpMoney.magnitude} cents against pick`);
-  }
-
-  const matchupEdge = Math.abs(toNumber(item.modelBreakdown?.matchupEdge, 0));
-  const recordContextEdge = Math.abs(toNumber(item.modelBreakdown?.recordContextEdge, 0));
-  if (item.modelBreakdown?.recordDominated || (recordContextEdge > matchupEdge * 1.35 && matchupEdge < 0.2)) {
-    reasons.push('record/H2H lebih dominan daripada matchup hari ini');
-  }
-
-  const recordBiasRule = getEvolutionRule(evolutionControls, 'audit:confidence_cap:record_bias');
-  if (recordBiasRule) {
-    const params = recordBiasRule.parameters || {};
-    const recordMultiplier = toNumber(params.record_context_multiplier, 1.25);
-    const maxRecordMatchupEdge = toNumber(params.max_matchup_edge, 0.18);
-    const recordDominatedThinMatchup = item.modelBreakdown?.recordDominated && matchupEdge < maxRecordMatchupEdge;
-    const recordContextDominates = recordContextEdge > matchupEdge * recordMultiplier && matchupEdge < maxRecordMatchupEdge;
-    if (recordDominatedThinMatchup || recordContextDominates) {
-      reasons.push('audit guardrail: record/recent-form bias aktif');
-    }
-  }
-
-  if (matchupEdge < 0.08 && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
-    reasons.push('matchup edge game ini masih tipis');
-  }
-
-  const breakdown = item.modelBreakdown || {};
-  const pickDir = option.side === 'home' ? 1 : -1;
-  const factorComponents = [
-    toNumber(breakdown.matchupEdge, 0),
-    toNumber(breakdown.starterEdge, 0),
-    toNumber(breakdown.offenseEdge, 0),
-    toNumber(breakdown.bullpenEdge, 0),
-    toNumber(breakdown.lineupEdge, 0)
-  ];
-  const factorsAgreeing = factorComponents.filter(c => c * pickDir > 0.02).length;
-  if (factorsAgreeing < 3 && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
-    reasons.push('kurang dari 3 faktor model setuju dengan pick ini');
-  }
-
-  const weakEdgeRule = getEvolutionRule(evolutionControls, 'audit:no_bet:weak_edge');
-  if (weakEdgeRule) {
-    const params = weakEdgeRule.parameters || {};
-    // Use relaxed defaults: the guardrail should only fire when edge is truly
-    // marginal. The old defaults (value edge < 2%, prob edge < 5%) were too
-    // aggressive and suppressed picks that had decent matchup signal (0.08-0.12).
-    const maxValueEdge = toNumber(params.max_value_edge, 1.0);
-    const maxProbabilityEdge = toNumber(params.max_probability_edge, 3.0);
-    const maxMatchupEdge = toNumber(params.max_matchup_edge, 0.05);
-    const modelProbabilityEdge = Math.abs(toNumber(option.modelProbability, 50) - 50);
-    // Trigger when either value edge or model probability edge is weak, but only
-    // when matchup signal is also thin. This preserves the guardrail's purpose
-    // while relaxed parameters keep it from suppressing moderate matchup edges.
-    if ((option.edge < maxValueEdge || modelProbabilityEdge < maxProbabilityEdge) && matchupEdge < maxMatchupEdge) {
-      reasons.push('audit guardrail: edge model/value masih lemah');
-    }
-  }
-
-  const lineups = [item.lineups?.away, item.lineups?.home].filter(Boolean);
-  const hasIncompleteLineup = lineups.some((lineup) => !lineup.confirmed || toNumber(lineup.count, 0) < 9);
-  if (hasIncompleteLineup && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
-    reasons.push('lineup belum confirmed penuh');
-  }
-
-  const openerTeams = [item.away, item.home].filter((team) => team?.openerSituation?.isOpener);
-  const riskyOpener = openerTeams.some((team) =>
-    ['high', 'medium'].includes(String(team.openerSituation?.confidence || '').toLowerCase())
-  );
-  if (riskyOpener) {
-    reasons.push('opener/bulk pitcher membuat SP signal tidak bersih');
-  }
-
-  const noProbablePitcher = !item.away?.starter || !item.home?.starter;
-  if (noProbablePitcher && option.edge < STRONG_VALUE_EDGE_THRESHOLD) {
-    reasons.push('probable pitcher belum jelas');
-  }
-
-  return [...new Set(reasons)];
+  const ctx = {
+    item,
+    option,
+    evolutionControls,
+    edgeThreshold: moneylineValueEdgeThreshold(),
+    oddsFreshnessReason: moneylineOddsFreshnessReason(item),
+    modelFavoredSide: pureModelProbabilityForSide(item, 'home') >= pureModelProbabilityForSide(item, 'away') ? 'home' : 'away',
+    pickedTeamWinPct: leagueRecordPct(pickedTeamRecord),
+    getEvolutionRule
+  };
+  return evaluateMoneyline(ctx);
 }
 
 function auditMemoryNotes(item, option, evolutionControls = loadEvolutionControls()) {
