@@ -330,6 +330,24 @@ function toJson(value) {
   return JSON.stringify(value ?? null);
 }
 
+// Normalize a feature-fallback payload (the Python FallbackTracker.summary())
+// into { count, features } for storage. When the payload is absent we return
+// nulls so historical/agent-only rows are not falsely marked as "0 fallbacks".
+function normalizeFeatureFallbacks(value) {
+  if (value === null || value === undefined) {
+    return { count: null, features: null };
+  }
+  if (Array.isArray(value)) {
+    return { count: value.length, features: value };
+  }
+  if (typeof value === 'object') {
+    const features = Array.isArray(value.features) ? value.features : [];
+    const count = Number.isInteger(value.count) ? value.count : features.length;
+    return { count, features };
+  }
+  return { count: null, features: null };
+}
+
 function toInteger(value, fallback = 0) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -542,6 +560,31 @@ export class Storage {
       .map((column) => column.name);
     if (!ledgerColumns.includes('line')) {
       this.db.prepare('ALTER TABLE bet_ledger ADD COLUMN line REAL').run();
+    }
+    // Feature-fallback visibility (Stage 3). Backward-compatible ALTERs so
+    // historical rows are preserved. `feature_fallback_count` = number of
+    // features that fell back to a generic default for that pick;
+    // `fallback_features_used` = JSON array of the feature names that fell back.
+    if (!ledgerColumns.includes('feature_fallback_count')) {
+      this.db
+        .prepare('ALTER TABLE bet_ledger ADD COLUMN feature_fallback_count INTEGER')
+        .run();
+    }
+    if (!ledgerColumns.includes('fallback_features_used')) {
+      this.db
+        .prepare('ALTER TABLE bet_ledger ADD COLUMN fallback_features_used TEXT')
+        .run();
+    }
+
+    const pickColumns = this.db
+      .prepare('PRAGMA table_info(picks)')
+      .all()
+      .map((column) => column.name);
+    if (!pickColumns.includes('feature_fallback_count')) {
+      this.db.prepare('ALTER TABLE picks ADD COLUMN feature_fallback_count INTEGER').run();
+    }
+    if (!pickColumns.includes('fallback_features_used')) {
+      this.db.prepare('ALTER TABLE picks ADD COLUMN fallback_features_used TEXT').run();
     }
 
     this.db
@@ -837,13 +880,16 @@ export class Storage {
     };
     const now = new Date().toISOString();
 
+    const fallback = normalizeFeatureFallbacks(normalizedPrediction.featureFallbacks);
+
     this.db
       .prepare(
         `INSERT INTO picks (
           game_pk, date_ymd, status, matchup, away_team_id, home_team_id,
           pick_team_id, pick_confidence, pick_source, post_game_processed,
-          post_game_processed_at, saved_at, payload, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          post_game_processed_at, saved_at, payload, updated_at,
+          feature_fallback_count, fallback_features_used
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(game_pk) DO UPDATE SET
           date_ymd = excluded.date_ymd,
           status = excluded.status,
@@ -857,7 +903,9 @@ export class Storage {
           post_game_processed_at = excluded.post_game_processed_at,
           saved_at = excluded.saved_at,
           payload = excluded.payload,
-          updated_at = excluded.updated_at`
+          updated_at = excluded.updated_at,
+          feature_fallback_count = excluded.feature_fallback_count,
+          fallback_features_used = excluded.fallback_features_used`
       )
       .run(
         gamePk,
@@ -873,7 +921,9 @@ export class Storage {
         normalizedPrediction.postGameProcessedAt,
         normalizedPrediction.savedAt || now,
         toJson(normalizedPrediction),
-        now
+        now,
+        fallback.count,
+        fallback.features === null ? null : toJson(fallback.features)
       );
 
     if (firstInning) {
@@ -1537,12 +1587,15 @@ export class Storage {
     const decisionId = `${dateYmd}-${market}-${gamePk}`;
     const now = new Date().toISOString();
 
+    const fallback = normalizeFeatureFallbacks(prediction.featureFallbacks);
+
     const info = this.db
       .prepare(
         `INSERT INTO bet_ledger (
           decision_id, game_pk, date_ymd, market, team, side, odds,
-          fair_prob, model_prob, edge, units_staked, status, recommended_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+          fair_prob, model_prob, edge, units_staked, status, recommended_at,
+          feature_fallback_count, fallback_features_used
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
         ON CONFLICT(game_pk, market) DO NOTHING`
       )
       .run(
@@ -1557,7 +1610,9 @@ export class Storage {
         Number(value.modelProbability),
         Number(value.edge),
         Number(value.kellyStakePercent),
-        now
+        now,
+        fallback.count,
+        fallback.features === null ? null : toJson(fallback.features)
       );
 
     return info.changes > 0 ? decisionId : null;

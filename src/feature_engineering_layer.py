@@ -6,6 +6,7 @@ It does not make picks, compare markets, run quality control, or explain.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .batter_vs_pitcher import aggregate_bvp_for_lineup, bvp_adjustment
@@ -40,6 +41,85 @@ from .utils import clamp, safe_float
 from .weather import weather_adjustment
 
 
+logger = logging.getLogger("mlb.feature_engineering")
+
+
+class FallbackTracker:
+    """Records every feature that fell back to a generic/default value.
+
+    The tracker does NOT change any default value. It only makes fallbacks
+    visible so the data-quality layer and storage can record them and later
+    analysis can compare clean picks vs. picks built on defaults.
+    """
+
+    def __init__(self, game_pk: Any = None) -> None:
+        self.game_pk = game_pk
+        # feature name -> list of {reason, default, exception}
+        self.events: list[dict[str, Any]] = []
+
+    def record(
+        self,
+        function: str,
+        feature: str,
+        default: Any,
+        *,
+        exception: BaseException | None = None,
+        reason: str | None = None,
+    ) -> None:
+        exc_message = None
+        if exception is not None:
+            exc_message = f"{type(exception).__name__}: {exception}"
+        event = {
+            "function": function,
+            "feature": feature,
+            "default": default,
+            "reason": reason or (exc_message if exc_message else "value_missing"),
+            "exception": exc_message,
+        }
+        self.events.append(event)
+        logger.warning(
+            "[feature-fallback] game_pk=%s fn=%s feature=%s default=%s reason=%s",
+            self.game_pk,
+            function,
+            feature,
+            default,
+            event["reason"],
+        )
+
+    @property
+    def count(self) -> int:
+        return len(self.events)
+
+    def features_used(self) -> list[str]:
+        # Preserve order, de-duplicated.
+        seen: dict[str, None] = {}
+        for event in self.events:
+            seen.setdefault(event["feature"], None)
+        return list(seen.keys())
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "game_pk": self.game_pk,
+            "count": self.count,
+            "features": self.features_used(),
+            "events": self.events,
+        }
+
+
+# No-op sentinel so callers that don't care about tracking can pass nothing.
+class _NullTracker(FallbackTracker):
+    def record(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover - trivial
+        pass
+
+
+def _tracker(tracker: FallbackTracker | None, game_pk: Any = None) -> FallbackTracker:
+    if tracker is not None:
+        if game_pk is not None and tracker.game_pk is None:
+            tracker.game_pk = game_pk
+        return tracker
+    return _NullTracker(game_pk)
+
+
 SIGNAL_PRIORITY = {
     "tier_1": [
         "probable_pitchers",
@@ -66,7 +146,7 @@ SIGNAL_PRIORITY = {
 }
 
 
-def _team_strength(team) -> float:
+def _team_strength(team, tracker: FallbackTracker | None = None, side: str = "") -> float:
     # Use rolling 15-game Pythagorean when recent data available.
     try:
         recent_rs = safe_float(
@@ -92,7 +172,13 @@ def _team_strength(team) -> float:
             )
         else:
             pyth = pythagorean_win_pct(team.runs_scored, team.runs_allowed)
-    except Exception:
+    except Exception as exc:
+        _tracker(tracker).record(
+            "_team_strength",
+            f"team_strength_{side}" if side else "team_strength",
+            "season_pythagorean",
+            exception=exc,
+        )
         pyth = pythagorean_win_pct(team.runs_scored, team.runs_allowed)
     return clamp(pyth * 0.65 + team.win_pct * 0.35, 0.05, 0.95)
 
@@ -117,6 +203,8 @@ def _pitcher_feature(
     pitcher,
     rest_days: int | None = None,
     opener_detection: dict[str, Any] | None = None,
+    tracker: FallbackTracker | None = None,
+    side: str = "",
 ) -> float:
     if pitcher is None:
         return 0.0
@@ -131,7 +219,13 @@ def _pitcher_feature(
             )
         else:
             score = pitcher_score(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio)
-    except Exception:
+    except Exception as exc:
+        _tracker(tracker).record(
+            "_pitcher_feature",
+            f"pitcher_score_{side}" if side else "pitcher_score",
+            "basic_pitcher_score",
+            exception=exc,
+        )
         score = pitcher_score(pitcher.era, pitcher.whip, pitcher.fip, pitcher.k_bb_ratio)
     if rest_days is not None:
         score *= _pitcher_rest_multiplier(rest_days)
@@ -268,8 +362,12 @@ def _opener_situation(collected: dict[str, Any], side: str, pitcher: Any) -> dic
     )
 
 
-def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
+def build_moneyline_features(
+    collected: dict[str, Any],
+    tracker: FallbackTracker | None = None,
+) -> dict[str, Any]:
     """Create clean moneyline model features from raw game data."""
+    tracker = _tracker(tracker, _game_pk(collected.get("game")))
     home_team = collected["home_team"]
     away_team = collected["away_team"]
     home_pitcher = collected["home_pitcher"]
@@ -306,8 +404,8 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
 
     home_team_adjustment = _team_fatigue_overall_adjustment(home_fatigue)
     away_team_adjustment = _team_fatigue_overall_adjustment(away_fatigue)
-    home_strength = clamp(_team_strength(home_team) + home_team_adjustment, 0.05, 0.95)
-    away_strength = clamp(_team_strength(away_team) + away_team_adjustment, 0.05, 0.95)
+    home_strength = clamp(_team_strength(home_team, tracker, "home") + home_team_adjustment, 0.05, 0.95)
+    away_strength = clamp(_team_strength(away_team, tracker, "away") + away_team_adjustment, 0.05, 0.95)
     log5_home = log5_probability(home_strength, away_strength)
 
     # New signals: umpire, travel, BvP, rolling xstats
@@ -350,7 +448,8 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
             0.0,
         )
         platoon_diff = clamp(home_platoon - away_platoon, -1.0, 1.0)
-    except Exception:
+    except Exception as exc:
+        tracker.record("build_moneyline_features", "platoon_diff", 0.0, exception=exc)
         platoon_diff = 0.0
 
     try:
@@ -358,7 +457,8 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
         away_bullpen_fatigue_score = bullpen_fatigue_score(collected.get("away_bullpen"))
         # Higher fatigue hurts that team's bullpen; positive diff favors home.
         bullpen_fatigue_diff = clamp((away_bullpen_fatigue_score - home_bullpen_fatigue_score) / 100.0, -0.45, 0.45)
-    except Exception:
+    except Exception as exc:
+        tracker.record("build_moneyline_features", "bullpen_fatigue_score", 0, exception=exc)
         home_bullpen_fatigue_score = 0
         away_bullpen_fatigue_score = 0
         bullpen_fatigue_diff = 0.0
@@ -452,7 +552,12 @@ def build_moneyline_features(collected: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _lineup_leadoff_obp(lineup_data: Any) -> float:
+def _lineup_leadoff_obp(
+    lineup_data: Any,
+    tracker: FallbackTracker | None = None,
+    side: str = "",
+) -> float:
+    feature = f"leadoff_obp_{side}" if side else "leadoff_obp"
     try:
         value = _attr(lineup_data, "leadoff_obp", "leadoffObp", "leadoff_on_base_pct")
         if value is not None:
@@ -461,25 +566,64 @@ def _lineup_leadoff_obp(lineup_data: Any) -> float:
         if isinstance(players, list) and players:
             first = players[0]
             if isinstance(first, dict):
-                return safe_float(first.get("obp") or first.get("onBasePercentage"), 0.330)
-    except Exception:
-        pass
+                obp = first.get("obp") or first.get("onBasePercentage")
+                if obp not in (None, ""):
+                    return safe_float(obp, 0.330)
+    except Exception as exc:
+        _tracker(tracker).record(
+            "_lineup_leadoff_obp", feature, 0.330, exception=exc
+        )
+        return 0.330
+    # Reached here => no leadoff OBP found in the data; default used.
+    _tracker(tracker).record(
+        "_lineup_leadoff_obp", feature, 0.330, reason="leadoff_obp_missing"
+    )
     return 0.330
 
 
-def build_first_inning_features(collected: dict[str, Any]) -> dict[str, Any]:
+def _first_inning_rate(
+    team: Any,
+    attr: str,
+    feature: str,
+    tracker: FallbackTracker,
+    default: float = 0.33,
+) -> float:
+    """Read a first-inning rate; record a fallback if it's missing/invalid."""
+    raw = getattr(team, attr, None)
+    if raw in (None, ""):
+        tracker.record(
+            "build_first_inning_features", feature, default, reason=f"{attr}_missing"
+        )
+        return default
+    value = safe_float(raw, None)
+    if value is None:
+        tracker.record(
+            "build_first_inning_features", feature, default, reason=f"{attr}_invalid"
+        )
+        return default
+    return value
+
+
+def build_first_inning_features(
+    collected: dict[str, Any],
+    tracker: FallbackTracker | None = None,
+) -> dict[str, Any]:
     """Create clean YRFI/NRFI model features from raw game data."""
+    tracker = _tracker(tracker, _game_pk(collected.get("game")))
     home_team = collected["home_team"]
     away_team = collected["away_team"]
     home_lineup = collected.get("home_lineup")
     away_lineup = collected.get("away_lineup")
 
     try:
-        away_scoring = safe_float(getattr(away_team, "first_inning_scoring_rate", None), 0.33)
-        home_scoring = safe_float(getattr(home_team, "first_inning_scoring_rate", None), 0.33)
-        away_allowed = safe_float(getattr(away_team, "first_inning_allowed_rate", None), 0.33)
-        home_allowed = safe_float(getattr(home_team, "first_inning_allowed_rate", None), 0.33)
-    except Exception:
+        away_scoring = _first_inning_rate(away_team, "first_inning_scoring_rate", "away_first_inning_scoring_rate", tracker)
+        home_scoring = _first_inning_rate(home_team, "first_inning_scoring_rate", "home_first_inning_scoring_rate", tracker)
+        away_allowed = _first_inning_rate(away_team, "first_inning_allowed_rate", "away_first_inning_allowed_rate", tracker)
+        home_allowed = _first_inning_rate(home_team, "first_inning_allowed_rate", "home_first_inning_allowed_rate", tracker)
+    except Exception as exc:
+        tracker.record(
+            "build_first_inning_features", "first_inning_rates", 0.33, exception=exc
+        )
         away_scoring = home_scoring = away_allowed = home_allowed = 0.33
 
     return {
@@ -487,8 +631,8 @@ def build_first_inning_features(collected: dict[str, Any]) -> dict[str, Any]:
         "home_first_inning_scoring_rate": home_scoring,
         "away_first_inning_allowed_rate": away_allowed,
         "home_first_inning_allowed_rate": home_allowed,
-        "away_leadoff_obp": _lineup_leadoff_obp(away_lineup),
-        "home_leadoff_obp": _lineup_leadoff_obp(home_lineup),
+        "away_leadoff_obp": _lineup_leadoff_obp(away_lineup, tracker, "away"),
+        "home_leadoff_obp": _lineup_leadoff_obp(home_lineup, tracker, "home"),
     }
 
 
@@ -533,10 +677,20 @@ def build_total_features(collected: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_game_features(collected: dict[str, Any]) -> dict[str, Any]:
-    """Build all deterministic features for one game."""
+def build_game_features(
+    collected: dict[str, Any],
+    tracker: FallbackTracker | None = None,
+) -> dict[str, Any]:
+    """Build all deterministic features for one game.
+
+    A ``FallbackTracker`` is created (or reused) so the caller can see which
+    features fell back to generic defaults. The summary is attached under the
+    ``fallbacks`` key without changing any feature value.
+    """
+    tracker = _tracker(tracker, _game_pk(collected.get("game")))
     return {
-        "moneyline": build_moneyline_features(collected),
-        "first_inning": build_first_inning_features(collected),
+        "moneyline": build_moneyline_features(collected, tracker),
+        "first_inning": build_first_inning_features(collected, tracker),
         "signal_priority": SIGNAL_PRIORITY,
+        "fallbacks": tracker.summary(),
     }

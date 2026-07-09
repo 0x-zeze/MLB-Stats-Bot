@@ -307,10 +307,56 @@ def calculate_data_quality_score(game_context: dict[str, Any]) -> int:
     return max(0, min(100, score))
 
 
-def generate_quality_report(game_context: dict[str, Any]) -> dict[str, Any]:
-    """Build a compact quality report consumed by predictions and Telegram output."""
+def _normalize_feature_fallbacks(feature_fallbacks: Any) -> dict[str, Any]:
+    """Coerce a feature-fallback payload into a stable summary shape.
+
+    Accepts the ``FallbackTracker.summary()`` dict produced by the feature
+    engineering layer, or ``None``. Never raises.
+    """
+    if not isinstance(feature_fallbacks, dict):
+        return {"count": 0, "features": [], "events": []}
+    features = feature_fallbacks.get("features")
+    if not isinstance(features, list):
+        features = []
+    events = feature_fallbacks.get("events")
+    if not isinstance(events, list):
+        events = []
+    count = feature_fallbacks.get("count")
+    if not isinstance(count, int):
+        count = len(events)
+    return {"count": count, "features": list(features), "events": events}
+
+
+# Each distinct fallback feature lowers the data-quality score by this many
+# points, capped so a fully-defaulted game cannot zero out other signals on its
+# own. Visibility-only: does NOT change any feature value or the NO-BET rule.
+_FEATURE_FALLBACK_PENALTY_PER_FEATURE = 3
+_FEATURE_FALLBACK_PENALTY_CAP = 20
+
+
+def _feature_fallback_penalty(fallbacks: dict[str, Any]) -> int:
+    distinct = len(fallbacks.get("features") or [])
+    return min(distinct * _FEATURE_FALLBACK_PENALTY_PER_FEATURE, _FEATURE_FALLBACK_PENALTY_CAP)
+
+
+def generate_quality_report(
+    game_context: dict[str, Any],
+    feature_fallbacks: Any = None,
+) -> dict[str, Any]:
+    """Build a compact quality report consumed by predictions and Telegram output.
+
+    ``feature_fallbacks`` is the optional ``FallbackTracker.summary()`` payload
+    from the feature engineering layer. When supplied, features that fell back
+    to generic defaults are recorded in the report and lower the data-quality
+    score (visibility only — no feature value or NO-BET threshold changes).
+    """
     checks = check_prediction_inputs(game_context)
     score = calculate_data_quality_score(game_context)
+
+    fallbacks = _normalize_feature_fallbacks(feature_fallbacks)
+    fallback_penalty = _feature_fallback_penalty(fallbacks)
+    if fallback_penalty:
+        score = max(0, score - fallback_penalty)
     missing_fields = [
         label
         for key, label in {
@@ -356,6 +402,9 @@ def generate_quality_report(game_context: dict[str, Any]) -> dict[str, Any]:
         "calibration_supports_high": _calibration_supports_high(game_context),
         "confidence_adjustments": [],
         "sharp_money_signal": sharp_signal,
+        "feature_fallback_count": fallbacks["count"],
+        "feature_fallbacks_used": fallbacks["features"],
+        "feature_fallback_penalty": fallback_penalty,
     }
 
 

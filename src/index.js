@@ -341,6 +341,11 @@ async function attachAgentAnalyses(predictions) {
     return [];
   });
 
+  console.log('[analyst] active %d/%d games', analyses.length, predictions.length);
+  if (analyses.length === 0 && predictions.length > 0) {
+    console.warn('[analyst] NO analyses — all picks fall back to baseline (confidence=model). Check [analyst] logs above for the reason (HTTP status / empty key / parse).');
+  }
+
   const analysesByGame = new Map(analyses.map((analysis) => [analysis.gamePk, analysis]));
   for (const prediction of predictions) {
     const analysis = analysesByGame.get(prediction.gamePk) || null;

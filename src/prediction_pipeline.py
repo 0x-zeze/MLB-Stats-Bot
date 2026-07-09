@@ -284,6 +284,7 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
     """Run one game through the full conservative pipeline."""
     collected = collect_game_data(game_id)
     features = build_game_features(collected)
+    feature_fallbacks = features.get("fallbacks", {"count": 0, "features": [], "events": []})
 
     # --- Stage 2b: Dynamic weights & player contribution ----------------------
     game_context = _build_game_context(collected, features)
@@ -307,7 +308,7 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
         weight_overrides=_pipeline_weight_overrides(dynamic_weights["weights"]),
     )
     market_comparison = compare_markets(raw_predictions, collected)
-    quality_report = generate_quality_report(collected["context"])
+    quality_report = generate_quality_report(collected["context"], feature_fallbacks)
 
     # Determine prediction tier based on game timing and data availability
     game = collected.get("game")
@@ -414,6 +415,7 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
         ),
         "player_narrative": player_scores["narrative"],
         "player_scores": player_scores,
+        "feature_fallbacks": feature_fallbacks,
     }
     result["explanation"] = build_prediction_explanation(result)
     return result

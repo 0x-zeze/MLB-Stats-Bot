@@ -69,6 +69,7 @@ async function callLlm(config, { system, user, maxTokens = 900, timeoutMs = 4500
         },
         body: JSON.stringify({
           model: config.openai.model,
+          stream: false,
           temperature: 0.2,
           max_tokens: maxTokens,
           messages: [
@@ -78,9 +79,15 @@ async function callLlm(config, { system, user, maxTokens = 900, timeoutMs = 4500
         })
       });
 
-      if (!response.ok) return null;
+      if (!response.ok) {
+        const bodySnippet = await response.text().catch(() => '').then((t) => String(t).slice(0, 200));
+        console.warn('[analyst] LLM HTTP', response.status, `${baseUrl}/chat/completions`, 'model=', config.openai.model, ':', bodySnippet);
+        return null;
+      }
       const data = await response.json();
-      return data.choices?.[0]?.message?.content?.trim() || null;
+      const content = data.choices?.[0]?.message?.content?.trim() || null;
+      if (!content) console.warn('[analyst] LLM returned empty content from', `${baseUrl}/chat/completions`);
+      return content;
     }
 
     const response = await fetch(`${baseUrl}/responses`, {
@@ -100,18 +107,25 @@ async function callLlm(config, { system, user, maxTokens = 900, timeoutMs = 4500
       })
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      const bodySnippet = await response.text().catch(() => '').then((t) => String(t).slice(0, 200));
+      console.warn('[analyst] LLM HTTP', response.status, `${baseUrl}/responses`, 'model=', config.openai.model, ':', bodySnippet);
+      return null;
+    }
     const data = await response.json();
     if (data.output_text) return data.output_text.trim();
 
-    return (
-      data.output
-        ?.flatMap((item) => item.content || [])
-        ?.filter((item) => item.type === 'output_text' && item.text)
-        ?.map((item) => item.text)
-        ?.join('\n')
-        ?.trim() || null
-    );
+    const responsesText = data.output
+      ?.flatMap((item) => item.content || [])
+      ?.filter((item) => item.type === 'output_text' && item.text)
+      ?.map((item) => item.text)
+      ?.join('\n')
+      ?.trim() || null;
+    if (!responsesText) console.warn('[analyst] LLM returned empty content from', `${baseUrl}/responses`);
+    return responsesText;
+  } catch (error) {
+    console.warn('[analyst] LLM request failed:', error.name, error.message, '(baseUrl=', baseUrl, ')');
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -1009,7 +1023,10 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5, memor
 }
 
 async function analyzeWithExternalAgent(config, predictions, memorySummary, evolutionData) {
-  if (!config.analystAgent.url) return [];
+  if (!config.analystAgent.url) {
+    console.warn('[analyst] external agent skipped: ANALYST_AGENT_URL empty');
+    return [];
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.analystAgent.timeoutMs);
@@ -1038,16 +1055,27 @@ async function analyzeWithExternalAgent(config, predictions, memorySummary, evol
       })
     });
 
-    if (!response.ok) return [];
+    if (!response.ok) {
+      const bodySnippet = await response.text().catch(() => '').then((t) => String(t).slice(0, 200));
+      console.warn('[analyst] external agent HTTP', response.status, config.analystAgent.url, ':', bodySnippet);
+      return [];
+    }
     const data = await response.json();
-    return sanitizeAnalyses(predictions, findAnalysisArray(data));
+    const analyses = sanitizeAnalyses(predictions, findAnalysisArray(data));
+    if (analyses.length === 0) {
+      console.warn('[analyst] external agent: 0 analyses parsed for', predictions.length, 'games');
+    }
+    return analyses;
   } finally {
     clearTimeout(timer);
   }
 }
 
 async function analyzeWithLocalAgent(config, predictions, memorySummary, evolutionData) {
-  if (!config.openai.apiKey) return [];
+  if (!config.openai.apiKey) {
+    console.warn('[analyst] local agent skipped: OPENAI_API_KEY empty');
+    return [];
+  }
 
   const user = JSON.stringify({
     skillVersion: ANALYST_SKILL_VERSION,
@@ -1085,8 +1113,15 @@ async function analyzeWithLocalAgent(config, predictions, memorySummary, evoluti
     timeoutMs: config.analystAgent.timeoutMs
   });
 
+  if (!text) {
+    console.warn('[analyst] local agent: LLM returned no text for', predictions.length, 'games');
+  }
   const parsed = extractJson(text);
-  return sanitizeAnalyses(predictions, findAnalysisArray(parsed));
+  const analyses = sanitizeAnalyses(predictions, findAnalysisArray(parsed));
+  if (analyses.length === 0) {
+    console.warn('[analyst] local agent: 0 analyses parsed for', predictions.length, 'games');
+  }
+  return analyses;
 }
 
 export async function analyzePredictionsWithAgent(config, predictions, memorySummary, evolutionData = null) {
