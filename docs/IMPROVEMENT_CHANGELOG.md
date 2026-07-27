@@ -15,6 +15,8 @@ Honest log of correctness/evaluation work. No fabricated performance gains.
 | `869f6af` | governance: LLM explanation-only + dashboard unavailable |
 | `a55a972` | docs: prediction architecture |
 | `da50a8f` | market: same-book fair de-vig + season-to-date stats |
+| `c49614c` | docs: remaining-risk mitigations |
+| `325274e` | prediction: snapshot serialize + replay projection |
 
 ### Correctness
 
