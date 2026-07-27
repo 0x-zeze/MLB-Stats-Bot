@@ -53,9 +53,12 @@ LLM may only add supporting/counter factors, data-quality warnings, market disag
 |------|------|
 | `src/mlb.js` + `src/index.js` | Production Telegram |
 | Python `backtest.py` / sample pipeline | Fixture/regression only — **not** production replay |
-| Future `prediction_core` + snapshots | Canonical live/replay parity |
+| `prediction_snapshot` / `prediction_serializer` / `prediction_replay` | Freeze decision inputs + deterministic projection parity |
+| Future pure `prediction_core` extract from `mlb.js` | Full live/replay parity without network |
 
-Until snapshot replay exists, do not treat Python backtest ROI as live performance.
+Snapshot decision projection is available now (`buildPredictionSnapshot` → `replaySnapshot`). Full pure-core extraction of `predictGame` remains open.
+
+Until full production_replay exists, do not treat Python backtest ROI as live performance.
 
 ## Related
 
