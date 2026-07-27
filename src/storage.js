@@ -237,20 +237,24 @@ function normalizeState(state) {
 
 function compactPrediction(prediction, dateYmd) {
   const agent = prediction.agentAnalysis;
-  const awayProbability = agent?.awayProbability ?? Math.round(prediction.away.winProbability);
-  const homeProbability = agent?.homeProbability ?? Math.round(prediction.home.winProbability);
-  const agentPick =
-    agent?.pickTeamId === prediction.away.id
-      ? prediction.away
-      : agent?.pickTeamId === prediction.home.id
-        ? prediction.home
-        : prediction.winner;
+  // Deterministic probabilities only. LLM/agent may not rewrite win probabilities.
+  const awayProbability = Math.round(
+    prediction.away.winProbability ?? prediction.away.pureModelProbability ?? 50
+  );
+  const homeProbability = Math.round(
+    prediction.home.winProbability ?? prediction.home.pureModelProbability ?? 50
+  );
+  // Authoritative pick is model/value side — never analyst-only identity.
+  // Prefer pure model winner, then displayed winner; valuePick is separate in valuePick field.
+  const modelPick =
+    prediction.winner ||
+    (homeProbability >= awayProbability ? prediction.home : prediction.away);
   const pickProbability =
-    agentPick.id === prediction.away.id
+    modelPick.id === prediction.away.id
       ? awayProbability
-      : agentPick.id === prediction.home.id
+      : modelPick.id === prediction.home.id
         ? homeProbability
-        : Math.round(prediction.winner.winProbability);
+        : Math.round(prediction.winner?.winProbability ?? Math.max(awayProbability, homeProbability));
 
   return {
     gamePk: prediction.gamePk,
@@ -279,21 +283,35 @@ function compactPrediction(prediction, dateYmd) {
       record: prediction.home.record || null
     },
     pick: {
-      id: agentPick.id,
-      name: agentPick.name,
-      abbreviation: agentPick.abbreviation,
+      id: modelPick.id,
+      name: modelPick.name,
+      abbreviation: modelPick.abbreviation,
       winProbability: pickProbability,
-      source: agent ? 'analyst-agent' : 'baseline-model',
-      confidence: agent?.confidence || 'model'
+      source: 'baseline-model',
+      confidence: 'model'
     },
+    // Explanation-only agent fields (do not replace pick identity).
+    agentExplanation: agent
+      ? {
+          reasons: agent.reasons || [],
+          risk: agent.risk || '',
+          memoryNote: agent.memoryNote || '',
+          supportingFactors: agent.supportingFactors || [],
+          counterFactors: agent.counterFactors || [],
+          dataQualityWarnings: agent.dataQualityWarnings || [],
+          marketDisagreement: agent.marketDisagreement || '',
+          recommendationExplanation: agent.recommendationExplanation || ''
+        }
+      : null,
     reasons: agent?.reasons || prediction.reasons,
     firstInning: prediction.firstInning
       ? {
-          pick: prediction.firstInning.agent?.pick || prediction.firstInning.baselinePick,
+          // Deterministic first-inning pick/prob only; agent reasons may annotate.
+          pick: prediction.firstInning.baselinePick || prediction.firstInning.pick,
           probability: Math.round(
-            prediction.firstInning.agent?.probability ?? prediction.firstInning.baselineProbability
+            prediction.firstInning.baselineProbability ?? prediction.firstInning.probability ?? 50
           ),
-          source: prediction.firstInning.agent ? 'analyst-agent' : 'baseline-model',
+          source: 'baseline-model',
           reasons: prediction.firstInning.agent?.reasons || prediction.firstInning.reasons || []
         }
       : null,
@@ -309,8 +327,10 @@ function compactPrediction(prediction, dateYmd) {
     agentMemoryNote: agent?.memoryNote || '',
     agentShift: agent?.probabilityShift
       ? {
-          applied: agent.probabilityShift.applied,
+          applied: false,
+          rejected: Boolean(agent.probabilityShift.rejected || agent.probabilityShift.shift),
           shift: agent.probabilityShift.shift,
+          reason: agent.probabilityShift.reason || null,
           baselineAwayProbability: agent.probabilityShift.baselineAwayProbability,
           baselineHomeProbability: agent.probabilityShift.baselineHomeProbability
         }

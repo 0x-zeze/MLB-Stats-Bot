@@ -374,19 +374,25 @@ def _quality_from_live(game: dict[str, Any]) -> dict[str, Any]:
 
 
 def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    quality = _quality_from_live(game)
+    totals = game.get("totals") or game.get("total_runs") or game.get("totalRuns") or {}
+    value = game.get("value") or {}
+    moneyline_edge = value.get("edge")
+    if moneyline_edge is None:
+        moneyline_edge = totals.get("modelEdge") if isinstance(totals, dict) else None
     dashboard_game = {
-        "id": game.get("game_id"),
+        "id": game.get("game_id") or game.get("gamePk") or game.get("id"),
         "date": game.get("date"),
-        "away_team": game.get("away_team"),
-        "home_team": game.get("home_team"),
-        "game_time": game.get("start"),
+        "away_team": game.get("away_team") or (game.get("away") or {}).get("name"),
+        "home_team": game.get("home_team") or (game.get("home") or {}).get("name"),
+        "game_time": game.get("start") or game.get("startTime"),
         "ballpark": game.get("venue"),
         "status": game.get("status"),
         "probable_pitchers": {
-            "away": game.get("starters", {}).get("away", "TBD"),
-            "home": game.get("starters", {}).get("home", "TBD"),
-            "awayEra": game.get("starters", {}).get("awayEra"),
-            "homeEra": game.get("starters", {}).get("homeEra"),
+            "away": game.get("starters", {}).get("away", "TBD") if isinstance(game.get("starters"), dict) else "TBD",
+            "home": game.get("starters", {}).get("home", "TBD") if isinstance(game.get("starters"), dict) else "TBD",
+            "awayEra": game.get("starters", {}).get("awayEra") if isinstance(game.get("starters"), dict) else None,
+            "homeEra": game.get("starters", {}).get("homeEra") if isinstance(game.get("starters"), dict) else None,
             "status": quality["probable_pitchers"],
         },
         "lineup_status": quality["lineup"],
@@ -397,16 +403,16 @@ def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> d
         "final_lean": game.get("pick", {}).get("name") or "NO BET",
         "no_bet_reason": "",
         "moneyline": {
-            "away_probability": _as_percent(game.get("probabilities", {}).get("away")),
-            "home_probability": _as_percent(game.get("probabilities", {}).get("home")),
-            "model_probability": _as_percent(game.get("pick", {}).get("probability")),
+            "away_probability": _as_percent(game.get("probabilities", {}).get("away") if isinstance(game.get("probabilities"), dict) else (game.get("away") or {}).get("winProbability")),
+            "home_probability": _as_percent(game.get("probabilities", {}).get("home") if isinstance(game.get("probabilities"), dict) else (game.get("home") or {}).get("winProbability")),
+            "model_probability": _as_percent(game.get("pick", {}).get("probability") or game.get("pick", {}).get("winProbability")),
             "market_implied_probability": None,
-            "edge": _as_edge_pct(total_runs.get("modelEdge")),
+            "edge": _as_edge_pct(moneyline_edge),
             "current_odds": "Unavailable",
             "confidence": _status(game.get("pick", {}).get("confidence"), "Low").title(),
         },
         "data_quality": quality,
-        "main_factors": game.get("reasons")  or [],
+        "main_factors": game.get("reasons") or [],
         "risk_factors": [game.get("risk")] if game.get("risk") else quality.get("issues", []),
     }
     predicted_winner, predicted_probability = _winner_from_probabilities(dashboard_game)
@@ -565,8 +571,31 @@ def _live_cache_ttl_seconds() -> float:
         return 90.0
 
 
+def _unavailable_today(reason: str, source: str = "live") -> dict[str, Any]:
+    """Explicit failure payload — never synthesize realistic BET/ROI mock as live."""
+    return {
+        "status": "unavailable",
+        "source": source,
+        "reason": reason,
+        "last_updated": now_iso(),
+        "warning": reason,
+        "summary": {
+            "total_games": 0,
+            "bet_count": 0,
+            "lean_count": 0,
+            "no_bet_count": 0,
+            "average_data_quality": None,
+        },
+        "games": [],
+    }
+
+
 def get_today_dashboard(date_ymd: str | None = None, source: str = "live") -> dict[str, Any]:
-    """Return today's dashboard payload from live, sample, or mock data."""
+    """Return today's dashboard payload from live, sample, or mock data.
+
+    Live failures return status=unavailable (not realistic mock data).
+    Mock/sample only when explicitly requested via source=.
+    """
     settings = load_dashboard_settings()
     source = (source or "live").lower()
     target_date = date_ymd or datetime.now().date().isoformat()
@@ -584,7 +613,10 @@ def get_today_dashboard(date_ymd: str | None = None, source: str = "live") -> di
     try:
         payload = _live_today(target_date, settings)
     except Exception as exc:
-        return _mock_today(settings, warning=f"Live data unavailable; showing mock data. Detail: {exc}")
+        return _unavailable_today(
+            f"Live data unavailable: {exc}",
+            source="live",
+        )
     if ttl > 0:
         _LIVE_CACHE[target_date] = (now, payload)
     return payload

@@ -422,83 +422,72 @@ function sanitizeFirstInningAnalysis(prediction, raw) {
   };
 }
 
-function applyAgentProbabilityShift(deterministicAway, deterministicHome, raw, prediction) {
+/**
+ * LLM is explanation-only. Probability adjustments from the model are recorded
+ * as rejected proposals and never applied to away/home probabilities, pick, edge,
+ * stake, or bet status.
+ */
+function applyAgentProbabilityShift(deterministicAway, deterministicHome, raw, _prediction) {
   const adjustment = raw?.probabilityAdjustment;
   if (!adjustment || typeof adjustment !== 'object') {
-    return { awayProbability: deterministicAway, homeProbability: deterministicHome, shift: 0, reason: null, applied: false };
+    return {
+      awayProbability: deterministicAway,
+      homeProbability: deterministicHome,
+      shift: 0,
+      reason: null,
+      applied: false,
+      rejected: false
+    };
   }
 
   const rawShift = clamp(toNumber(adjustment.shift, 0), -5, 5);
   const reason = String(adjustment.reason || '').trim();
-
-  if (Math.abs(rawShift) < 0.5 || reason.length < 15) {
-    return { awayProbability: deterministicAway, homeProbability: deterministicHome, shift: 0, reason: reason || null, applied: false };
+  if (Math.abs(rawShift) < 0.5) {
+    return {
+      awayProbability: deterministicAway,
+      homeProbability: deterministicHome,
+      shift: 0,
+      reason: reason || null,
+      applied: false,
+      rejected: false
+    };
   }
-
-  const pickTeamId = prediction.winner.id;
-  const pickIsHome = pickTeamId === prediction.home.id;
-  const pickProbability = pickIsHome ? deterministicHome : deterministicAway;
-  const adjustedPick = clamp(pickProbability + rawShift, 20, 80);
-
-  if ((pickProbability >= 50 && adjustedPick < 50) || (pickProbability < 50 && adjustedPick >= 50)) {
-    return { awayProbability: deterministicAway, homeProbability: deterministicHome, shift: 0, reason: 'rejected: would flip winner', applied: false };
-  }
-
-  const adjustedAway = pickIsHome ? 100 - adjustedPick : adjustedPick;
-  const adjustedHome = pickIsHome ? adjustedPick : 100 - adjustedPick;
 
   return {
-    awayProbability: clamp(Math.round(adjustedAway), 20, 80),
-    homeProbability: clamp(Math.round(adjustedHome), 20, 80),
+    awayProbability: deterministicAway,
+    homeProbability: deterministicHome,
     shift: rawShift,
-    reason,
-    applied: true
+    reason: reason
+      ? `rejected (explanation-only): ${reason}`
+      : 'rejected: LLM probability shift disabled',
+    applied: false,
+    rejected: true
   };
 }
 
-function applyAgentBetOverride(prediction, raw, analysis) {
+/**
+ * LLM cannot change bet status/edge/stake. Any betOverride is rejected and logged.
+ */
+function applyAgentBetOverride(prediction, raw, _analysis) {
   const override = raw?.betOverride;
   if (!override || typeof override !== 'object') return null;
 
   const action = String(override.action || '').toLowerCase();
   const reason = String(override.reason || '').trim();
-  if (!reason || reason.length < 10) return null;
+  if (!action && !reason) return null;
 
   const currentDecision = prediction.betDecision || {};
   const currentStatus = String(currentDecision.status || 'LEAN ONLY').toUpperCase();
 
-  if (action === 'downgrade_to_no_bet') {
-    return {
-      type: 'downgrade',
-      accepted: true,
-      previousStatus: currentStatus,
-      newStatus: 'NO BET',
-      reason
-    };
-  }
-
-  if (action === 'upgrade_to_value') {
-    const edge = toNumber(currentDecision.edge ?? prediction.valuePick?.edge, 0);
-    const confidence = analysis?.confidence || 'low';
-    const existingReasons = currentDecision.reasons || [];
-    const shiftApplied = analysis?.probabilityShift?.applied || false;
-    const shiftPositive = toNumber(analysis?.probabilityShift?.shift, 0) >= 0;
-
-    if (edge < 1.5) return { type: 'upgrade', accepted: false, reason: 'rejected: model edge < 1.5%' };
-    if (confidenceRank(confidence) < 2) return { type: 'upgrade', accepted: false, reason: 'rejected: confidence too low' };
-    if (existingReasons.length > 1) return { type: 'upgrade', accepted: false, reason: 'rejected: too many safety reasons active' };
-    if (shiftApplied && !shiftPositive) return { type: 'upgrade', accepted: false, reason: 'rejected: agent shift is negative' };
-
-    return {
-      type: 'upgrade',
-      accepted: true,
-      previousStatus: currentStatus,
-      newStatus: 'VALUE',
-      reason
-    };
-  }
-
-  return null;
+  return {
+    type: action || 'unknown',
+    accepted: false,
+    previousStatus: currentStatus,
+    newStatus: currentStatus,
+    reason: reason
+      ? `rejected (explanation-only): ${reason}`
+      : 'rejected: LLM bet override disabled'
+  };
 }
 
 function sanitizeAnalysis(prediction, raw) {
@@ -533,14 +522,34 @@ function sanitizeAnalysis(prediction, raw) {
     risk: String(raw?.risk || 'Tidak ada risk khusus yang dominan.').slice(0, 220),
     memoryNote: String(raw?.memoryNote || 'Memory dipakai sebagai sinyal kecil.').slice(0, 220),
     probabilityShift: {
-      applied: probabilityShift.applied,
+      applied: false,
+      rejected: Boolean(probabilityShift.rejected),
       shift: probabilityShift.shift,
       reason: probabilityShift.reason,
-      // Pre-LLM baseline so post-game eval can compare model-only vs
-      // model+LLM accuracy (paired Brier). See P4 measurement.
+      // Deterministic baseline only — LLM may not alter these values.
       baselineAwayProbability: normalizedAwayProbability,
       baselineHomeProbability: normalizedHomeProbability
     },
+    // Explanation fields only; never mutates betDecision.
+    supportingFactors: Array.isArray(raw?.supporting_factors)
+      ? raw.supporting_factors.map((item) => String(item).trim()).filter(Boolean).slice(0, 6)
+      : Array.isArray(raw?.supportingFactors)
+        ? raw.supportingFactors.map((item) => String(item).trim()).filter(Boolean).slice(0, 6)
+        : [],
+    counterFactors: Array.isArray(raw?.counter_factors)
+      ? raw.counter_factors.map((item) => String(item).trim()).filter(Boolean).slice(0, 6)
+      : Array.isArray(raw?.counterFactors)
+        ? raw.counterFactors.map((item) => String(item).trim()).filter(Boolean).slice(0, 6)
+        : [],
+    dataQualityWarnings: Array.isArray(raw?.data_quality_warnings)
+      ? raw.data_quality_warnings.map((item) => String(item).trim()).filter(Boolean).slice(0, 6)
+      : Array.isArray(raw?.dataQualityWarnings)
+        ? raw.dataQualityWarnings.map((item) => String(item).trim()).filter(Boolean).slice(0, 6)
+        : [],
+    marketDisagreement: String(raw?.market_disagreement || raw?.marketDisagreement || '').slice(0, 280),
+    recommendationExplanation: String(
+      raw?.recommendation_explanation || raw?.recommendationExplanation || raw?.risk || ''
+    ).slice(0, 400),
     betOverride: applyAgentBetOverride(prediction, raw, {
       confidence: deterministicConfidenceFromPrediction(prediction, pickProbability),
       probabilityShift
@@ -1138,6 +1147,13 @@ export async function analyzePredictionsWithAgent(config, predictions, memorySum
 
   return analyzeWithLocalAgent(config, predictions, memorySummary, evolutionData);
 }
+
+// Test hooks for explanation-only boundary (do not use in production call sites).
+export const __llmTestInternals = {
+  sanitizeAnalysis,
+  applyAgentProbabilityShift,
+  applyAgentBetOverride
+};
 
 async function askExternalAgent(config, { question, dateYmd, predictions, memorySummary }) {
   if (!config.analystAgent.url) return null;
