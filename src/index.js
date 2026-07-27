@@ -1458,6 +1458,42 @@ function maybeQueueCalibrationRetrain(alreadyQueued = false) {
   return true;
 }
 
+/**
+ * CLV side must match the immutable value bet side (ledger), not display pick.
+ * Falls back to prediction.valuePick.side, then prediction.pick only if no value side.
+ */
+function resolveClvSide(prediction, storageRef = storage) {
+  const gamePk = String(prediction?.gamePk || '');
+  if (gamePk && typeof storageRef.getLedgerSide === 'function') {
+    const fromLedger = storageRef.getLedgerSide(gamePk, 'moneyline');
+    if (fromLedger === 'home' || fromLedger === 'away') return fromLedger;
+  }
+
+  const valueSide = prediction?.valuePick?.side;
+  if (valueSide === 'home' || valueSide === 'away') return valueSide;
+
+  if (prediction?.valuePick?.teamId != null) {
+    if (String(prediction.valuePick.teamId) === String(prediction.home?.id)) return 'home';
+    if (String(prediction.valuePick.teamId) === String(prediction.away?.id)) return 'away';
+  }
+
+  // Last resort: display pick (legacy). Prefer not to use for VALUE bets.
+  return String(prediction?.pick?.id) === String(prediction?.home?.id) ? 'home' : 'away';
+}
+
+function computeMoneylineClv(prediction, gamePk, side) {
+  const openingOdds = prediction.openingOdds;
+  if (!openingOdds) return null;
+  const closingLine = resolveClosingLine(gamePk, side);
+  if (!Number.isFinite(closingLine)) return null;
+  const openingLine = side === 'home' ? openingOdds.homeMoneyline : openingOdds.awayMoneyline;
+  const openingImplied = americanImpliedProbability(openingLine);
+  const closingImplied = americanImpliedProbability(closingLine);
+  if (!Number.isFinite(openingImplied) || !Number.isFinite(closingImplied)) return null;
+  // CLV as implied-probability edge: positive means we beat the closing line.
+  return Math.round((closingImplied - openingImplied) * 1000) / 10;
+}
+
 async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcessed = false } = {}) {
   const results = await getFinalGameResults(dateYmd);
   const evaluations = [];
@@ -1466,22 +1502,38 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
   for (const result of results) {
     const prediction = storage.getPrediction(result.gamePk);
     if (!prediction) continue;
-    if (prediction.postGameProcessed && markProcessed && !includeProcessed) continue;
+
+    const openBet = storage.getOpenBet(result.gamePk, 'moneyline');
+    const hasOpenBet = Boolean(openBet);
+    // Skip only when already processed AND no stranded open bet to recover.
+    if (
+      prediction.postGameProcessed &&
+      markProcessed &&
+      !includeProcessed &&
+      !hasOpenBet
+    ) {
+      continue;
+    }
 
     const correct = prediction.pick.id === result.winner.id;
-    const learned = markProcessed && !prediction.postGameProcessed;
+    const clvSide = resolveClvSide(prediction, storage);
+    const clv = computeMoneylineClv(prediction, result.gamePk, clvSide);
 
-    let clv = null;
-    const openingOdds = prediction.openingOdds;
-    const pickIsHome = String(prediction.pick.id) === String(prediction.home?.id);
-    const closingLine = resolveClosingLine(result.gamePk, pickIsHome ? 'home' : 'away');
-    if (openingOdds && Number.isFinite(closingLine)) {
-      const openingLine = pickIsHome ? openingOdds.homeMoneyline : openingOdds.awayMoneyline;
-      const openingImplied = americanImpliedProbability(openingLine);
-      const closingImplied = americanImpliedProbability(closingLine);
-      if (Number.isFinite(openingImplied) && Number.isFinite(closingImplied)) {
-        // CLV as implied-probability edge: positive means we beat the closing line.
-        clv = Math.round((closingImplied - openingImplied) * 1000) / 10;
+    const shouldProcess =
+      markProcessed && (!prediction.postGameProcessed || hasOpenBet);
+
+    let learned = false;
+    if (shouldProcess) {
+      const outcome = storage.processPostGameOutcome(prediction, result, {
+        enabled: config.modelMemory,
+        clv
+      });
+      learned = Boolean(outcome.processed) || Boolean(outcome.settled);
+      if (outcome.error) {
+        console.error('processPostGameOutcome failed:', outcome.error);
+      }
+      if (outcome.settled) {
+        calibrationRetrainQueued = maybeQueueCalibrationRetrain(calibrationRetrainQueued);
       }
     }
 
@@ -1490,21 +1542,9 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
       result,
       correct,
       learned,
-      clv
+      clv,
+      clvSide
     });
-
-    if (learned) {
-      storage.recordOutcome(prediction, result, { enabled: config.modelMemory });
-      // Settle any open VALUE bet for this game into units P/L (idempotent).
-      try {
-        const settled = storage.settleBet(prediction, result, clv);
-        if (settled) {
-          calibrationRetrainQueued = maybeQueueCalibrationRetrain(calibrationRetrainQueued);
-        }
-      } catch (error) {
-        console.error('settleBet failed:', error.message);
-      }
-    }
   }
 
   return evaluations;

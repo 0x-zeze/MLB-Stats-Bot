@@ -199,15 +199,28 @@ def _ledger_row_to_prediction_log(row: dict[str, Any]) -> dict[str, Any] | None:
     model_prob = _decimal_probability(row.get("model_prob"))
     fair_prob = _decimal_probability(row.get("fair_prob"))
 
-    home_probability: float | str = model_prob if isinstance(model_prob, float) else ""
+    # Model_prob on the ledger is the selected-side probability. Map both sides
+    # consistently; never leave home=model and away=model for away wagers.
+    home_probability: float | str = ""
     away_probability: float | str = ""
     if isinstance(model_prob, float):
         if side == "home":
+            home_probability = model_prob
             away_probability = round(1.0 - model_prob, 6)
         elif side == "away":
             away_probability = model_prob
+            home_probability = round(1.0 - model_prob, 6)
+        else:
+            # Unknown side: do not invent a home mapping from selected-side prob.
+            home_probability = ""
+            away_probability = ""
 
-    final_lean = _first_value(_pick_name(payload), row.get("team"))
+    # Authoritative lean is the ledger value-bet team, not the mutable payload pick.
+    final_lean = _first_value(
+        row.get("team"),
+        _get_nested(payload, "valuePick", "teamName"),
+        _pick_name(payload),
+    )
     market_total = _market_total(payload)
     row_out = _empty_prediction_row()
     row_out.update(
@@ -413,35 +426,65 @@ def row_won(row: dict[str, Any]) -> int:
 
 
 def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Calculate accuracy, ROI, edge, CLV, Brier score, and log loss."""
+    """Calculate accuracy, ROI, edge, CLV, Brier score, and log loss.
+
+    ROI is stake-weighted: sum(profit_loss) / sum(units_staked).
+    Missing edge/CLV are excluded from averages (not coerced to 0).
+    Empty samples return null metrics (not 0.0 fake perfection).
+    """
     bets = settled_rows(rows)
     if not bets:
         return {
             "bets": 0,
             "wins": 0,
             "losses": 0,
-            "accuracy": 0.0,
-            "win_rate": 0.0,
-            "roi": 0.0,
-            "average_edge": 0.0,
-            "average_clv": 0.0,
-            "brier_score": 0.0,
-            "log_loss": 0.0,
+            "accuracy": None,
+            "win_rate": None,
+            "roi": None,
+            "total_units_staked": 0.0,
+            "total_profit_loss": 0.0,
+            "average_edge": None,
+            "average_clv": None,
+            "clv_coverage": 0,
+            "edge_coverage": 0,
+            "brier_score": None,
+            "log_loss": None,
         }
 
     wins = sum(row_won(row) for row in bets)
     probabilities = [row_probability(row) for row in bets]
     outcomes = [row_won(row) for row in bets]
     profit = sum(safe_float(row.get("profit_loss"), 0.0) for row in bets)
+    stakes = [safe_float(row.get("units_staked"), float("nan")) for row in bets]
+    total_stake = sum(s for s in stakes if s == s and s > 0)
+    # Fall back to bet-count only when no stake data exists at all.
+    roi = (profit / total_stake) if total_stake > 0 else (profit / len(bets) if bets else None)
+
+    edges = [
+        v
+        for row in bets
+        if (v := _float_or_none(row.get("model_edge") if row.get("model_edge") not in ("", None) else row.get("edge")))
+        is not None
+    ]
+    clvs = [
+        v
+        for row in bets
+        if (v := _float_or_none(row.get("closing_line_value"))) is not None
+    ]
+
     return {
         "bets": len(bets),
         "wins": wins,
         "losses": len(bets) - wins,
         "accuracy": wins / len(bets),
         "win_rate": wins / len(bets),
-        "roi": profit / len(bets),
-        "average_edge": sum(safe_float(row.get("model_edge"), 0.0) for row in bets) / len(bets),
-        "average_clv": sum(safe_float(row.get("closing_line_value"), 0.0) for row in bets) / len(bets),
+        "roi": roi,
+        "total_units_staked": total_stake if total_stake > 0 else None,
+        "total_profit_loss": profit,
+        "average_edge": (sum(edges) / len(edges)) if edges else None,
+        "average_clv": (sum(clvs) / len(clvs)) if clvs else None,
+        "clv_coverage": len(clvs),
+        "edge_coverage": len(edges),
         "brier_score": brier_score(probabilities, outcomes),
         "log_loss": log_loss(probabilities, outcomes),
     }

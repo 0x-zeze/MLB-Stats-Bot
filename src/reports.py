@@ -31,19 +31,30 @@ def signed_pct(value: float) -> str:
     return f"{safe_float(value) * 100:+.1f}%"
 
 
+def _metric_or_na(value: Any, formatter) -> str:
+    """Format a metric, or n/a when unavailable (None)."""
+    if value is None:
+        return "n/a"
+    return formatter(value)
+
+
 def format_metrics(metrics: dict[str, Any], title: str = "MLB Evaluation Report") -> str:
     """Render a minimal evaluation report."""
     lines = [
         title,
         f"Bets: {metrics.get('bets', 0)}",
-        f"Accuracy: {pct(metrics.get('accuracy', 0.0))}",
-        f"Win rate: {pct(metrics.get('win_rate', 0.0))}",
-        f"ROI: {signed_pct(metrics.get('roi', 0.0))}",
-        f"Avg edge: {signed_pct(metrics.get('average_edge', 0.0))}",
-        f"Avg CLV: {safe_float(metrics.get('average_clv'), 0.0):+.2f}",
-        f"Brier: {safe_float(metrics.get('brier_score'), 0.0):.4f}",
-        f"Log loss: {safe_float(metrics.get('log_loss'), 0.0):.4f}",
+        f"Accuracy: {_metric_or_na(metrics.get('accuracy'), pct)}",
+        f"Win rate: {_metric_or_na(metrics.get('win_rate'), pct)}",
+        f"ROI: {_metric_or_na(metrics.get('roi'), signed_pct)}",
+        f"Avg edge: {_metric_or_na(metrics.get('average_edge'), signed_pct)}",
+        f"Avg CLV: {_metric_or_na(metrics.get('average_clv'), lambda v: f'{safe_float(v, 0.0):+.2f}')}",
+        f"Brier: {_metric_or_na(metrics.get('brier_score'), lambda v: f'{safe_float(v, 0.0):.4f}')}",
+        f"Log loss: {_metric_or_na(metrics.get('log_loss'), lambda v: f'{safe_float(v, 0.0):.4f}')}",
     ]
+    if metrics.get("total_units_staked") is not None:
+        lines.append(f"Units staked: {safe_float(metrics.get('total_units_staked'), 0.0):.2f}")
+    if metrics.get("clv_coverage") is not None:
+        lines.append(f"CLV coverage: {metrics.get('clv_coverage')}/{metrics.get('bets', 0)}")
     return "\n".join(lines)
 
 

@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, extname, resolve } from 'node:path';
+
+import { applyMigrations } from './storage/migrations.js';
 
 const DEFAULT_STATE = {
   lastUpdateId: 0,
@@ -348,6 +351,20 @@ function normalizeFeatureFallbacks(value) {
   return { count: null, features: null };
 }
 
+function hashDecisionPayload(parts) {
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 32);
+}
+
+function ensureColumn(db, table, column, definitionSql) {
+  const columns = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .map((row) => row.name);
+  if (!columns.includes(column)) {
+    db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definitionSql}`).run();
+  }
+}
+
 function toInteger(value, fallback = 0) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -576,6 +593,18 @@ export class Storage {
         .run();
     }
 
+    // Immutable selection identity on legacy ledger (idempotent ALTERs).
+    ensureColumn(this.db, 'bet_ledger', 'selected_team_id', 'TEXT');
+    ensureColumn(this.db, 'bet_ledger', 'model_pick_team_id', 'TEXT');
+    ensureColumn(this.db, 'bet_ledger', 'bookmaker', 'TEXT');
+    ensureColumn(this.db, 'bet_ledger', 'quote_id', 'TEXT');
+    ensureColumn(this.db, 'bet_ledger', 'decision_hash', 'TEXT');
+    ensureColumn(this.db, 'bet_ledger', 'model_version', 'TEXT');
+    ensureColumn(this.db, 'bet_ledger', 'calibration_version', 'TEXT');
+    ensureColumn(this.db, 'bet_ledger', 'bet_policy_version', 'TEXT');
+    ensureColumn(this.db, 'bet_ledger', 'run_id', 'TEXT');
+    ensureColumn(this.db, 'bet_ledger', 'settlement_pending', 'INTEGER NOT NULL DEFAULT 0');
+
     const pickColumns = this.db
       .prepare('PRAGMA table_info(picks)')
       .all()
@@ -606,6 +635,9 @@ export class Storage {
 
     this.setMetaIfMissing('lastUpdateId', String(DEFAULT_STATE.lastUpdateId));
     this.setMetaIfMissing('lastAutoAlertDate', DEFAULT_STATE.lastAutoAlertDate);
+
+    // Ordered immutable accounting migrations (prediction_runs, decisions, etc.).
+    applyMigrations(this.db);
   }
 
   setMetaIfMissing(key, value) {
@@ -1592,38 +1624,158 @@ export class Storage {
     const now = new Date().toISOString();
 
     const fallback = normalizeFeatureFallbacks(prediction.featureFallbacks);
+    const selectedTeamId =
+      value.teamId != null
+        ? String(value.teamId)
+        : value.side === 'home'
+          ? prediction.home?.id != null
+            ? String(prediction.home.id)
+            : null
+          : value.side === 'away'
+            ? prediction.away?.id != null
+              ? String(prediction.away.id)
+              : null
+            : null;
+    const modelPickTeamId =
+      prediction.modelBreakdown?.purePickTeamId != null
+        ? String(prediction.modelBreakdown.purePickTeamId)
+        : prediction.winner?.id != null
+          ? String(prediction.winner.id)
+          : prediction.pick?.id != null
+            ? String(prediction.pick.id)
+            : null;
+    const bookmaker =
+      value.book ||
+      value.bookmaker ||
+      prediction.currentOdds?.moneylineBook ||
+      prediction.currentOdds?.book ||
+      null;
+    const quoteId = value.quoteId || value.quote_id || null;
+    const modelVersion = prediction.modelVersion || prediction.versions?.model || null;
+    const calibrationVersion =
+      prediction.calibrationVersion || prediction.versions?.calibration || null;
+    const betPolicyVersion =
+      prediction.betPolicyVersion || prediction.versions?.betPolicy || null;
+    const runId = prediction.runId || prediction.predictionRunId || null;
+    const decisionHash = hashDecisionPayload({
+      gamePk,
+      market,
+      selectedTeamId,
+      side: value.side || null,
+      odds: Number(value.odds),
+      modelProb: Number(value.modelProbability),
+      fairProb: Number(value.fairProbability),
+      edge: Number(value.edge),
+      stake: Number(value.kellyStakePercent),
+      bookmaker,
+      quoteId
+    });
 
-    const info = this.db
-      .prepare(
-        `INSERT INTO bet_ledger (
-          decision_id, game_pk, date_ymd, market, team, side, odds,
-          fair_prob, model_prob, edge, units_staked, status, recommended_at,
-          feature_fallback_count, fallback_features_used
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
-        ON CONFLICT(game_pk, market) DO NOTHING`
-      )
-      .run(
-        decisionId,
-        gamePk,
-        dateYmd,
-        market,
-        value.teamName || null,
-        value.side || null,
-        Number(value.odds),
-        Number(value.fairProbability),
-        Number(value.modelProbability),
-        Number(value.edge),
-        Number(value.kellyStakePercent),
-        now,
-        fallback.count,
-        fallback.features === null ? null : toJson(fallback.features)
-      );
+    const insertLedger = this.db.transaction(() => {
+      const info = this.db
+        .prepare(
+          `INSERT INTO bet_ledger (
+            decision_id, game_pk, date_ymd, market, team, side, odds,
+            fair_prob, model_prob, edge, units_staked, status, recommended_at,
+            feature_fallback_count, fallback_features_used,
+            selected_team_id, model_pick_team_id, bookmaker, quote_id,
+            decision_hash, model_version, calibration_version, bet_policy_version, run_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(game_pk, market) DO NOTHING`
+        )
+        .run(
+          decisionId,
+          gamePk,
+          dateYmd,
+          market,
+          value.teamName || null,
+          value.side || null,
+          Number(value.odds),
+          Number(value.fairProbability),
+          Number(value.modelProbability),
+          Number(value.edge),
+          Number(value.kellyStakePercent),
+          now,
+          fallback.count,
+          fallback.features === null ? null : toJson(fallback.features),
+          selectedTeamId,
+          modelPickTeamId,
+          bookmaker,
+          quoteId,
+          decisionHash,
+          modelVersion,
+          calibrationVersion,
+          betPolicyVersion,
+          runId
+        );
 
-    return info.changes > 0 ? decisionId : null;
+      if (info.changes > 0) {
+        // Mirror into immutable prediction_decisions when migration tables exist.
+        try {
+          this.db
+            .prepare(
+              `INSERT INTO prediction_decisions (
+                decision_id, run_id, game_pk, date_ymd, market,
+                model_pick_team_id, value_bet_team_id, value_bet_team_name, value_side,
+                value_model_prob, market_fair_prob, edge, odds, bookmaker, quote_id,
+                status, units_staked, kelly_stake_percent, decision_hash, payload, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(game_pk, market) DO NOTHING`
+            )
+            .run(
+              decisionId,
+              runId,
+              gamePk,
+              dateYmd,
+              market,
+              modelPickTeamId,
+              selectedTeamId,
+              value.teamName || null,
+              value.side || null,
+              Number(value.modelProbability),
+              Number(value.fairProbability),
+              Number(value.edge),
+              Number(value.odds),
+              bookmaker,
+              quoteId,
+              'VALUE',
+              Number(value.kellyStakePercent),
+              Number(value.kellyStakePercent),
+              decisionHash,
+              toJson({
+                team: value.teamName || null,
+                side: value.side || null,
+                selectedTeamId
+              }),
+              now
+            );
+        } catch {
+          // Table may be absent on partially migrated test DBs; ledger row is authoritative.
+        }
+      }
+
+      return info.changes > 0 ? decisionId : null;
+    });
+
+    return insertLedger();
+  }
+
+  /**
+   * Resolve the immutable selected team id for a ledger row.
+   * Prefer selected_team_id; fall back to side + prediction home/away.
+   */
+  resolveSelectedTeamId(row, prediction = null) {
+    if (row?.selected_team_id != null && String(row.selected_team_id) !== '') {
+      return String(row.selected_team_id);
+    }
+    if (row?.side === 'home' && prediction?.home?.id != null) return String(prediction.home.id);
+    if (row?.side === 'away' && prediction?.away?.id != null) return String(prediction.away.id);
+    return null;
   }
 
   // Settle an open bet against the final result. Idempotent: the status='open'
   // guard makes a second settle of the same game a no-op (units_pl unchanged).
+  // Uses value_bet selected_team_id / ledger.side — never prediction.pick.
   // 100u notional bankroll, so units_staked = stake% and a win pays
   // units_staked * profit-multiple of the American odds; a loss returns -stake.
   settleBet(prediction, result, clv = null) {
@@ -1636,35 +1788,312 @@ export class Storage {
       .get(gamePk, market);
     if (!row) return false;
 
-    const stakedTeamId = row.side === 'home' ? prediction.home?.id : prediction.away?.id;
+    const stakedTeamId = this.resolveSelectedTeamId(row, prediction);
     const winnerId = result?.winner?.id;
     let outcome = 'loss';
     let unitsPl = -row.units_staked;
     if (winnerId == null) {
       outcome = 'push';
       unitsPl = 0;
-    } else if (String(stakedTeamId) === String(winnerId)) {
+    } else if (stakedTeamId != null && String(stakedTeamId) === String(winnerId)) {
       outcome = 'win';
       const odds = Number(row.odds);
       const profitMultiple = odds > 0 ? odds / 100 : 100 / Math.abs(odds);
       unitsPl = row.units_staked * profitMultiple;
     }
 
-    this.db
-      .prepare(
-        `UPDATE bet_ledger
-         SET status = 'settled', result = ?, units_pl = ?, clv = ?, settled_at = ?
-         WHERE game_pk = ? AND market = ? AND status = 'open'`
-      )
-      .run(
-        outcome,
-        Math.round(unitsPl * 1000) / 1000,
-        clv,
-        new Date().toISOString(),
-        gamePk,
-        market
+    const settledAt = new Date().toISOString();
+    const roundedPl = Math.round(unitsPl * 1000) / 1000;
+    const settlementId = `settle-${row.decision_id}`;
+
+    const settleTx = this.db.transaction(() => {
+      const update = this.db
+        .prepare(
+          `UPDATE bet_ledger
+           SET status = 'settled', result = ?, units_pl = ?, clv = ?, settled_at = ?,
+               settlement_pending = 0
+           WHERE game_pk = ? AND market = ? AND status = 'open'`
+        )
+        .run(outcome, roundedPl, clv, settledAt, gamePk, market);
+
+      if (update.changes !== 1) {
+        return false;
+      }
+
+      try {
+        this.db
+          .prepare(
+            `INSERT INTO settlements (
+              settlement_id, decision_id, game_pk, market, selected_team_id, selected_side,
+              result, units_staked, units_pl, odds, clv, settled_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(decision_id) DO NOTHING`
+          )
+          .run(
+            settlementId,
+            row.decision_id,
+            gamePk,
+            market,
+            stakedTeamId,
+            row.side || null,
+            outcome,
+            row.units_staked,
+            roundedPl,
+            row.odds,
+            clv,
+            settledAt
+          );
+      } catch {
+        // settlements table may be missing on old fixtures; ledger update is enough.
+      }
+
+      return true;
+    });
+
+    return settleTx();
+  }
+
+  /**
+   * Atomic post-game processing for a single prediction:
+   * 1) record memory/outcome
+   * 2) settle open value bet (if any)
+   * 3) mark pick processed only after settlement attempt is recorded
+   *
+   * If settlement throws, the pick is NOT marked processed so the scheduler can retry.
+   * If there is no open bet, mark processed after outcome as before.
+   */
+  processPostGameOutcome(prediction, result, { enabled = true, clv = null } = {}) {
+    const gamePk = String(prediction?.gamePk || '');
+    if (!gamePk) {
+      return { settled: false, processed: false, error: 'missing_game_pk' };
+    }
+
+    const existing = this.getPrediction(gamePk);
+    if (existing?.postGameProcessed) {
+      // Still try idempotent settle for stranded open+processed rows.
+      const settled = this.settleBet(prediction, result, clv);
+      return { settled, processed: true, retriedStranded: true };
+    }
+
+    try {
+      const run = this.db.transaction(() => {
+        // Outcome/memory first, but do not mark processed inside recordOutcome path
+        // when we control the checkpoint here.
+        this.recordOutcomeWithoutProcessedMark(prediction, result, { enabled });
+
+        const open = this.db
+          .prepare("SELECT decision_id FROM bet_ledger WHERE game_pk = ? AND status = 'open'")
+          .get(gamePk);
+
+        let settled = false;
+        if (open) {
+          // Mark pending so operators can see settle-in-progress after crash mid-tx
+          // (transaction rollback clears this if we fail before commit).
+          this.db
+            .prepare(
+              `UPDATE bet_ledger SET settlement_pending = 1
+               WHERE game_pk = ? AND status = 'open'`
+            )
+            .run(gamePk);
+          settled = this.settleBet(prediction, result, clv);
+          if (open && !settled) {
+            // Keep open + not processed for retry.
+            this.db
+              .prepare(
+                `UPDATE bet_ledger SET settlement_pending = 0
+                 WHERE game_pk = ? AND status = 'open'`
+              )
+              .run(gamePk);
+            return { settled: false, processed: false, error: 'settle_failed' };
+          }
+        }
+
+        this.markPostGameProcessedRow(gamePk);
+
+        try {
+          this.db
+            .prepare(
+              `INSERT INTO outbox (outbox_id, event_type, aggregate_id, payload, created_at, available_at)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            )
+            .run(
+              `postgame-${gamePk}-${Date.now()}`,
+              'postgame_processed',
+              gamePk,
+              toJson({ gamePk, settled, clv }),
+              new Date().toISOString(),
+              new Date().toISOString()
+            );
+        } catch {
+          // outbox optional
+        }
+
+        return { settled, processed: true };
+      });
+
+      const resultInfo = run();
+      this.refreshState();
+      return resultInfo;
+    } catch (error) {
+      return {
+        settled: false,
+        processed: false,
+        error: error?.message || String(error)
+      };
+    }
+  }
+
+  /**
+   * Same as recordOutcome but does not mark the pick processed.
+   * Used by processPostGameOutcome so the checkpoint stays after settlement.
+   */
+  recordOutcomeWithoutProcessedMark(prediction, result, { enabled = true } = {}) {
+    const updateOutcome = this.db.transaction(() => {
+      const memory = this.readMemory();
+      const alreadyLogged = (memory.learningLog || []).some(
+        (entry) => String(entry.gamePk) === String(prediction.gamePk)
       );
-    return true;
+      if (alreadyLogged) {
+        // Idempotent retry after partial post-game failure: do not double-count memory.
+        return { skipped: true };
+      }
+
+      const correct = prediction.pick.id === result.winner.id;
+      const actualFirstInningRun = result.firstInning?.anyRun;
+
+      memory.totalPicks += 1;
+      if (correct) memory.correctPicks += 1;
+      if (!correct) memory.wrongPicks += 1;
+
+      const confidence = prediction.pick.confidence || 'unknown';
+      if (!memory.byConfidence[confidence]) {
+        memory.byConfidence[confidence] = { total: 0, correct: 0 };
+      }
+      memory.byConfidence[confidence].total += 1;
+      if (correct) memory.byConfidence[confidence].correct += 1;
+
+      let firstInningCorrect = null;
+      if (
+        prediction.firstInning &&
+        prediction.firstInning.pick &&
+        String(prediction.firstInning.pick).toUpperCase() !== 'NO BET' &&
+        actualFirstInningRun !== null &&
+        actualFirstInningRun !== undefined
+      ) {
+        const actualPick = actualFirstInningRun ? 'YES' : 'NO';
+        const predictedPick = prediction.firstInning.pick || 'NO';
+        firstInningCorrect = predictedPick === actualPick;
+        memory.firstInning.totalPicks += 1;
+        if (firstInningCorrect) memory.firstInning.correctPicks += 1;
+        if (!firstInningCorrect) memory.firstInning.wrongPicks += 1;
+
+        if (!memory.firstInning.byPick[predictedPick]) {
+          memory.firstInning.byPick[predictedPick] = { total: 0, correct: 0 };
+        }
+        memory.firstInning.byPick[predictedPick].total += 1;
+        if (firstInningCorrect) memory.firstInning.byPick[predictedPick].correct += 1;
+
+        this.writeYrfiOutcome(prediction, result, firstInningCorrect);
+      }
+
+      if (enabled) {
+        if (!result.winner || !result.winner.id || !result.loser || !result.loser.id) {
+          // Skip bias update for games without clear winner/loser (ties, suspended)
+        } else {
+          const winnerKey = String(result.winner.id);
+          const loserKey = String(result.loser.id);
+          const pickKey = String(prediction.pick.id);
+
+          const winnerBump = correct ? 0.002 : 0.002;
+          const loserDrop = correct ? 0.001 : 0.004;
+          memory.teamBias[winnerKey] = clamp(
+            (memory.teamBias[winnerKey] || 0) + winnerBump,
+            -TEAM_BIAS_LIMIT,
+            TEAM_BIAS_LIMIT
+          );
+          memory.teamBias[loserKey] = clamp(
+            (memory.teamBias[loserKey] || 0) - loserDrop,
+            -TEAM_BIAS_LIMIT,
+            TEAM_BIAS_LIMIT
+          );
+
+          if (!correct) {
+            memory.teamBias[pickKey] = clamp(
+              (memory.teamBias[pickKey] || 0) - 0.006,
+              -TEAM_BIAS_LIMIT,
+              TEAM_BIAS_LIMIT
+            );
+          }
+        }
+      }
+
+      const matchupMemory = updateMatchupMemory(
+        memory,
+        prediction,
+        result,
+        correct,
+        firstInningCorrect
+      );
+
+      memory.learningLog.unshift({
+        at: new Date().toISOString(),
+        gamePk: prediction.gamePk,
+        matchup: prediction.matchup,
+        pick: prediction.pick.name,
+        pickProbability: prediction.pick.winProbability,
+        winner: result.winner.name,
+        score: `${result.away.abbreviation || result.away.name} ${result.away.score} - ${result.home.score} ${result.home.abbreviation || result.home.name}`,
+        correct,
+        firstInningCorrect,
+        firstInningPick: prediction.firstInning?.pick || null,
+        firstInningActual:
+          actualFirstInningRun === null || actualFirstInningRun === undefined
+            ? null
+            : actualFirstInningRun
+              ? 'YES'
+              : 'NO',
+        matchupMemoryKey: matchupMemory.key,
+        matchupMemoryNote: matchupMemory.note,
+        confidence: prediction.pick.confidence || 'unknown',
+        edge: prediction.betDecision?.edge ?? prediction.valuePick?.edge ?? null,
+        dataQuality: prediction.modelBreakdown?.dataQuality ?? null,
+        modelBreakdown: prediction.modelBreakdown || null,
+        note: correct
+          ? `Pick benar: ${prediction.pick.name}. Matchup memory menyimpan pola pertemuan ini tanpa over-bias.`
+          : `Pick salah: ${prediction.pick.name}, pemenang ${result.winner.name}. Matchup memory mencatat miss dan pola seri untuk pertemuan berikutnya.`
+      });
+
+      memory.learningLog = memory.learningLog.slice(0, 75);
+      this.writeMemory(memory);
+
+      try {
+        this.db
+          .prepare(
+            `INSERT INTO game_outcomes (
+              game_pk, date_ymd, home_team_id, away_team_id, home_score, away_score,
+              winner_team_id, loser_team_id, first_inning_any_run, payload, recorded_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(game_pk) DO NOTHING`
+          )
+          .run(
+            String(prediction.gamePk),
+            prediction.dateYmd || result.dateYmd || '',
+            prediction.home?.id != null ? String(prediction.home.id) : null,
+            prediction.away?.id != null ? String(prediction.away.id) : null,
+            result.home?.score ?? null,
+            result.away?.score ?? null,
+            result.winner?.id != null ? String(result.winner.id) : null,
+            result.loser?.id != null ? String(result.loser.id) : null,
+            result.firstInning?.anyRun == null ? null : result.firstInning.anyRun ? 1 : 0,
+            toJson(result),
+            new Date().toISOString()
+          );
+      } catch {
+        // optional table
+      }
+    });
+
+    updateOutcome();
   }
 
 
@@ -1687,6 +2116,32 @@ export class Storage {
     return this.db
       .prepare(`SELECT * FROM bet_ledger ${where} ORDER BY date_ymd ASC, decision_id ASC`)
       .all(...params);
+  }
+
+  getOpenBet(gamePk, market = 'moneyline') {
+    if (!gamePk) return null;
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM bet_ledger WHERE game_pk = ? AND market = ? AND status = 'open' LIMIT 1`
+        )
+        .get(String(gamePk), String(market)) || null
+    );
+  }
+
+  getLedgerSide(gamePk, market = 'moneyline') {
+    if (!gamePk) return null;
+    const row = this.db
+      .prepare(
+        `SELECT side, selected_team_id FROM bet_ledger
+         WHERE game_pk = ? AND market = ?
+         ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, recommended_at DESC
+         LIMIT 1`
+      )
+      .get(String(gamePk), String(market));
+    if (!row) return null;
+    if (row.side === 'home' || row.side === 'away') return row.side;
+    return null;
   }
 
   appendChatMessage(chatId, role, content) {
