@@ -12,6 +12,11 @@ import { getEvolutionRule, loadEvolutionControls, moneylineWeightMultiplier } fr
 import { calibratePercent, hasCalibrationMap } from './calibration.js';
 import { loadConfig } from './config.js';
 import { evaluateMoneyline } from './rule_engine.js';
+import {
+  ageMinutes as temporalAgeMinutes,
+  checkDataFreshness,
+  filterSplitsBeforeDate
+} from './temporal_contract.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const _mlbConfig = loadConfig();
@@ -186,12 +191,18 @@ export function detectSharpMoneySignal(modelPick, openingOdds, closingOdds) {
 }
 
 // --- Prediction Tier ---
-function determinePredictionTier(gameStartTime) {
+function determinePredictionTier(gameStartTime, now = new Date()) {
   if (!gameStartTime) return { tier: 'standard', label: 'Standard', confidenceCap: 85 };
-  const now = new Date();
+  const current = now instanceof Date ? now : new Date(now);
   const start = new Date(gameStartTime);
-  const hoursToGame = Math.max(0, (start - now) / 3600000);
-
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(current.getTime())) {
+    return { tier: 'standard', label: 'Standard', confidenceCap: 85 };
+  }
+  const hoursToGame = (start - current) / 3600000;
+  // Already started / in-play: do not treat as final pregame tier.
+  if (hoursToGame < 0) {
+    return { tier: 'in_play', label: 'In Play', confidenceCap: 0, reject: true };
+  }
   if (hoursToGame >= 6) return { tier: 'early_preview', label: 'Early Preview', confidenceCap: 60 };
   if (hoursToGame >= 2) return { tier: 'standard', label: 'Standard', confidenceCap: 85 };
   return { tier: 'final', label: 'Final Prediction', confidenceCap: 95 };
@@ -538,18 +549,27 @@ function moneylineOddsMaxAgeMinutes() {
 }
 
 function moneylineOddsAgeMinutes(item, now = Date.now()) {
-  const timestamp = item?.currentOdds?.oddsFetchedAt || item?.currentOdds?.fetchedAt || item?.currentOdds?.updatedAt;
-  const fetchedAt = Date.parse(timestamp || '');
-  if (!Number.isFinite(fetchedAt)) return null;
-  return Math.max(0, (now - fetchedAt) / 60000);
+  const timestamp =
+    item?.currentOdds?.oddsFetchedAt ||
+    item?.currentOdds?.fetchedAt ||
+    item?.currentOdds?.updatedAt;
+  // Future timestamps must NOT collapse to age 0 (looks fresh). temporalAgeMinutes
+  // returns null for future/invalid; callers treat null as unavailable.
+  return temporalAgeMinutes(timestamp, now);
 }
 
 function moneylineOddsFreshnessReason(item, now = Date.now()) {
-  const ageMinutes = moneylineOddsAgeMinutes(item, now);
+  const timestamp =
+    item?.currentOdds?.oddsFetchedAt ||
+    item?.currentOdds?.fetchedAt ||
+    item?.currentOdds?.updatedAt;
   const maxAgeMinutes = moneylineOddsMaxAgeMinutes();
-  if (ageMinutes === null) return 'odds moneyline timestamp tidak tersedia';
-  if (ageMinutes > maxAgeMinutes) {
-    return `odds moneyline stale ${ageMinutes.toFixed(0)}m > ${maxAgeMinutes.toFixed(0)}m`;
+  const status = checkDataFreshness(timestamp, maxAgeMinutes, { now });
+  if (status === 'missing') return 'odds moneyline timestamp tidak tersedia';
+  if (status === 'invalid_future') return 'odds moneyline timestamp di masa depan (invalid)';
+  if (status === 'stale') {
+    const age = moneylineOddsAgeMinutes(item, now);
+    return `odds moneyline stale ${Number(age).toFixed(0)}m > ${maxAgeMinutes.toFixed(0)}m`;
   }
   return '';
 }
@@ -1808,7 +1828,7 @@ async function fetchPerson(personId) {
   return data.people?.[0] || null;
 }
 
-async function fetchPitcherRecentStarts(personId, season, limit = 5) {
+async function fetchPitcherRecentStarts(personId, season, limit = 5, asOfDateYmd = null) {
   if (!personId) return null;
 
   const params = new URLSearchParams({
@@ -1818,9 +1838,16 @@ async function fetchPitcherRecentStarts(personId, season, limit = 5) {
     gameType: 'R'
   });
   const data = await fetchJson(`${MLB_BASE_URL}/people/${personId}/stats?${params}`);
-  const starts = (data.stats?.[0]?.splits || [])
-    .filter((split) => toNumber(split.stat?.gamesStarted, 0) > 0)
-    .slice(-limit);
+  // Strict as-of: only starts before the prediction date. Without a cutoff we
+  // would include future season games (lookahead). Missing asOf → empty, not
+  // full-season slice(-limit).
+  const started = (data.stats?.[0]?.splits || []).filter(
+    (split) => toNumber(split.stat?.gamesStarted, 0) > 0
+  );
+  const eligible = asOfDateYmd
+    ? filterSplitsBeforeDate(started, asOfDateYmd)
+    : [];
+  const starts = eligible.slice(-limit);
 
   return summarizePitcherStarts(starts);
 }
@@ -3391,6 +3418,10 @@ export const __mlbTestInternals = {
   blendedTeamPreventionEdge,
   rollingFormWindow,
   getRollingTeamStatMap,
+  moneylineOddsAgeMinutes,
+  moneylineOddsFreshnessReason,
+  determinePredictionTier,
+  filterSplitsBeforeDate,
   MARKET_BLEND_WEIGHT,
   ROLLING_FORM_DAYS
 };
@@ -3449,7 +3480,10 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       }
 
       try {
-        pitcherRecentStarts.set(personId, await fetchPitcherRecentStarts(personId, season));
+        pitcherRecentStarts.set(
+          personId,
+          await fetchPitcherRecentStarts(personId, season, 5, dateYmd)
+        );
       } catch {
         pitcherRecentStarts.set(personId, null);
       }
