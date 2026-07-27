@@ -1,0 +1,330 @@
+{
+  "status": "ok",
+  "auditVersion": 1,
+  "mode": "read_only",
+  "collectedAt": "2026-07-27T12:00:00.000Z",
+  "note": "Phase 0 inventory from live read-only SQLite queries + code inspection. Re-run scripts/run_technical_audit.js to refresh.",
+  "environment": {
+    "cwd": "/root/MLB-Stats-Bot",
+    "node": "v24.18.0",
+    "python": "3.12.3",
+    "git": {
+      "head": "31f0f8c3fa6763bfe34945dd049c8d19baece379",
+      "branch": "main"
+    }
+  },
+  "database": {
+    "path": "/root/MLB-Stats-Bot/data/state.sqlite",
+    "exists": true
+  },
+  "summary": {
+    "tableCount": 10,
+    "picks": 1145,
+    "ledgerOpen": 7,
+    "ledgerSettledMoneyline": 47,
+    "ledgerSettledTotals": 27,
+    "stakeWeightedRoiMoneyline": -0.19497,
+    "sideMismatches": 1,
+    "pickVsValueDivergences": 7,
+    "processedButOpen": 7,
+    "p0Risks": 6,
+    "p1Risks": 6
+  },
+  "schema": {
+    "tableNames": [
+      "app_state",
+      "bet_ledger",
+      "chat_history",
+      "chat_settings",
+      "feature_snapshots",
+      "line_alerts",
+      "line_snapshots",
+      "memory_summary",
+      "picks",
+      "yrfi_results"
+    ],
+    "rowCounts": {
+      "app_state": 6,
+      "bet_ledger": 81,
+      "chat_history": 20,
+      "chat_settings": 1,
+      "feature_snapshots": 958,
+      "line_alerts": 15,
+      "line_snapshots": 1406,
+      "memory_summary": 1,
+      "picks": 1145,
+      "yrfi_results": 1145
+    }
+  },
+  "picks": {
+    "rowCount": 1145,
+    "dateRange": { "min_date": "2026-04-28", "max_date": "2026-07-27" },
+    "processed": [
+      { "post_game_processed": 0, "c": 19 },
+      { "post_game_processed": 1, "c": 1126 }
+    ]
+  },
+  "ledger": {
+    "available": true,
+    "byMarketStatus": [
+      { "market": "moneyline", "status": "settled", "c": 47 },
+      { "market": "totals", "status": "open", "c": 7 },
+      { "market": "totals", "status": "settled", "c": 27 }
+    ],
+    "bySide": [
+      { "side": "away", "c": 42 },
+      { "side": "home", "c": 5 },
+      { "side": "over", "c": 25 },
+      { "side": "under", "c": 9 }
+    ],
+    "openCount": 7,
+    "processedButOpenCount": 7,
+    "openRows": [
+      {
+        "decision_id": "-totals-28",
+        "game_pk": "823444",
+        "date_ymd": "",
+        "market": "totals",
+        "team": "Over 8.5",
+        "side": "over"
+      },
+      {
+        "decision_id": "-totals-29",
+        "game_pk": "823771",
+        "date_ymd": "",
+        "market": "totals",
+        "team": "Over 8.5",
+        "side": "over"
+      },
+      {
+        "decision_id": "-totals-30",
+        "game_pk": "824662",
+        "date_ymd": "",
+        "market": "totals",
+        "team": "Under 12",
+        "side": "under"
+      },
+      {
+        "decision_id": "-totals-31",
+        "game_pk": "824339",
+        "date_ymd": "",
+        "market": "totals",
+        "team": "Under 11.5",
+        "side": "under"
+      },
+      {
+        "decision_id": "-totals-32",
+        "game_pk": "824986",
+        "date_ymd": "",
+        "market": "totals",
+        "team": "Under 10.5",
+        "side": "under"
+      },
+      {
+        "decision_id": "-totals-33",
+        "game_pk": "825065",
+        "date_ymd": "",
+        "market": "totals",
+        "team": "Under 9",
+        "side": "under"
+      },
+      {
+        "decision_id": "-totals-34",
+        "game_pk": "823121",
+        "date_ymd": "",
+        "market": "totals",
+        "team": "Over 7.5",
+        "side": "over"
+      }
+    ],
+    "moneylineSettled": {
+      "settled": 47,
+      "total_staked": 169.0,
+      "total_pl": -32.95,
+      "avg_clv": -0.5979,
+      "clv_count": 47,
+      "wins": 21,
+      "losses": 26
+    },
+    "totalsSettled": {
+      "settled": 27,
+      "total_pl": -22.66,
+      "wins": 11,
+      "losses": 16
+    },
+    "stakeWeightedRoi": -0.19497,
+    "betCountRoi": -0.70106,
+    "sideMismatchCount": 1,
+    "sideMismatches": [
+      {
+        "gamePk": "824335",
+        "ledgerSide": "away",
+        "ledgerTeam": "Miami Marlins",
+        "payloadValueSide": "home",
+        "payloadValueTeam": "Colorado Rockies",
+        "pickName": "Miami Marlins",
+        "result": "loss",
+        "unitsPl": -3.5,
+        "clv": -4.1
+      }
+    ],
+    "pickVsValueDivergenceCount": 7,
+    "pickVsValueDivergences": [
+      {
+        "gamePk": "824588",
+        "ledgerTeam": "Chicago White Sox",
+        "pickName": "Los Angeles Dodgers",
+        "valueTeam": "Chicago White Sox",
+        "result": "win",
+        "clv": 1.0
+      },
+      {
+        "gamePk": "823778",
+        "ledgerTeam": "Philadelphia Phillies",
+        "pickName": "Milwaukee Brewers",
+        "valueTeam": "Philadelphia Phillies",
+        "result": "loss",
+        "clv": -0.2
+      },
+      {
+        "gamePk": "824020",
+        "ledgerTeam": "Los Angeles Angels",
+        "pickName": "Tampa Bay Rays",
+        "valueTeam": "Los Angeles Angels",
+        "result": "win",
+        "clv": -1.4
+      },
+      {
+        "gamePk": "824997",
+        "ledgerTeam": "Colorado Rockies",
+        "pickName": "Athletics",
+        "valueTeam": "Colorado Rockies",
+        "result": "loss",
+        "clv": 1.8
+      },
+      {
+        "gamePk": "824335",
+        "ledgerTeam": "Miami Marlins",
+        "pickName": "Miami Marlins",
+        "valueTeam": "Colorado Rockies",
+        "result": "loss",
+        "clv": -4.1
+      },
+      {
+        "gamePk": "822953",
+        "dateYmd": "2026-07-11",
+        "ledgerTeam": "Tampa Bay Rays",
+        "pickName": "Seattle Mariners",
+        "valueTeam": "Tampa Bay Rays",
+        "result": "win",
+        "clv": 0.5
+      },
+      {
+        "gamePk": "824652",
+        "dateYmd": "2026-07-21",
+        "ledgerTeam": "Chicago Cubs",
+        "pickName": "Detroit Tigers",
+        "valueTeam": "Chicago Cubs",
+        "result": "win",
+        "clv": -1.9
+      }
+    ],
+    "nullish": {
+      "nullSide": 0,
+      "nullTeam": 0,
+      "nullModelProb": 0,
+      "emptyDateYmd": 7
+    }
+  },
+  "calibration": {
+    "runtimeMapsPresent": true,
+    "marketsPresent": ["moneyline", "yrfi"],
+    "mapPointCounts": { "moneyline": 4, "yrfi": 3 },
+    "metaClaimsSuccess": true
+  },
+  "baselineTests": {
+    "npmCheck": "pass",
+    "testJs": { "pass": 112, "fail": 0, "skipped": 5 },
+    "testPy": { "pass": 542, "fail": 0 }
+  },
+  "risks": [
+    {
+      "id": "P0-mutable-prediction-identity",
+      "severity": "P0",
+      "fact": true,
+      "summary": "picks.game_pk is PRIMARY KEY with ON CONFLICT UPDATE"
+    },
+    {
+      "id": "P0-non-atomic-settlement",
+      "severity": "P0",
+      "fact": true,
+      "summary": "7 open ledger rows have post_game_processed=1"
+    },
+    {
+      "id": "P0-pick-vs-value-divergence",
+      "severity": "P0",
+      "fact": true,
+      "summary": "7 moneyline rows have pick.name != valuePick.teamName"
+    },
+    {
+      "id": "P0-side-payload-mismatch",
+      "severity": "P0",
+      "fact": true,
+      "summary": "1 moneyline row has ledger.side != payload.valuePick.side"
+    },
+    {
+      "id": "P0-historical-lookahead-paths",
+      "severity": "P0",
+      "fact": true,
+      "summary": "mlb.js season/boxscore paths without strict as_of cutoff"
+    },
+    {
+      "id": "P0-live-backtest-divergence",
+      "severity": "P0",
+      "fact": true,
+      "summary": "Python backtest does not replay live JS production path"
+    },
+    {
+      "id": "P1-open-ledger-rows",
+      "severity": "P1",
+      "fact": true,
+      "summary": "7 open totals ledger rows remain"
+    },
+    {
+      "id": "P1-empty-ledger-date",
+      "severity": "P1",
+      "fact": true,
+      "summary": "7 ledger rows have empty date_ymd"
+    },
+    {
+      "id": "P1-roi-denominator-bug",
+      "severity": "P1",
+      "fact": true,
+      "summary": "evaluate.py uses profit / bet count for ROI"
+    },
+    {
+      "id": "P1-cross-book-devig",
+      "severity": "P1",
+      "fact": true,
+      "summary": "devig may use independently shopped home/away"
+    },
+    {
+      "id": "P1-auto-calibration-promotion",
+      "severity": "P1",
+      "fact": true,
+      "summary": "maybeQueueCalibrationRetrain can auto-retrain"
+    },
+    {
+      "id": "P1-cascade-delete-financials",
+      "severity": "P1",
+      "fact": true,
+      "summary": "bet_ledger ON DELETE CASCADE from picks"
+    },
+    {
+      "id": "P2-sparse-calibration-maps",
+      "severity": "P2",
+      "fact": true,
+      "summary": "Calibration maps sparse (ml=4, yrfi=3 points)"
+    }
+  ]
+}

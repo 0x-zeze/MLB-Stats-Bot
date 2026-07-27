@@ -1,0 +1,81 @@
+{
+  "status": "unaudited",
+  "audit_version": 1,
+  "generated_at": "2026-07-27T00:00:00.000Z",
+  "git_revision": "31f0f8c3fa6763bfe34945dd049c8d19baece379",
+  "branch": "main",
+  "population": {
+    "label": "live_sqlite_descriptive_only",
+    "database": "data/state.sqlite",
+    "picks_rows": 1145,
+    "picks_date_min": "2026-04-28",
+    "picks_date_max": "2026-07-27",
+    "note": "Not a leakage-safe production_replay. Do not use for model promotion."
+  },
+  "exclusions": {
+    "ambiguous_identity_rows": "not fully quarantined yet",
+    "missing_prediction_timestamp": "all historical rows lack enforced as_of provenance",
+    "open_totals": 7,
+    "processed_but_open_ledger": 7,
+    "pick_vs_value_divergences_observed": 7,
+    "side_mismatches_observed": 1
+  },
+  "moneyline_settled": {
+    "n_bets": 47,
+    "wins": 21,
+    "losses": 26,
+    "pushes": 0,
+    "total_units_staked": 169.0,
+    "total_units_pl": -32.95,
+    "roi_stake_weighted": -0.19497,
+    "roi_bet_count_legacy_incorrect": -0.70106,
+    "clv_coverage": 47,
+    "clv_n": 47,
+    "average_clv": -0.5979,
+    "min_clv": -5.2,
+    "max_clv": 5.2
+  },
+  "totals_settled": {
+    "n_bets": 27,
+    "wins": 11,
+    "losses": 16,
+    "total_units_pl": -22.66,
+    "note": "Separate market; settlement path incomplete for remaining open rows."
+  },
+  "scoring": {
+    "brier_score": null,
+    "log_loss": null,
+    "ece": null,
+    "mce": null,
+    "reason_unavailable": "Requires immutable calibrated probabilities and leakage-safe labels; not computed in Phase 0."
+  },
+  "baselines": {
+    "always_home": null,
+    "market_favorite": null,
+    "no_vig_market": null,
+    "reason_unavailable": "Blocked until Phase 4–5 chronological replay."
+  },
+  "versions": {
+    "model_version": null,
+    "feature_version": null,
+    "calibration_version": null,
+    "bet_policy_version": null,
+    "calibration_meta_present": true,
+    "calibration_maps_present": true,
+    "calibration_map_points": {
+      "moneyline": 4,
+      "yrfi": 3
+    }
+  },
+  "test_baseline": {
+    "npm_check": "pass",
+    "test_js": { "pass": 112, "fail": 0, "skipped": 5 },
+    "test_py": { "pass": 542, "fail": 0 }
+  },
+  "warnings": [
+    "ROI and CLV are descriptive dumps from current ledger only.",
+    "CLV may be attached to prediction.pick side while P/L uses ledger.side.",
+    "Python backtest is not production JS replay.",
+    "Historical features may include lookahead; do not claim OOS skill."
+  ]
+}
