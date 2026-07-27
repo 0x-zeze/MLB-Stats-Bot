@@ -7,7 +7,7 @@ Updated 2026-07-27 after Phases 0–2 and partial evaluation fixes.
 | Risk | Status |
 |------|--------|
 | Live JS path ≠ Python backtest | Open — no production_replay yet |
-| Full-season team/pitcher stats without date reconstruction | Open for historical eval |
+| Full-season team/pitcher stats without date reconstruction | **Mitigated in live path** (byDateRange as_of); still unsafe if called without asOf |
 | Boxscore lineup as historical feature | Open without pregame snapshot proof |
 | Mutable `picks` UPSERT still primary identity | Partial — decisions table added but live still UPSERTs picks |
 | Historical rows lack prediction_timestamp / quote provenance | Cannot fully backfill |
@@ -17,7 +17,7 @@ Updated 2026-07-27 after Phases 0–2 and partial evaluation fixes.
 | Risk | Status |
 |------|--------|
 | 7 open totals with empty date_ymd | Open (stranded) |
-| Cross-book de-vig as fair market | Open |
+| Cross-book de-vig as fair market | **Mitigated** — fair de-vig only same-book; executable uses side book |
 | Sparse calibration maps / no per-decision artifact hash | Open |
 | Feature snapshots without first-pitch hard wall | Partial write-once only |
 | Evolution can still touch production-adjacent files | Open (promotion not fully sandboxed) |

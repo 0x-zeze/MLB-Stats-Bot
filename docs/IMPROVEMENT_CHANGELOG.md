@@ -13,6 +13,8 @@ Honest log of correctness/evaluation work. No fabricated performance gains.
 | `acf093f` | temporal: invalid-future freshness + as-of pitcher starts |
 | `857ac5f` | evaluation: half-open walk-forward, proposal-only calibration, docs |
 | `869f6af` | governance: LLM explanation-only + dashboard unavailable |
+| `a55a972` | docs: prediction architecture |
+| `da50a8f` | market: same-book fair de-vig + season-to-date stats |
 
 ### Correctness
 
