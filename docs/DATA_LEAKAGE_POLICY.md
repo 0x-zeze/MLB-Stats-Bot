@@ -49,8 +49,8 @@ Helpers: `src/temporal_contract.js`, `src/temporal_contract.py`, `src/data_fresh
 |--------|-------------|---------------------|
 | Schedule / standings (date params) | date ≤ as_of date | Partial (date-level) |
 | Rolling team stats / recent games / bullpen / fatigue / H2H / injury | date-bounded APIs | Prefer these paths |
-| Full-season `teams/stats` | **unsafe** without reconstruction | Still present — do not use for historical claims |
-| Full-season pitcher `people/.../stats?stats=season` | **unsafe** for backtest | Still present for live season display |
+| Full-season `teams/stats` | season-to-date via byDateRange when as_of provided | **Enforced** in live `getMlbPredictions` (`fetchTeamStats(season, dateYmd)`) |
+| Pitcher season stats | season-to-date via byDateRange when as_of provided | **Enforced** (`fetchPitcherStats(..., dateYmd)`) |
 | Pitcher gameLog recent starts | only starts with `date < as_of_date` | **Enforced** in `fetchPitcherRecentStarts` |
 | Boxscore lineup | only immutable pregame capture | Historical boxscore can leak actual lineup — do not use for backtest without snapshot |
 | Odds quotes | last eligible pre-first-pitch | Opening freeze partial; close capture must not overwrite post-start |
@@ -65,6 +65,7 @@ Helpers: `src/temporal_contract.js`, `src/temporal_contract.py`, `src/data_fresh
 4. Classifying in-play games as "final pregame" tier solely because `hoursToGame` was clamped at 0.
 5. Stamping fixture data with wall-clock "now" so it looks live.
 6. De-vigging independently shopped home/away books as one same-book market for "fair" probability without labeling synthetic.
+   - **Enforced:** fair de-vig only when side books match (or legacy single `moneylineBook`); otherwise edge uses raw implied executable price and side-specific book.
 7. Applying a calibration map fitted on future outcomes to past predictions without chronological OOF discipline.
 
 ## 4. Missingness

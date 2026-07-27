@@ -449,22 +449,70 @@ function americanImpliedProbabilityPercent(value) {
   return probabilityValue * 100;
 }
 
-// Two-sided de-vig: the raw implied probabilities of both moneyline sides sum to
-// >100% (the overround / vig the book charges). The fair, no-vig probability for
-// each side is its raw implied normalized by the total. Edge must be measured
-// against this fair line, not the juiced raw implied — otherwise the vig is
-// silently counted against (favorites) or for (underdogs) every pick.
-function devigMoneylinePercent(awayOdds, homeOdds) {
+// Two-sided de-vig for a SAME-BOOK paired market only. Independently shopped
+// best-home and best-away from different books can produce a synthetic pair
+// with negative overround; that must not be treated as a fair market.
+function devigMoneylinePercent(awayOdds, homeOdds, options = {}) {
   const awayImplied = americanImpliedProbabilityPercent(awayOdds);
   const homeImplied = americanImpliedProbabilityPercent(homeOdds);
   if (awayImplied === null || homeImplied === null) return null;
   const total = awayImplied + homeImplied;
   if (!Number.isFinite(total) || total <= 0) return null;
+  const overround = total - 100;
+  const sameBook = options.sameBook !== false;
+  // Cross-book synthetic pairs: allow only if overround is non-negative and
+  // caller explicitly marks sameBook=false as executable-only (no fair claim).
+  if (!sameBook) {
+    return {
+      away: null,
+      home: null,
+      overround: round1(overround),
+      sameBook: false,
+      synthetic: true,
+      usableAsFair: false
+    };
+  }
+  if (overround < -0.05) {
+    // Negative overround on an alleged same-book pair is not a coherent market.
+    return {
+      away: null,
+      home: null,
+      overround: round1(overround),
+      sameBook: true,
+      synthetic: false,
+      usableAsFair: false
+    };
+  }
   return {
     away: (awayImplied / total) * 100,
     home: (homeImplied / total) * 100,
-    overround: total - 100
+    overround: round1(overround),
+    sameBook: true,
+    synthetic: false,
+    usableAsFair: true
   };
+}
+
+function moneylineBooksAreSame(currentOdds) {
+  if (!currentOdds) return false;
+  const homeSide = currentOdds.homeMoneylineBook || null;
+  const awaySide = currentOdds.awayMoneylineBook || null;
+  // Explicit side books: only same-book when both present and equal.
+  if (homeSide && awaySide) {
+    return String(homeSide).toLowerCase() === String(awaySide).toLowerCase();
+  }
+  // Conflicting partial provenance (one side shopped, other unknown) → not same-book.
+  if (homeSide || awaySide) {
+    // Single shared moneylineBook may still represent a paired book if no conflict.
+    // If only one side book is known and matches moneylineBook, treat as same-book;
+    // if it differs from moneylineBook, refuse fair de-vig.
+    const generic = currentOdds.moneylineBook || null;
+    if (!generic) return false;
+    const known = homeSide || awaySide;
+    return String(known).toLowerCase() === String(generic).toLowerCase();
+  }
+  // Legacy payload: only moneylineBook set (tests + older snapshots) → same-book pair.
+  return Boolean(currentOdds.moneylineBook);
 }
 
 function round1(value) {
@@ -513,12 +561,22 @@ function moneylineValueOption(item, side) {
   const team = side === 'away' ? item.away : item.home;
   const modelProbability = pureModelProbabilityForSide(item, side);
 
-  // Edge against the no-vig fair line when both sides are available; otherwise
-  // fall back to raw implied (single-sided) so a missing opposite price doesn't
-  // drop the option entirely.
-  const devig = devigMoneylinePercent(item.currentOdds?.awayMoneyline, item.currentOdds?.homeMoneyline);
-  const fairProbability = devig ? (side === 'away' ? devig.away : devig.home) : impliedProbability;
+  // Fair de-vig only when both sides share the same bookmaker. Best executable
+  // side price may still come from line shopping (side-specific book).
+  const sameBook = moneylineBooksAreSame(item.currentOdds);
+  const devig = devigMoneylinePercent(
+    item.currentOdds?.awayMoneyline,
+    item.currentOdds?.homeMoneyline,
+    { sameBook }
+  );
+  const fairFromDevig =
+    devig?.usableAsFair && devig[side] != null ? (side === 'away' ? devig.away : devig.home) : null;
+  const fairProbability = fairFromDevig != null ? fairFromDevig : impliedProbability;
   const edge = modelProbability - fairProbability;
+  const sideBook =
+    side === 'away'
+      ? item.currentOdds?.awayMoneylineBook || item.currentOdds?.moneylineBook
+      : item.currentOdds?.homeMoneylineBook || item.currentOdds?.moneylineBook;
 
   return {
     side,
@@ -526,10 +584,12 @@ function moneylineValueOption(item, side) {
     teamName: team?.name,
     teamAbbreviation: team?.abbreviation,
     odds,
-    book: item.currentOdds?.moneylineBook || 'market',
+    book: sideBook || 'market',
     modelProbability: round1(modelProbability),
     impliedProbability: round1(impliedProbability),
     fairProbability: round1(fairProbability),
+    fairSource: fairFromDevig != null ? 'same_book_devig' : 'raw_implied_executable',
+    sameBookDevig: Boolean(fairFromDevig != null),
     overround: devig ? round1(devig.overround) : null,
     edge: round1(edge),
     // Quarter-Kelly stake (% of bankroll) off the calibrated model probability
@@ -1696,14 +1756,26 @@ async function fetchInjuryProfiles(teamIds, dateYmd, season) {
   return injuries;
 }
 
-async function fetchTeamStats(season) {
+async function fetchTeamStats(season, asOfDateYmd = null) {
+  // Prefer season-to-date through as_of to avoid including future games when
+  // this helper is used in historical or late-season evaluation contexts.
+  // Without asOfDateYmd, fall back to full season (live-only; not backtest-safe).
   const params = new URLSearchParams({
     season: String(season),
-    stats: 'season,seasonAdvanced',
     group: 'hitting,pitching',
     sportIds: '1',
     gameType: 'R'
   });
+  if (asOfDateYmd) {
+    const seasonOpen = seasonStartDate(season);
+    const endDate = String(asOfDateYmd).slice(0, 10);
+    const startDate = seasonOpen <= endDate ? seasonOpen : endDate;
+    params.set('stats', 'byDateRange');
+    params.set('startDate', startDate);
+    params.set('endDate', endDate);
+  } else {
+    params.set('stats', 'season,seasonAdvanced');
+  }
 
   return getTeamStatMap(await fetchJson(`${MLB_BASE_URL}/teams/stats?${params}`));
 }
@@ -1808,15 +1880,26 @@ async function buildFirstInningProfiles(season, dateYmd) {
   return profiles;
 }
 
-async function fetchPitcherStats(personId, season) {
+async function fetchPitcherStats(personId, season, asOfDateYmd = null) {
   if (!personId) return null;
 
   const params = new URLSearchParams({
-    stats: 'season',
     group: 'pitching',
     season: String(season),
     gameType: 'R'
   });
+  // Season-to-date through as_of when available (historical/leakage-safe).
+  // Full-season without asOf is live-only and not backtest-safe.
+  if (asOfDateYmd) {
+    const seasonOpen = seasonStartDate(season);
+    const endDate = String(asOfDateYmd).slice(0, 10);
+    const startDate = seasonOpen <= endDate ? seasonOpen : endDate;
+    params.set('stats', 'byDateRange');
+    params.set('startDate', startDate);
+    params.set('endDate', endDate);
+  } else {
+    params.set('stats', 'season');
+  }
 
   const data = await fetchJson(`${MLB_BASE_URL}/people/${personId}/stats?${params}`);
   return data.stats?.[0]?.splits?.[0]?.stat || null;
@@ -3422,6 +3505,9 @@ export const __mlbTestInternals = {
   moneylineOddsFreshnessReason,
   determinePredictionTier,
   filterSplitsBeforeDate,
+  devigMoneylinePercent,
+  moneylineBooksAreSame,
+  moneylineValueOption,
   MARKET_BLEND_WEIGHT,
   ROLLING_FORM_DAYS
 };
@@ -3443,7 +3529,7 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
     return new Map();
   };
   const [teamStats, rollingTeamStats, standings, firstInningProfiles, bullpenProfiles, scheduleFatigueProfiles, injuryProfiles] = await Promise.all([
-    fetchTeamStats(season).catch(warnFetch('teamStats')),
+    fetchTeamStats(season, dateYmd).catch(warnFetch('teamStats')),
     fetchRollingTeamStats(season, dateYmd).catch(warnFetch('rollingTeamStats')),
     fetchStandings(season, dateYmd).catch(warnFetch('standings')),
     fetchFirstInningProfiles(season, dateYmd).catch(warnFetch('firstInningProfiles')),
@@ -3474,7 +3560,7 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       }
 
       try {
-        pitcherStats.set(personId, await fetchPitcherStats(personId, season));
+        pitcherStats.set(personId, await fetchPitcherStats(personId, season, dateYmd));
       } catch {
         pitcherStats.set(personId, null);
       }
