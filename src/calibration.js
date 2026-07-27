@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +24,8 @@ const SHRINKAGE_FACTOR = {
 
 let cachedMaps = null;
 let cachedMeta = null;
+/** @type {Map<string, object>} */
+let cachedArtifacts = new Map();
 
 function loadCalibrationMeta() {
   if (cachedMeta !== null) return cachedMeta;
@@ -73,6 +76,78 @@ function loadCalibrationMaps() {
 export function resetCalibrationCache() {
   cachedMaps = null;
   cachedMeta = null;
+  cachedArtifacts = new Map();
+}
+
+/**
+ * Explicit runtime calibration artifact identity.
+ * Never pretends calibrated when maps are missing while meta claims success.
+ */
+export function getCalibrationArtifact(market = 'moneyline') {
+  const marketKey = String(market).trim().toLowerCase();
+  if (cachedArtifacts.has(marketKey)) return cachedArtifacts.get(marketKey);
+
+  const maps = loadCalibrationMaps();
+  const meta = loadCalibrationMeta();
+  const mapping = maps[marketKey] || [];
+  const marketMeta = meta?.markets?.[marketKey] || {};
+  const mapPresent = Array.isArray(mapping) && mapping.length > 0;
+  const metaSuccess = String(marketMeta.status || '').toLowerCase() === 'success';
+  const samples = Number(marketMeta.samples);
+  const minSamples = MIN_ISOTONIC_SAMPLES_FOR_TRUST[marketKey];
+  const lowSample =
+    Number.isFinite(samples) && Number.isFinite(minSamples) && samples < minSamples;
+
+  let mode = 'identity';
+  const warnings = [];
+  if (mapPresent && !lowSample) {
+    mode = 'map';
+  } else if (mapPresent && lowSample) {
+    mode = 'map_low_sample_shrink';
+    warnings.push('low_sample_map');
+  } else if (!mapPresent && usesLowSampleShrinkage(marketKey)) {
+    mode = 'shrink_toward_50';
+    warnings.push('missing_map_using_shrinkage');
+  } else {
+    mode = 'identity';
+    if (metaSuccess) {
+      warnings.push('meta_claims_success_but_map_missing_or_unusable');
+    }
+    if (!mapPresent) warnings.push('missing_calibration_map');
+  }
+
+  const hashSource = {
+    market: marketKey,
+    mapping,
+    meta: {
+      status: marketMeta.status || null,
+      samples: Number.isFinite(samples) ? samples : null,
+      map_points: marketMeta.map_points ?? mapping.length,
+      version: meta?.version ?? null,
+      source: meta?.source ?? null
+    },
+    mode
+  };
+  const artifactHash = createHash('sha256')
+    .update(JSON.stringify(hashSource))
+    .digest('hex')
+    .slice(0, 24);
+
+  const artifact = {
+    market: marketKey,
+    mode,
+    applied: mode !== 'identity',
+    mapPresent,
+    mapPoints: mapping.length,
+    metaSuccess,
+    samples: Number.isFinite(samples) ? samples : null,
+    artifactHash,
+    calibrationVersion: `cal-${marketKey}-${artifactHash}`,
+    warnings,
+    source: meta?.source || (mapPresent ? 'calibration_maps.json' : null)
+  };
+  cachedArtifacts.set(marketKey, artifact);
+  return artifact;
 }
 
 function shrinkTowardHalf(raw, market) {
@@ -110,17 +185,34 @@ function interpolate(mapping, raw) {
  * Map a raw model probability (0-1) to a calibrated probability for a market.
  * Low-sample moneyline metadata uses shrinkage even without a trusted map;
  * otherwise markets fall back to the raw probability when no map exists.
+ * Call getCalibrationArtifact() to know whether identity fallback was silent.
  */
 export function calibrateProbability(rawProbability, market = 'moneyline') {
   const marketKey = String(market).trim().toLowerCase();
-  if (usesLowSampleShrinkage(marketKey)) {
-    return clamp(shrinkTowardHalf(rawProbability, marketKey), 0.05, 0.95);
+  const artifact = getCalibrationArtifact(marketKey);
+
+  if (artifact.mode === 'shrink_toward_50' || artifact.mode === 'map_low_sample_shrink') {
+    // Prefer map when present even under low-sample shrink path: interpolate then
+    // shrink residual toward 50 so sparse maps don't overfit.
+    const mapping = loadCalibrationMaps()[marketKey];
+    let base = rawProbability;
+    if (mapping && mapping.length > 0) {
+      base = interpolate(mapping, rawProbability);
+    }
+    if (artifact.mode === 'shrink_toward_50' || usesLowSampleShrinkage(marketKey)) {
+      base = shrinkTowardHalf(base, marketKey);
+    }
+    return clamp(base, 0.05, 0.95);
   }
 
-  const mapping = loadCalibrationMaps()[marketKey];
-  if (!mapping || mapping.length === 0) return rawProbability;
-  const calibrated = interpolate(mapping, rawProbability);
-  return clamp(calibrated, 0.05, 0.95);
+  if (artifact.mode === 'map') {
+    const mapping = loadCalibrationMaps()[marketKey];
+    const calibrated = interpolate(mapping, rawProbability);
+    return clamp(calibrated, 0.05, 0.95);
+  }
+
+  // Identity — explicit, not silent success.
+  return rawProbability;
 }
 
 /**
@@ -138,6 +230,17 @@ export function calibratePercent(rawPercent, market = 'moneyline') {
 
 /** True when a usable calibration map exists for the market. */
 export function hasCalibrationMap(market = 'moneyline') {
-  const mapping = loadCalibrationMaps()[String(market).trim().toLowerCase()];
-  return Array.isArray(mapping) && mapping.length > 0;
+  const artifact = getCalibrationArtifact(market);
+  return artifact.mapPresent && artifact.mode !== 'identity';
+}
+
+/** Attach artifact identity onto a prediction object (mutates lightly). */
+export function attachCalibrationIdentity(prediction, market = 'moneyline') {
+  if (!prediction || typeof prediction !== 'object') return prediction;
+  const artifact = getCalibrationArtifact(market);
+  prediction.calibrationArtifact = artifact;
+  prediction.calibrationVersion = artifact.calibrationVersion;
+  if (!prediction.versions) prediction.versions = {};
+  prediction.versions.calibration = artifact.calibrationVersion;
+  return prediction;
 }

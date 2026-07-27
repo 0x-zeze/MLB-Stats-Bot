@@ -4,6 +4,9 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, extname, resolve } from 'node:path';
 
 import { applyMigrations } from './storage/migrations.js';
+import { getCalibrationArtifact } from './calibration.js';
+import { buildPredictionSnapshot } from './prediction_snapshot.js';
+import { writeSnapshotFile } from './prediction_serializer.js';
 
 const DEFAULT_STATE = {
   lastUpdateId: 0,
@@ -335,7 +338,15 @@ function compactPrediction(prediction, dateYmd) {
           baselineHomeProbability: agent.probabilityShift.baselineHomeProbability
         }
       : null,
-    savedAt: new Date().toISOString()
+    savedAt: new Date().toISOString(),
+    snapshotHash: prediction.snapshotHash || null,
+    asOfUtc: prediction.asOfUtc || null,
+    predictionTimestampUtc: prediction.predictionTimestampUtc || null,
+    calibrationVersion: prediction.calibrationVersion || null,
+    calibrationArtifact: prediction.calibrationArtifact || null,
+    runId: prediction.runId || null,
+    snapshotPath: prediction.snapshotPath || null,
+    versions: prediction.versions || null
   };
 }
 
@@ -1147,6 +1158,134 @@ export class Storage {
     this.refreshState();
   }
 
+  /**
+   * Capture an immutable decision snapshot for a prediction (best-effort).
+   * Writes feature_snapshots + optional JSON file under data/prediction_snapshots.
+   * Never throws into the live path.
+   */
+  capturePredictionSnapshot(prediction, dateYmd = prediction?.dateYmd || '') {
+    try {
+      if (!prediction?.gamePk) return null;
+
+      // Immutable first-write semantics: a refresh must reuse the original
+      // prediction_decision_snapshot, not mint a new as_of/hash for the same game.
+      const existingFeature = this.db
+        .prepare(
+          `SELECT payload FROM feature_snapshots
+           WHERE game_pk = ? AND feature_group = 'prediction_decision_snapshot'`
+        )
+        .get(String(prediction.gamePk));
+      if (existingFeature?.payload) {
+        const stored = parseJson(existingFeature.payload, {});
+        if (stored.snapshotHash) {
+          prediction.snapshotHash = stored.snapshotHash;
+          prediction.asOfUtc = stored.asOfUtc || prediction.asOfUtc || null;
+          prediction.predictionTimestampUtc =
+            stored.predictionTimestampUtc || prediction.predictionTimestampUtc || prediction.asOfUtc || null;
+          prediction.calibrationVersion =
+            stored.versions?.calibrationVersion || prediction.calibrationVersion || null;
+          if (!prediction.versions) prediction.versions = {};
+          prediction.versions.calibration = prediction.calibrationVersion;
+          return stored;
+        }
+      }
+
+      const cal = getCalibrationArtifact('moneyline');
+      const asOfUtc = new Date().toISOString();
+      const snapshot = buildPredictionSnapshot({
+        prediction,
+        dateYmd,
+        asOfUtc,
+        predictionTimestampUtc: asOfUtc,
+        firstPitchUtc: prediction.startTime || null,
+        versions: {
+          modelVersion: prediction.modelVersion || prediction.versions?.model || 'mlb-js-live',
+          featureVersion: prediction.featureVersion || prediction.versions?.feature || 'live-features',
+          calibrationVersion: cal.calibrationVersion,
+          betPolicyVersion: prediction.betPolicyVersion || prediction.versions?.betPolicy || 'value-v1'
+        }
+      });
+
+      prediction.snapshotHash = snapshot.snapshotHash;
+      prediction.asOfUtc = snapshot.asOfUtc;
+      prediction.predictionTimestampUtc = snapshot.predictionTimestampUtc;
+      prediction.calibrationVersion = cal.calibrationVersion;
+      prediction.calibrationArtifact = cal;
+      if (!prediction.versions) prediction.versions = {};
+      prediction.versions.calibration = cal.calibrationVersion;
+
+      // Write-once feature snapshot group for later replay joins.
+      this.setFeatureSnapshot(
+        prediction.gamePk,
+        'prediction_decision_snapshot',
+        dateYmd,
+        {
+          snapshotHash: snapshot.snapshotHash,
+          asOfUtc: snapshot.asOfUtc,
+          predictionTimestampUtc: snapshot.predictionTimestampUtc,
+          firstPitchUtc: snapshot.firstPitchUtc,
+          versions: snapshot.versions,
+          decisionInputs: snapshot.decisionInputs,
+          modelInputs: snapshot.modelInputs,
+          quotes: snapshot.quotes,
+          calibration: cal
+        },
+        { overwrite: false, timestamp: asOfUtc }
+      );
+
+      // Best-effort file capture for offline replay tooling.
+      try {
+        const snapDir = resolve(dirname(this.dbPath), 'prediction_snapshots', String(dateYmd || 'unknown'));
+        const snapPath = resolve(snapDir, `${prediction.gamePk}-${snapshot.snapshotHash.slice(0, 12)}.json`);
+        writeSnapshotFile(snapPath, snapshot);
+        prediction.snapshotPath = snapPath;
+      } catch {
+        // disk full / permissions — feature_snapshots row is enough for join
+      }
+
+      // Immutable prediction_runs row when migrations are present.
+      try {
+        const runId = `run-${prediction.gamePk}-${snapshot.snapshotHash.slice(0, 16)}`;
+        prediction.runId = prediction.runId || runId;
+        this.db
+          .prepare(
+            `INSERT INTO prediction_runs (
+              run_id, game_pk, market, date_ymd, prediction_timestamp_utc, as_of_utc,
+              first_pitch_utc, model_version, feature_version, calibration_version,
+              bet_policy_version, snapshot_hash, payload, created_at
+            ) VALUES (?, ?, 'moneyline', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO NOTHING`
+          )
+          .run(
+            prediction.runId,
+            String(prediction.gamePk),
+            dateYmd || null,
+            snapshot.predictionTimestampUtc,
+            snapshot.asOfUtc,
+            snapshot.firstPitchUtc,
+            snapshot.versions.modelVersion,
+            snapshot.versions.featureVersion,
+            snapshot.versions.calibrationVersion,
+            snapshot.versions.betPolicyVersion,
+            snapshot.snapshotHash,
+            toJson({
+              valuePick: prediction.valuePick || null,
+              betDecision: prediction.betDecision || null,
+              snapshotPath: prediction.snapshotPath || null
+            }),
+            asOfUtc
+          );
+      } catch {
+        // table may be missing on partial fixtures
+      }
+
+      return snapshot;
+    } catch (error) {
+      console.error('capturePredictionSnapshot failed:', error?.message || error);
+      return null;
+    }
+  }
+
   savePredictions(dateYmd, predictions) {
     const saveRows = this.db.transaction(() => {
       for (const prediction of predictions) {
@@ -1154,7 +1293,14 @@ export class Storage {
 
         const key = String(prediction.gamePk);
         const existing = this.getPrediction(key) || {};
+        // Freeze decision inputs before compacting mutable display fields.
+        this.capturePredictionSnapshot(prediction, dateYmd);
         const compact = compactPrediction(prediction, dateYmd);
+        compact.snapshotHash = prediction.snapshotHash || existing.snapshotHash || null;
+        compact.asOfUtc = prediction.asOfUtc || existing.asOfUtc || null;
+        compact.calibrationVersion =
+          prediction.calibrationVersion || existing.calibrationVersion || null;
+        compact.runId = prediction.runId || existing.runId || null;
         if (!compact.openingOdds && existing.openingOdds) {
           compact.openingOdds = existing.openingOdds;
         } else if (!compact.openingOdds && compact.currentOdds) {
