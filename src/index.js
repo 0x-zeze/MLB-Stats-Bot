@@ -281,8 +281,10 @@ async function attachMarketContext(predictions) {
         const totalImplied = homeImplied + awayImplied;
         const homeNorm = (homeImplied / totalImplied) * 100;
         const awayNorm = (awayImplied / totalImplied) * 100;
-        // Blend weight: base 0.12 scaled by evolution multiplier
-        const w = Math.min(0.25, 0.12 * marketOddsMultiplier);
+        // Blend weight: market is the strongest single pre-game predictor.
+        // Raised base from 0.12 → 0.22 so displayed pick incorporates real odds
+        // without fully overwriting pure-model VALUE grading.
+        const w = Math.min(0.35, 0.22 * marketOddsMultiplier);
         const rawHome = Number(prediction.modelBreakdown?.rawHomeProbability ?? prediction.home?.winProbabilityRaw ?? prediction.home?.winProbability);
         const rawAway = Number(prediction.modelBreakdown?.rawAwayProbability ?? prediction.away?.winProbabilityRaw ?? prediction.away?.winProbability);
         if (Number.isFinite(rawHome) && Number.isFinite(rawAway)) {

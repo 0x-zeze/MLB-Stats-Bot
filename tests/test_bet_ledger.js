@@ -180,7 +180,8 @@ test('formatLedgerReport handles empty ledger', () => {
   assert.match(out, /Belum ada VALUE bet/);
 });
 
-// totals helper functions removed — totals market retiredtest.skip('recordTotalsBet logs an over bet and settleTotalsBet pays an over win', () => {});
+// totals helper functions removed — totals market retired
+test.skip('recordTotalsBet logs an over bet and settleTotalsBet pays an over win', () => {});
 
 test.skip('settleTotalsBet grades under win, over loss, and exact-line push', () => {});
 

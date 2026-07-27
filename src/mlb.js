@@ -21,13 +21,13 @@ const SECTION_SEPARATOR = UI_THIN_LINE;
 const DEFAULT_MONEYLINE_VALUE_EDGE_THRESHOLD = 4.0;
 const STRONG_VALUE_EDGE_THRESHOLD = 4.0;
 // Calibrated win-probability floor for a graded VALUE bet. Deep analysis of
-// 773 moneyline outcomes showed the model is OVERCONFIDENT at high probs:
-//   50-55% predicted → 56.8% actual (underconfident ← BEST bucket)
-//   55-60% predicted → 52.2% actual (overconfident by 5pp)
-//   65-70% predicted → 49.4% actual (overconfident by 18pp!)
-// Lowering the floor from 62% to 52% lets the model bet on picks where it
-// is slightly above 50% — the range where it is most accurately calibrated.
-// The old 62% floor selected for OVERCONFIDENT picks → 37.3% WR on VALUE bets.
+// 1105 moneyline outcomes (2026 run) showed the model is OVERCONFIDENT at high probs:
+//   50-55% predicted → ~56% actual (underconfident ← BEST bucket)
+//   55-60% predicted → ~53% actual (overconfident)
+//   65-70% predicted → ~51% actual (overconfident)
+// Floor stays at 52% so VALUE can land in the better-calibrated band.
+// Historical VALUE WR still lags (~49%) — selection gates + real-form signals
+// must carry the lift, not a higher conviction floor.
 const MIN_VALUE_PROBABILITY = 52.0;
 // Team quality gate: team must have >= this season win% to qualify for VALUE.
 // Picks on teams with .520+ WR: 70.2% historical accuracy.
@@ -37,6 +37,15 @@ const MIN_TEAM_QUALITY_PCT = 0.520;
 // beyond this threshold. Away underdogs are the model's worst leak:
 // AWAY+VALUE = 44.9% WR. This kills the away longshot trap.
 const MAX_AWAY_UNDERDOG_ODDS = 115;
+// Rolling team form window (MLB StatsAPI byDateRange). Season stats lag true
+// current strength; 21 calendar days ≈ 18-19 games and is leakage-safe when
+// endDate is predictionDate-1.
+const ROLLING_FORM_DAYS = 21;
+// Bayesian market blend weight. Market de-vig implied is the strongest single
+// pre-game predictor; pure model alone plateaus ~55%. Raise from 12% → 22% so
+// displayed pick/winner incorporates real market information without letting
+// the book fully overwrite model edge (VALUE still grades pure model).
+const MARKET_BLEND_WEIGHT = 0.22;
 const OPENER_KEYWORD_RE = /\b(opener|bulk|piggyback)\b|opener\s*\/\s*bulk/i;
 const OPENER_NOTE_KEYS = new Set([
   'note',
@@ -218,6 +227,19 @@ function seasonStartDate(season) {
   return `${season}-03-01`;
 }
 
+function shiftYmd(dateYmd, dayDelta) {
+  const date = new Date(`${dateYmd}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return dateYmd;
+  date.setUTCDate(date.getUTCDate() + dayDelta);
+  return date.toISOString().slice(0, 10);
+}
+
+function rollingFormWindow(dateYmd, days = ROLLING_FORM_DAYS) {
+  const endDate = shiftYmd(dateYmd, -1);
+  const startDate = shiftYmd(endDate, -(Math.max(1, days) - 1));
+  return { startDate, endDate };
+}
+
 function teamMemoryBias(modelMemory, teamId) {
   return clamp(toNumber(modelMemory?.teamBias?.[String(teamId)], 0), -0.08, 0.08);
 }
@@ -349,12 +371,20 @@ function h2hProbText(team, probability) {
 }
 
 function firstInningPickText(firstInning) {
-  const pick = firstInning?.agent?.pick || firstInning?.baselinePick || 'NO';
+  const pick = firstInning?.agent?.pick || firstInning?.baselinePick || 'NO BET';
   const probability = firstInning?.agent?.probability ?? firstInning?.baselineProbability ?? 50;
+  const lean =
+    firstInning?.baselineLean ||
+    (probability >= 58 ? 'YES' : probability <= 47 ? 'NO' : 'PASS');
   if (String(pick).toUpperCase() === 'NO BET') {
-    // Advisory-only: show the lean as context, framed by confidence.
-    const lean = firstInning?.baselineLean || (probability >= 52 ? 'YES' : 'NO');
-    return `lean ${lean} ${percent(probability)} (advisory)`;
+    // Advisory-only: show directional lean only when the model clears a real
+    // band; mid-band is PASS (no fake YES/NO).
+    return lean === 'PASS'
+      ? `no lean ${percent(probability)} (advisory)`
+      : `lean ${lean} ${percent(probability)} (advisory)`;
+  }
+  if (String(pick).toUpperCase() === 'PASS') {
+    return `no lean ${percent(probability)}`;
   }
   const label = pick === 'YES' ? 'YES / YRFI' : 'NO / NRFI';
   return `${label} ${percent(probability)}`;
@@ -1077,6 +1107,114 @@ function getTeamStatMap(statsData) {
   return teams;
 }
 
+function getRollingTeamStatMap(statsData) {
+  const teams = new Map();
+
+  for (const block of statsData.stats || []) {
+    const group = block.group?.displayName?.toLowerCase();
+    const type = String(block.type?.displayName || '').toLowerCase();
+    if (!group || !type.includes('daterange')) continue;
+
+    for (const split of block.splits || []) {
+      const teamId = split.team?.id;
+      if (!teamId) continue;
+
+      if (!teams.has(teamId)) {
+        teams.set(teamId, {
+          team: split.team,
+          hitting: null,
+          pitching: null,
+          games: 0
+        });
+      }
+
+      const profile = teams.get(teamId);
+      if (group === 'hitting') {
+        profile.hitting = split.stat;
+        profile.games = Math.max(profile.games, toNumber(split.stat?.gamesPlayed, 0));
+      }
+      if (group === 'pitching') {
+        profile.pitching = split.stat;
+        profile.games = Math.max(profile.games, toNumber(split.stat?.gamesPlayed, 0));
+      }
+    }
+  }
+
+  return teams;
+}
+
+// Season vs last-21d offense/prevention blend. Rolling form is the real-data
+// signal season averages miss (hot/cold stretches, post-trade lineups). Require
+// enough games so a 3-game noise spike cannot dominate.
+function blendedTeamOffenseEdge(seasonHome, seasonAway, rollingHome, rollingAway) {
+  const seasonEdge =
+    (rpg(seasonHome?.hitting) - rpg(seasonAway?.hitting)) / 2.2 +
+    (statOps(seasonHome?.hitting) - statOps(seasonAway?.hitting)) / 0.14 +
+    (statIso(seasonHome?.hittingAdvanced) - statIso(seasonAway?.hittingAdvanced)) / 0.1 +
+    (battingKRate(seasonAway?.hittingAdvanced) - battingKRate(seasonHome?.hittingAdvanced)) / 0.16 +
+    (battingBbRate(seasonHome?.hittingAdvanced) - battingBbRate(seasonAway?.hittingAdvanced)) / 0.12;
+
+  const homeGames = toNumber(rollingHome?.games, 0);
+  const awayGames = toNumber(rollingAway?.games, 0);
+  if (homeGames < 8 || awayGames < 8 || !rollingHome?.hitting || !rollingAway?.hitting) {
+    return { edge: seasonEdge, rollingWeight: 0, rollingEdge: 0 };
+  }
+
+  const rollingEdge =
+    (rpg(rollingHome.hitting) - rpg(rollingAway.hitting)) / 2.2 +
+    (statOps(rollingHome.hitting) - statOps(rollingAway.hitting)) / 0.14;
+  const sample = Math.min(homeGames, awayGames);
+  const rollingWeight = clamp((sample - 7) / 12, 0, 0.45);
+  return {
+    edge: seasonEdge * (1 - rollingWeight) + rollingEdge * rollingWeight,
+    rollingWeight,
+    rollingEdge
+  };
+}
+
+function blendedTeamPreventionEdge(seasonHome, seasonAway, rollingHome, rollingAway) {
+  const seasonEdge =
+    (statEra(seasonAway?.pitching) - statEra(seasonHome?.pitching)) / 1.8 +
+    (statWhip(seasonAway?.pitching) - statWhip(seasonHome?.pitching)) / 0.55 +
+    (pitchingKMinusBb(seasonHome?.pitchingAdvanced) - pitchingKMinusBb(seasonAway?.pitchingAdvanced)) / 0.16 +
+    (pitchingHr9(seasonAway?.pitchingAdvanced) - pitchingHr9(seasonHome?.pitchingAdvanced)) / 1.2;
+
+  const homeGames = toNumber(rollingHome?.games, 0);
+  const awayGames = toNumber(rollingAway?.games, 0);
+  if (homeGames < 8 || awayGames < 8 || !rollingHome?.pitching || !rollingAway?.pitching) {
+    return { edge: seasonEdge, rollingWeight: 0, rollingEdge: 0 };
+  }
+
+  const homePitch = rollingHome.pitching;
+  const awayPitch = rollingAway.pitching;
+  const rollingEdge =
+    (statEra(awayPitch) - statEra(homePitch)) / 1.8 +
+    (statWhip(awayPitch) - statWhip(homePitch)) / 0.55 +
+    (toNumber(homePitch.homeRunsPer9, DEFAULTS.hr9) - toNumber(awayPitch.homeRunsPer9, DEFAULTS.hr9)) / 1.2 +
+    (toNumber(homePitch.strikeoutWalkRatio, 2.2) - toNumber(awayPitch.strikeoutWalkRatio, 2.2)) / 4.0;
+  const sample = Math.min(homeGames, awayGames);
+  const rollingWeight = clamp((sample - 7) / 12, 0, 0.4);
+  return {
+    edge: seasonEdge * (1 - rollingWeight) + rollingEdge * rollingWeight,
+    rollingWeight,
+    rollingEdge
+  };
+}
+
+function rollingFormLine(team, rollingProfile) {
+  const label = team.abbreviation || team.name;
+  if (!rollingProfile?.hitting && !rollingProfile?.pitching) {
+    return `${label} L21: data belum cukup`;
+  }
+  const games = toNumber(rollingProfile.games, 0);
+  const hit = rollingProfile.hitting;
+  const pit = rollingProfile.pitching;
+  const parts = [`${label} L${games || 21}`];
+  if (hit) parts.push(`${safeFixed(rpg(hit), 2)} R/G OPS ${safeFixed(statOps(hit), 3)}`);
+  if (pit) parts.push(`staff ERA ${safeFixed(statEra(pit))} WHIP ${safeFixed(statWhip(pit))}`);
+  return parts.join(' ');
+}
+
 function getStandingMap(standingsData) {
   const teams = new Map();
 
@@ -1550,6 +1688,26 @@ async function fetchTeamStats(season) {
   return getTeamStatMap(await fetchJson(`${MLB_BASE_URL}/teams/stats?${params}`));
 }
 
+async function fetchRollingTeamStats(season, dateYmd, days = ROLLING_FORM_DAYS) {
+  const { startDate, endDate } = rollingFormWindow(dateYmd, days);
+  // Guard: if window starts before season open, clamp so API returns real splits.
+  const seasonOpen = seasonStartDate(season);
+  const safeStart = startDate < seasonOpen ? seasonOpen : startDate;
+  if (safeStart > endDate) return new Map();
+
+  const params = new URLSearchParams({
+    season: String(season),
+    stats: 'byDateRange',
+    group: 'hitting,pitching',
+    sportIds: '1',
+    gameType: 'R',
+    startDate: safeStart,
+    endDate
+  });
+
+  return getRollingTeamStatMap(await fetchJson(`${MLB_BASE_URL}/teams/stats?${params}`));
+}
+
 async function fetchStandings(season, dateYmd) {
   const params = new URLSearchParams({
     leagueId: '103,104',
@@ -2014,15 +2172,18 @@ function buildFirstInningProjection({
   }
   // Break-even for a YRFI bet at typical -110/-120 juice is ~52-55%. Only lean
   // YES when the projection clears the base rate by a real margin, and NO only
-  // when it falls well below it; otherwise there is no actionable edge.
-  const lean = probability >= 58 ? 'YES' : probability <= 48 ? 'NO' : 'YES';
+  // when it falls well below it; otherwise lean PASS (no fake directional lean).
+  // Bugfix: the mid-band previously defaulted to 'YES', which forced ~73% NO
+  // grading history into a YES lean and crushed NRFI accuracy (~45%).
+  const lean = probability >= 58 ? 'YES' : probability <= 47 ? 'NO' : 'PASS';
   // YRFI carried no per-game edge historically (corr ~ -0.02 with outcomes) and
   // the market already prices the >50% base rate, so it stays advisory-only by
   // default: the lean/probability are surfaced as context but `pick` is NO BET
   // so it is not graded as a bet. Re-enable with YRFI_ACTIVE=1 only if a future
-  // feature set demonstrates a real, calibrated edge.
+  // feature set demonstrates a real, calibrated edge. When active, PASS still
+  // maps to NO BET (no forced side).
   const yrfiActive = String(process.env.YRFI_ACTIVE || '').trim() === '1';
-  const pick = yrfiActive ? lean : 'NO BET';
+  const pick = yrfiActive && lean !== 'PASS' ? lean : 'NO BET';
 
   const reasons = [
     `Top 1: ${away.abbreviation || away.name} offense/allowed profile projects ${percent(topRate * 100)} run chance.`,
@@ -2220,7 +2381,7 @@ function finalGameResult(game, dateYmd) {
   };
 }
 
-function starterEdge(homePitcherStats, awayPitcherStats) {
+function starterSeasonEdge(homePitcherStats, awayPitcherStats) {
   if (!homePitcherStats && !awayPitcherStats) return 0;
 
   const homeEra = statEra(homePitcherStats);
@@ -2245,6 +2406,44 @@ function starterEdge(homePitcherStats, awayPitcherStats) {
   );
 }
 
+// Last-N starts edge from real gameLog rows (already fetched for display).
+// Season ERA alone is slow to reflect current stuff/command; recent form is
+// the actionable SP signal when both sides have enough IP.
+function starterRecentEdge(homeRecent, awayRecent) {
+  const homeIp = toNumber(homeRecent?.innings, 0);
+  const awayIp = toNumber(awayRecent?.innings, 0);
+  if (homeIp < 6 || awayIp < 6) return 0;
+
+  const homeEra = toNumber(homeRecent.era, DEFAULTS.era);
+  const awayEra = toNumber(awayRecent.era, DEFAULTS.era);
+  const homeWhip = toNumber(homeRecent.whip, DEFAULTS.whip);
+  const awayWhip = toNumber(awayRecent.whip, DEFAULTS.whip);
+  const homeKbb =
+    toNumber(homeRecent.strikeouts, 0) / Math.max(1, toNumber(homeRecent.walks, 0));
+  const awayKbb =
+    toNumber(awayRecent.strikeouts, 0) / Math.max(1, toNumber(awayRecent.walks, 0));
+  const homeHr9 = homeIp > 0 ? (toNumber(homeRecent.homeRuns, 0) * 9) / homeIp : DEFAULTS.hr9;
+  const awayHr9 = awayIp > 0 ? (toNumber(awayRecent.homeRuns, 0) * 9) / awayIp : DEFAULTS.hr9;
+
+  const raw =
+    (awayEra - homeEra) / 2.6 +
+    (awayWhip - homeWhip) / 0.65 +
+    (homeKbb - awayKbb) / 4.5 +
+    (awayHr9 - homeHr9) / 1.2;
+  const sampleWeight = clamp(Math.min(homeIp, awayIp) / 18, 0.35, 1);
+  return clamp(raw * sampleWeight, -1.2, 1.2);
+}
+
+function starterEdge(homePitcherStats, awayPitcherStats, homeRecent = null, awayRecent = null) {
+  const season = starterSeasonEdge(homePitcherStats, awayPitcherStats);
+  const recent = starterRecentEdge(homeRecent, awayRecent);
+  if (!homePitcherStats && !awayPitcherStats && recent === 0) return 0;
+  // When recent form is available, give it real weight — season stats alone
+  // produced a flat ~55% ceiling because SP edge was mostly lagging averages.
+  if (recent === 0) return season;
+  return clamp(season * 0.55 + recent * 0.45, -1.6, 1.6);
+}
+
 function createReasons({
   home,
   away,
@@ -2254,6 +2453,10 @@ function createReasons({
   awayPitcherStats,
   homeStarter,
   awayStarter,
+  homePitcherRecent = null,
+  awayPitcherRecent = null,
+  homeRolling = null,
+  awayRolling = null,
   probHome,
   homeLineup,
   awayLineup,
@@ -2267,6 +2470,10 @@ function createReasons({
   const loserPitcherStats = probHome >= 50 ? awayPitcherStats : homePitcherStats;
   const winnerStarter = probHome >= 50 ? homeStarter : awayStarter;
   const loserStarter = probHome >= 50 ? awayStarter : homeStarter;
+  const winnerRecent = probHome >= 50 ? homePitcherRecent : awayPitcherRecent;
+  const loserRecent = probHome >= 50 ? awayPitcherRecent : homePitcherRecent;
+  const winnerRolling = probHome >= 50 ? homeRolling : awayRolling;
+  const loserRolling = probHome >= 50 ? awayRolling : homeRolling;
 
   const reasons = [];
   const winnerRpg = rpg(winnerProfile?.hitting);
@@ -2297,6 +2504,7 @@ function createReasons({
   const bullpenEdge = toNumber(modelBreakdown?.bullpenEdge, 0);
   const recordContextEdge = toNumber(modelBreakdown?.recordContextEdge, 0);
   const matchupEdge = toNumber(modelBreakdown?.matchupEdge, 0);
+  const starterRecentEdgeValue = toNumber(modelBreakdown?.starterRecentEdge, 0);
   const winnerLineup = probHome >= 50 ? homeLineup : awayLineup;
   const loserLineup = probHome >= 50 ? awayLineup : homeLineup;
 
@@ -2308,8 +2516,39 @@ function createReasons({
       winnerSpKbb >= loserSpKbb + 0.5)
   ) {
     reasons.push(
-      `SP edge: ${winnerStarter?.fullName || winner.name} ERA ${safeFixed(winnerSpEra)}, WHIP ${safeFixed(winnerSpWhip)} vs ${loserStarter?.fullName || loser.name} ERA ${safeFixed(loserSpEra)}, WHIP ${safeFixed(loserSpWhip)}.`
+      `SP season: ${winnerStarter?.fullName || winner.name} ERA ${safeFixed(winnerSpEra)}, WHIP ${safeFixed(winnerSpWhip)} vs ${loserStarter?.fullName || loser.name} ERA ${safeFixed(loserSpEra)}, WHIP ${safeFixed(loserSpWhip)}.`
     );
+  }
+
+  if (
+    winnerRecent?.games >= 2 &&
+    loserRecent?.games >= 2 &&
+    (
+      Math.abs(starterRecentEdgeValue) >= 0.08 ||
+      toNumber(winnerRecent.era, 99) <= toNumber(loserRecent.era, 99) - 0.6 ||
+      toNumber(winnerRecent.whip, 99) <= toNumber(loserRecent.whip, 99) - 0.15
+    )
+  ) {
+    reasons.push(
+      `SP recent (last ${winnerRecent.games}/${loserRecent.games}): ${winnerStarter?.fullName || winner.name} ERA ${safeFixed(winnerRecent.era)}, WHIP ${safeFixed(winnerRecent.whip)} vs ${loserStarter?.fullName || loser.name} ERA ${safeFixed(loserRecent.era)}, WHIP ${safeFixed(loserRecent.whip)}.`
+    );
+  }
+
+  if (
+    winnerRolling?.hitting &&
+    loserRolling?.hitting &&
+    toNumber(winnerRolling.games, 0) >= 8 &&
+    toNumber(loserRolling.games, 0) >= 8
+  ) {
+    const wRpg = rpg(winnerRolling.hitting);
+    const lRpg = rpg(loserRolling.hitting);
+    const wOps = statOps(winnerRolling.hitting);
+    const lOps = statOps(loserRolling.hitting);
+    if (wRpg >= lRpg + 0.35 || wOps >= lOps + 0.04) {
+      reasons.push(
+        `L21 form: ${winner.name} ${safeFixed(wRpg, 2)} R/G, OPS ${safeFixed(wOps, 3)} (n=${winnerRolling.games}) vs ${loser.name} ${safeFixed(lRpg, 2)} R/G, OPS ${safeFixed(lOps, 3)} (n=${loserRolling.games}).`
+      );
+    }
   }
 
   if (
@@ -2682,12 +2921,15 @@ function predictGame(
   firstInningProfiles,
   injuryProfiles,
   lineupProfiles,
-  modelMemory
+  modelMemory,
+  rollingTeamStats = new Map()
 ) {
   const awayTeam = game.teams.away.team;
   const homeTeam = game.teams.home.team;
   const awayProfile = teamStats.get(awayTeam.id) || {};
   const homeProfile = teamStats.get(homeTeam.id) || {};
+  const awayRolling = rollingTeamStats.get(awayTeam.id) || null;
+  const homeRolling = rollingTeamStats.get(homeTeam.id) || null;
   const awayStanding = standings.get(awayTeam.id) || null;
   const homeStanding = standings.get(homeTeam.id) || null;
   const awayStarter = game.teams.away.probablePitcher
@@ -2765,18 +3007,21 @@ function predictGame(
   const matchupMemory = buildMatchupMemoryContext(modelMemory, awayTeam, homeTeam);
 
   const winPctEdge = homeWinPct - awayWinPct;
-  const offenseEdge =
-    (homeRpg - awayRpg) / 2.2 +
-    (homeOps - awayOps) / 0.14 +
-    (homeIso - awayIso) / 0.1 +
-    (awayBatK - homeBatK) / 0.16 +
-    (homeBatBb - awayBatBb) / 0.12;
-  const preventionEdge =
-    (awayEra - homeEra) / 1.8 +
-    (awayWhip - homeWhip) / 0.55 +
-    (homeKMinusBb - awayKMinusBb) / 0.16 +
-    (awayHr9 - homeHr9) / 1.2;
-  const spEdge = starterEdge(effectiveHomePitcherStats, effectiveAwayPitcherStats);
+  const offenseBlend = blendedTeamOffenseEdge(homeProfile, awayProfile, homeRolling, awayRolling);
+  const preventionBlend = blendedTeamPreventionEdge(homeProfile, awayProfile, homeRolling, awayRolling);
+  const offenseEdge = offenseBlend.edge;
+  const preventionEdge = preventionBlend.edge;
+  const spSeasonEdge = starterSeasonEdge(effectiveHomePitcherStats, effectiveAwayPitcherStats);
+  const spRecentEdgeRaw = starterRecentEdge(
+    homeOpenerSituation.isOpener ? null : homePitcherRecent,
+    awayOpenerSituation.isOpener ? null : awayPitcherRecent
+  );
+  const spEdge = starterEdge(
+    effectiveHomePitcherStats,
+    effectiveAwayPitcherStats,
+    homeOpenerSituation.isOpener ? null : homePitcherRecent,
+    awayOpenerSituation.isOpener ? null : awayPitcherRecent
+  );
   const formEdge =
     (homeLastTenPct - awayLastTenPct) * 0.45 +
     (homeVenuePct - awayVenuePct) * 0.3 +
@@ -2784,7 +3029,9 @@ function predictGame(
   const pythagoreanEdge = homePythagoreanPct - awayPythagoreanPct;
   const log5Edge = homeReferenceBlend - 0.5;
   const h2hEdge = headToHead?.games > 0 ? (headToHead.homeProbability - 50) / 50 : 0;
-  const memoryEdge = (homeMemoryBias - awayMemoryBias) * 0.12 + matchupMemory.edge * 0.25;
+  // Memory is calibration context, not a primary predictive feature. Cap its
+  // influence harder so repeated matchup notes cannot pin accuracy near 50/50.
+  const memoryEdge = (homeMemoryBias - awayMemoryBias) * 0.06 + matchupMemory.edge * 0.12;
   const fatigueEdge = scheduleFatigueEdge(
     homeScheduleFatigue,
     awayScheduleFatigue,
@@ -2824,12 +3071,14 @@ function predictGame(
   const openerDetected = homeOpenerSituation.isOpener || awayOpenerSituation.isOpener;
   const sitWeights = situationalWeightAdjustment(venueId, openerDetected, gameDateYmd);
 
-  const offenseComponent = clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.3 * offenseWeightMultiplier * sitWeights.offense;
-  const preventionComponent = clamp(preventionEdge, -1.35, 1.35) * 0.24;
-  const starterComponent = clamp(spEdge, -1.35, 1.35) * 0.38 * starterWeightMultiplier * sitWeights.starting_pitcher;
-  const bullpenComponent = bullpenEdge * 0.9 * bullpenWeightMultiplier * sitWeights.bullpen;
-  const formComponent = clamp(formEdge, -0.3, 0.3) * 0.28 * recentFormWeightMultiplier * sitWeights.recent_form;
-  const homeFieldComponent = 0.12 * homeAdvantageWeightMultiplier * sitWeights.home_advantage;
+  const offenseComponent = clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.32 * offenseWeightMultiplier * sitWeights.offense;
+  const preventionComponent = clamp(preventionEdge, -1.35, 1.35) * 0.26;
+  const starterComponent = clamp(spEdge, -1.35, 1.35) * 0.42 * starterWeightMultiplier * sitWeights.starting_pitcher;
+  // Bullpen-availability mentions historically graded 42.1% — keep the signal
+  // for late-game context but cut its moneyline weight hard.
+  const bullpenComponent = bullpenEdge * 0.35 * bullpenWeightMultiplier * sitWeights.bullpen;
+  const formComponent = clamp(formEdge, -0.3, 0.3) * 0.32 * recentFormWeightMultiplier * sitWeights.recent_form;
+  const homeFieldComponent = 0.1 * homeAdvantageWeightMultiplier * sitWeights.home_advantage;
 
   // Weather edge: conditions that favor scoring (warm, wind out) slightly
   // increase variance which reduces the better team's edge. Conditions that
@@ -2914,6 +3163,8 @@ function predictGame(
     offenseEdge: offenseComponent,
     preventionEdge: preventionComponent,
     starterEdge: starterComponent,
+    starterSeasonEdge: spSeasonEdge,
+    starterRecentEdge: spRecentEdgeRaw,
     lineupEdge: lineupEdge * (bothConfirmed ? 0.95 : 0.85),
     confirmationEdge,
     bullpenEdge: bullpenComponent,
@@ -2927,6 +3178,10 @@ function predictGame(
     platoonEdge,
     homeFieldEdge: homeFieldComponent,
     weatherEdge: weatherComponent,
+    rollingOffenseWeight: offenseBlend.rollingWeight,
+    rollingPreventionWeight: preventionBlend.rollingWeight,
+    rollingOffenseEdge: offenseBlend.rollingEdge,
+    rollingPreventionEdge: preventionBlend.rollingEdge,
     recordDominated,
     rawHomeProbability,
     rawAwayProbability,
@@ -2984,6 +3239,10 @@ function predictGame(
     awayPitcherStats: effectiveAwayPitcherStats,
     homeStarter,
     awayStarter,
+    homePitcherRecent,
+    awayPitcherRecent,
+    homeRolling,
+    awayRolling,
     probHome: homeProbability,
     homeLineup,
     awayLineup,
@@ -3038,6 +3297,7 @@ function predictGame(
     advancedLine: `${advancedContext(away, awayProfile)} | ${advancedContext(home, homeProfile)}`,
     matchupSplitLine: `${matchupSplitLine(away, awayStanding, homeStarter, 'away')} | ${matchupSplitLine(home, homeStanding, awayStarter, 'home')}`,
     pitcherRecentLine: `${away.abbreviation || away.name} SP ${awayPitcherRecentLine} | ${home.abbreviation || home.name} SP ${homePitcherRecentLine}`,
+    rollingFormLine: `${rollingFormLine(away, awayRolling)} | ${rollingFormLine(home, homeRolling)}`,
     bullpenLine: `${away.abbreviation || away.name} bullpen ${awayBullpen.line} | ${home.abbreviation || home.name} bullpen ${homeBullpen.line}`,
     fatigueLines: fatigueFlagLines(away, home, awayScheduleFatigue, homeScheduleFatigue, awayPitcherRest, homePitcherRest),
     injuryLine: `${injuryCountLabel(away, awayInjuries)} | ${injuryCountLabel(home, homeInjuries)}`,
@@ -3054,12 +3314,23 @@ function predictGame(
       away: awayInjuries,
       home: homeInjuries
     },
+    rollingForm: {
+      away: awayRolling,
+      home: homeRolling,
+      windowDays: ROLLING_FORM_DAYS
+    },
     modelReferenceLine: modelReferenceLines.join(' | '),
     modelReferenceLines,
     modelBreakdownLine: [
       edgeComponentText('matchup', modelBreakdown.matchupEdge, away, home),
       edgeComponentText('record/H2H', modelBreakdown.recordContextEdge, away, home),
       edgeComponentText('SP', modelBreakdown.starterEdge, away, home),
+      Math.abs(spRecentEdgeRaw) >= 0.04
+        ? edgeComponentText('SP recent', spRecentEdgeRaw * 0.42 * starterWeightMultiplier, away, home)
+        : null,
+      offenseBlend.rollingWeight >= 0.15
+        ? edgeComponentText('L21 form', offenseBlend.rollingEdge * 0.32, away, home)
+        : null,
       edgeComponentText('lineup', modelBreakdown.lineupEdge, away, home),
       edgeComponentText('bullpen', modelBreakdown.bullpenEdge, away, home),
       bothConfirmed && Math.abs(confirmationEdge) >= 0.005
@@ -3112,7 +3383,16 @@ export const __mlbTestInternals = {
   buildFirstInningProjection,
   firstInningHistoryEndDate,
   firstInningRunsChargedToPitcher,
-  pitcherFirstInningRisk
+  pitcherFirstInningRisk,
+  starterEdge,
+  starterRecentEdge,
+  starterSeasonEdge,
+  blendedTeamOffenseEdge,
+  blendedTeamPreventionEdge,
+  rollingFormWindow,
+  getRollingTeamStatMap,
+  MARKET_BLEND_WEIGHT,
+  ROLLING_FORM_DAYS
 };
 
 export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta'), modelMemory = {}) {
@@ -3131,8 +3411,9 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
     console.warn(`getMlbPredictions: ${label} fetch failed, using empty data:`, error.message);
     return new Map();
   };
-  const [teamStats, standings, firstInningProfiles, bullpenProfiles, scheduleFatigueProfiles, injuryProfiles] = await Promise.all([
+  const [teamStats, rollingTeamStats, standings, firstInningProfiles, bullpenProfiles, scheduleFatigueProfiles, injuryProfiles] = await Promise.all([
     fetchTeamStats(season).catch(warnFetch('teamStats')),
+    fetchRollingTeamStats(season, dateYmd).catch(warnFetch('rollingTeamStats')),
     fetchStandings(season, dateYmd).catch(warnFetch('standings')),
     fetchFirstInningProfiles(season, dateYmd).catch(warnFetch('firstInningProfiles')),
     fetchBullpenProfiles(teamIds, dateYmd).catch(warnFetch('bullpenProfiles')),
@@ -3222,7 +3503,8 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       firstInningProfiles,
       injuryProfiles,
       lineupProfiles.get(game.gamePk),
-      modelMemory
+      modelMemory,
+      rollingTeamStats
     )
   );
 }
@@ -3375,6 +3657,9 @@ export function formatPredictions(
           : []),
         uiSection('📈', 'SP Recent'),
         ...pitcherRecentLines,
+        item.rollingFormLine ? '' : null,
+        item.rollingFormLine ? uiSection('📉', 'Rolling L21') : null,
+        ...(item.rollingFormLine ? splitInfoLine(item.rollingFormLine) : []),
         includeAdvanced ? '' : null,
         includeAdvanced ? uiSection('🔎', 'Advanced') : null,
         ...(includeAdvanced ? advancedLines : []),

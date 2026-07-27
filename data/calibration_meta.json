@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "source": "SQLite bet_ledger",
+  "source": "CSV prediction_outcomes",
   "calibrated_markets": [
     "moneyline",
     "yrfi"
@@ -8,15 +8,15 @@
   "markets": {
     "moneyline": {
       "status": "success",
-      "samples": 38,
-      "bins": 4,
+      "samples": 1105,
+      "bins": 8,
       "map_points": 4,
-      "low_confidence_bins": true
+      "low_confidence_bins": false
     },
     "yrfi": {
       "status": "success",
-      "samples": 409,
-      "bins": 3,
+      "samples": 192,
+      "bins": 5,
       "map_points": 3,
       "low_confidence_bins": false
     }
