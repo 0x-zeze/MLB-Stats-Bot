@@ -17,6 +17,7 @@ Honest log of correctness/evaluation work. No fabricated performance gains.
 | `da50a8f` | market: same-book fair de-vig + season-to-date stats |
 | `c49614c` | docs: remaining-risk mitigations |
 | `325274e` | prediction: snapshot serialize + replay projection |
+| `d269c6d` | prediction: live snapshot capture + calibration artifact binding + quarantine report |
 
 ### Correctness
 
@@ -31,6 +32,12 @@ Honest log of correctness/evaluation work. No fabricated performance gains.
 - Walk-forward: half-open disjoint folds, stake-weighted ROI, visible predictor errors.
 - LLM probability/bet overrides rejected; compactPrediction keeps model pick.
 - Live dashboard failures return `status=unavailable` (no mock BET synthesis).
+
+### Verification
+
+- `npm test`: pass — JS 144 pass / 0 fail / 5 skipped; Python 552 pass.
+- `npm run dashboard:build`: pass (Vite production build).
+- Negative-overround fixture now correctly uses raw executable implied probability rather than synthetic de-vig.
 
 ### Explicit non-claims
 

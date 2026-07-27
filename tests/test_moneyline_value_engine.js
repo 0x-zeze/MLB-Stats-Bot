@@ -63,13 +63,15 @@ test('low-conviction underdog is downgraded to a lean, not a graded VALUE bet', 
 
   applyMoneylineValueMarket(game);
 
-  // The value OPTION computation is unchanged — the underdog is still the best
-  // priced side, with the same edge and quarter-Kelly size.
+  // +160 / -150 has negative overround, so it is not a coherent same-book
+  // market for fair de-vig. Use the executable side's raw implied probability
+  // instead of normalizing a synthetic/arbitrage pair.
   assert.equal(game.valuePick.teamName, 'Away Underdogs');
   assert.equal(game.valuePick.modelProbability, 45);
   assert.equal(game.valuePick.impliedProbability, 38.5);
-  assert.equal(game.valuePick.fairProbability, 39.1);
-  assert.equal(game.valuePick.edge, 5.9);
+  assert.equal(game.valuePick.fairProbability, 38.5);
+  assert.equal(game.valuePick.fairSource, 'raw_implied_executable');
+  assert.equal(game.valuePick.edge, 6.5);
   assert.equal(game.valuePick.kellyStakePercent, 2.7);
   // ...but it is NOT graded as a bet: 45% conviction is below the 52% floor,
   // and the away underdog +160 exceeds the +115 limit.
