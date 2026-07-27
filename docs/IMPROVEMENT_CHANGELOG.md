@@ -18,6 +18,7 @@ Honest log of correctness/evaluation work. No fabricated performance gains.
 | `c49614c` | docs: remaining-risk mitigations |
 | `325274e` | prediction: snapshot serialize + replay projection |
 | `d269c6d` | prediction: live snapshot capture + calibration artifact binding + quarantine report |
+| `d436766` | evaluation: dashboard financial provenance + reproducible artifacts |
 
 ### Correctness
 

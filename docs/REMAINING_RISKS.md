@@ -26,7 +26,7 @@ Updated 2026-07-27 after Phases 0–2 and partial evaluation fixes.
 
 | Risk | Status |
 |------|--------|
-| Dashboard mock/live fallback | Open |
+| Dashboard mock/live fallback | Live failures now explicit unavailable; explicit mock/sample remains available |
 | Manual `npm run check` file list | Open |
 | MODEL_CARD performance TODOs | Open |
 
