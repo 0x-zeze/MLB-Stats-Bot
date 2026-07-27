@@ -628,44 +628,77 @@ def _telegram_learning_by_game(state: dict[str, Any]) -> dict[str, dict[str, Any
     return {str(item.get("gamePk")): item for item in logs if item.get("gamePk") is not None}
 
 
-def _telegram_history_row(prediction: dict[str, Any], outcome: dict[str, Any] | None = None) -> dict[str, Any]:
+def _telegram_history_row(
+    prediction: dict[str, Any],
+    outcome: dict[str, Any] | None = None,
+    ledger_row: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Convert a Telegram prediction without inventing financial facts.
+
+    Win/Loss describes model-pick correctness. BET, stake, P/L, edge, odds and
+    CLV are populated only when an authoritative ledger row exists.
+    """
     pick = prediction.get("pick") or {}
     away = prediction.get("away") or {}
     home = prediction.get("home") or {}
     correct = outcome.get("correct") if outcome else None
-    result = "Pending" if correct is None else "Win" if correct else "Loss"
-    profit_loss = 0.0 if correct is None else 1.0 if correct else -1.0
+    model_result = "Pending" if correct is None else "Win" if correct else "Loss"
     prediction_name = pick.get("name") or pick.get("abbreviation") or "-"
     probability = safe_float(pick.get("winProbability"), 0.0)
+
+    has_ledger = ledger_row is not None
+    ledger_status = str((ledger_row or {}).get("status") or "").lower()
+    ledger_result = str((ledger_row or {}).get("result") or "").title()
+    decision = "BET" if has_ledger else "PREDICTION"
+    if not has_ledger and str((prediction.get("betDecision") or {}).get("status") or "").upper() == "NO BET":
+        decision = "NO BET"
+
     return {
         "date": prediction.get("dateYmd"),
+        "game_pk": prediction.get("gamePk"),
         "matchup": prediction.get("matchup") or f"{away.get('name')} @ {home.get('name')}",
-        "market_type": "moneyline",
+        "market_type": str((ledger_row or {}).get("market") or "moneyline"),
         "prediction": prediction_name,
-        "decision": "BET",
+        "decision": decision,
         "confidence": str(pick.get("confidence") or "model").title(),
         "model_probability": probability,
         "market_implied_probability": None,
-        "edge": 0.0,
+        "edge": (ledger_row or {}).get("edge"),
+        "odds": (ledger_row or {}).get("odds"),
+        "units_staked": (ledger_row or {}).get("units_staked"),
         "projected_total": None,
-        "market_total": None,
+        "market_total": (ledger_row or {}).get("line"),
         "closing_line": None,
         "actual_result": outcome.get("score") if outcome else "",
-        "result": result,
-        "profit_loss": profit_loss,
-        "clv": 0.0,
+        "result": ledger_result if ledger_status == "settled" and ledger_result else model_result,
+        "model_result": model_result,
+        "profit_loss": (ledger_row or {}).get("units_pl"),
+        "clv": (ledger_row or {}).get("clv"),
         "notes": outcome.get("note", "") if outcome else prediction.get("agentRisk", ""),
-        "source": "telegram",
+        "source": "telegram+ledger" if has_ledger else "telegram_prediction_only",
+        "financial_status": ledger_status or "unavailable",
     }
 
 
 def get_telegram_prediction_history() -> list[dict[str, Any]]:
-    """Return rows from the Telegram bot's persisted state.json."""
+    """Return Telegram prediction rows joined to authoritative ledger by game."""
     state = load_telegram_state()
     predictions = state.get("predictions") or {}
     outcomes = _telegram_learning_by_game(state)
+    ledger = get_bet_ledger()
+    ledger_rows = list(ledger.get("open") or []) + list(ledger.get("settled") or [])
+    moneyline_by_game = {
+        str(row.get("game_pk")): row
+        for row in ledger_rows
+        if str(row.get("market") or "moneyline").lower() == "moneyline"
+        and row.get("game_pk") is not None
+    }
     rows = [
-        _telegram_history_row(prediction, outcomes.get(str(game_pk)))
+        _telegram_history_row(
+            prediction,
+            outcomes.get(str(game_pk)),
+            moneyline_by_game.get(str(game_pk)),
+        )
         for game_pk, prediction in predictions.items()
     ]
     rows.sort(key=lambda row: (str(row.get("date") or ""), str(row.get("matchup") or "")), reverse=True)
@@ -813,7 +846,6 @@ def get_telegram_model_performance() -> dict[str, Any] | None:
             for label, value in by_confidence.items()
         ]
 
-    fallback_roi = round(((correct - wrong) / total) * 100.0, 1) if total else 0.0
     ledger = get_bet_ledger()
     settled_ledger = _settled_ledger_rows(ledger.get("settled") or [])
     ledger_metrics = _ledger_financial_metrics(settled_ledger) if settled_ledger else None
@@ -825,27 +857,27 @@ def get_telegram_model_performance() -> dict[str, Any] | None:
     return {
         "overall": {
             "total_predictions": int(total),
-            "bets_taken": int(total),
+            "bets_taken": len(settled_ledger),
             "wins": int(correct),
             "losses": int(wrong),
             "win_rate": win_rate,
             "win_rate_3d": rolling_3d.get("win_rate") if rolling_3d else None,
             "win_rate_3d_sample": f"{rolling_3d['wins']}/{rolling_3d['total']}" if rolling_3d else None,
-            "roi": ledger_metrics["roi"] if ledger_metrics else fallback_roi,
-            "average_edge": ledger_metrics["average_edge"] if ledger_metrics else 0.0,
-            "average_clv": ledger_metrics["average_clv"] if ledger_metrics else 0.0,
-            "brier_score": ledger_metrics["brier_score"] if ledger_metrics else 0.0,
-            "log_loss": ledger_metrics["log_loss"] if ledger_metrics else 0.0,
-            "clv_hit_rate": ledger_metrics["clv_hit_rate"] if ledger_metrics else 0.0,
-            "source": "telegram",
+            "roi": ledger_metrics["roi"] if ledger_metrics else None,
+            "average_edge": ledger_metrics["average_edge"] if ledger_metrics else None,
+            "average_clv": ledger_metrics["average_clv"] if ledger_metrics else None,
+            "brier_score": ledger_metrics["brier_score"] if ledger_metrics else None,
+            "log_loss": ledger_metrics["log_loss"] if ledger_metrics else None,
+            "clv_hit_rate": ledger_metrics["clv_hit_rate"] if ledger_metrics else None,
+            "source": "telegram+ledger" if ledger_metrics else "telegram_prediction_only",
         },
         "by_market": [
-            {"market": "moneyline", "bets": int(total), "win_rate": win_rate, "roi": moneyline_metrics["roi"] if moneyline_metrics else fallback_roi},
+            {"market": "moneyline", "bets": len(moneyline_rows), "win_rate": win_rate, "roi": moneyline_metrics["roi"] if moneyline_metrics else None},
             {
                 "market": "first inning",
-                "bets": int(safe_float(first_inning.get("totalPicks"), 0.0)),
+                "bets": len(first_inning_rows),
                 "win_rate": _accuracy(first_inning.get("correctPicks", 0), first_inning.get("totalPicks", 0)),
-                "roi": first_inning_metrics["roi"] if first_inning_metrics else 0.0,
+                "roi": first_inning_metrics["roi"] if first_inning_metrics else None,
             },
         ],
         "by_total_range": [],

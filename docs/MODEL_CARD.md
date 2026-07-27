@@ -54,31 +54,63 @@ Every betting-facing output should separate:
 
 ## Calibration Method
 
-TODO: Document the exact calibration method used for the reported period, including whether probabilities were raw, capped, isotonic/logistic calibrated, or adjusted by evolution rules.
+The live JavaScript path applies the market-specific artifact loaded from
+`data/calibration_maps.json` and `data/calibration_meta.json`. New live
+prediction snapshots persist:
+
+- `calibration_version`
+- calibration artifact hash
+- artifact mode (`map`, `map_low_sample_shrink`, `shrink_toward_50`, or explicit `identity`)
+- sample count and warning state
+
+Calibration is intended to be fit chronologically out-of-fold. Automatic
+post-settlement retraining is **proposal-only** and cannot promote an artifact.
+The current maps are sparse (moneyline 4 points, YRFI 3 points), so they are
+not evidence of robust OOS calibration by themselves.
 
 ## Backtest Report
 
-- Backtest period: TODO.
-- Markets included: TODO.
-- Sample size: TODO.
-- Bets taken: TODO.
-- No-bet count: TODO.
-- Brier score: TODO.
-- Log loss: TODO.
-- ROI: TODO.
-- CLV: TODO.
-- CLV hit rate: TODO.
-- Out-of-sample validation: TODO.
-- Data exclusions: TODO.
+The canonical report command is:
+
+```bash
+npm run evaluate:artifacts
+```
+
+The current report is intentionally labelled `unaudited` or `partial` until
+full production snapshot replay and provenance gates pass. Current artifacts:
+
+- `reports/latest_metrics.json`
+- `reports/latest_evaluation.md`
+- `reports/quarantine_inventory.json`
+
+No performance numbers are filled here as validated model performance. The
+legacy SQLite ledger contains descriptive settled rows but historical rows may
+lack original prediction timestamp, quote/book identity, and exact probability
+stage.
+
+Required report fields once the production replay gate passes:
+
+- Period and population label.
+- Market and sample size.
+- Brier, log loss, ECE/MCE.
+- Stake-weighted ROI, drawdown, profit factor, losing streak.
+- CLV with coverage and quote timing.
+- Baselines and chronological walk-forward/untouched test period.
+- Data exclusions, quarantine counts, and artifact/version hashes.
 
 ## Segment Checks
 
-- Moneyline by confidence bucket: TODO.
-- Totals by market total range: TODO.
-- Picks by data quality bucket: TODO.
-- Performance with stale/missing odds removed: TODO.
-- Performance with projected lineups removed: TODO.
-- Performance by month or season phase: TODO.
+Segment reports are blocked until the same immutable snapshot population is
+used for every segment. Planned segments:
+
+- Moneyline by confidence bucket and edge bucket.
+- Totals by market total range.
+- Data quality / lineup confirmation.
+- Stale or missing odds exclusions.
+- Projected vs confirmed lineups.
+- Month or season phase.
+
+Missing segment data must be reported as unavailable, never as zero performance.
 
 ## Risk And Staking Policy
 

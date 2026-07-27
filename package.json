@@ -20,6 +20,8 @@
     "migrate:storage": "node scripts/migrate_state_to_sqlite.js",
     "export:live": "node scripts/run_python.js scripts/export_sqlite_to_csv.py",
     "replay:calibration": "node scripts/run_python.js scripts/replay_calibration.py",
+    "evaluate:artifacts": "node scripts/run_python.js scripts/build_evaluation_artifacts.py",
+    "quarantine:report": "node scripts/report_quarantine.js --json --out reports/quarantine_inventory.json",
     "doctor": "node scripts/doctor.mjs",
     "once": "node src/index.js --once",
     "test": "npm run check && npm run test:js && npm run test:py",

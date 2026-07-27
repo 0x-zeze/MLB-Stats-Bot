@@ -118,10 +118,13 @@ class DashboardServiceTests(unittest.TestCase):
             dashboard_service._SQLITE_PATH = original_sqlite
             state_path.unlink(missing_ok=True)
 
-        self.assertEqual("telegram", history[0]["source"])
+        self.assertEqual("telegram_prediction_only", history[0]["source"])
         self.assertEqual("Home", history[0]["prediction"])
-        self.assertEqual("Win", history[0]["result"])
-        self.assertEqual(1.0, history[0]["profit_loss"])
+        self.assertEqual("Win", history[0]["model_result"])
+        self.assertEqual("PREDICTION", history[0]["decision"])
+        self.assertIsNone(history[0]["profit_loss"])
+        self.assertIsNone(history[0]["edge"])
+        self.assertIsNone(history[0]["clv"])
 
     def test_performance_prefers_telegram_memory(self):
         original_path = dashboard_service._TELEGRAM_STATE_PATH
@@ -152,10 +155,12 @@ class DashboardServiceTests(unittest.TestCase):
             dashboard_service._SQLITE_PATH = original_sqlite
             state_path.unlink(missing_ok=True)
 
-        self.assertEqual("telegram", performance["overall"]["source"])
-        self.assertEqual(4, performance["overall"]["bets_taken"])
+        self.assertEqual("telegram_prediction_only", performance["overall"]["source"])
+        self.assertEqual(0, performance["overall"]["bets_taken"])
         self.assertEqual(75.0, performance["overall"]["win_rate"])
-        self.assertEqual(50.0, performance["overall"]["roi"])
+        self.assertIsNone(performance["overall"]["roi"])
+        self.assertIsNone(performance["overall"]["average_edge"])
+        self.assertIsNone(performance["overall"]["average_clv"])
 
     def test_telegram_performance_uses_ledger_financial_metrics(self):
         state = {
