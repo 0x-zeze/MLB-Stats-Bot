@@ -11,6 +11,8 @@ Honest log of correctness/evaluation work. No fabricated performance gains.
 | `292d46d` | audit: technical inventory + unaudited baseline |
 | `f43bc68` | ledger: immutable decisions, atomic settlement, stake-weighted ROI |
 | `acf093f` | temporal: invalid-future freshness + as-of pitcher starts |
+| `857ac5f` | evaluation: half-open walk-forward, proposal-only calibration, docs |
+| `869f6af` | governance: LLM explanation-only + dashboard unavailable |
 
 ### Correctness
 
@@ -23,6 +25,8 @@ Honest log of correctness/evaluation work. No fabricated performance gains.
 - Temporal contract: `invalid_future`; odds age not 0 for future stamps; pitcher recent starts filtered by as_of date; in-play tier reject.
 - Calibration auto-retrain → proposal/outbox only (no promote).
 - Walk-forward: half-open disjoint folds, stake-weighted ROI, visible predictor errors.
+- LLM probability/bet overrides rejected; compactPrediction keeps model pick.
+- Live dashboard failures return `status=unavailable` (no mock BET synthesis).
 
 ### Explicit non-claims
 
