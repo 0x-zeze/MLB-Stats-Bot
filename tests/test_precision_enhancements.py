@@ -305,6 +305,9 @@ class TestWalkForwardBacktest(unittest.TestCase):
         folds = generate_walk_forward_dates("2024-04-01", "2024-10-01", step_days=30)
         self.assertGreater(len(folds), 0)
         self.assertEqual(folds[0][0], "2024-04-01")
+        # Half-open test windows must be disjoint: each test_start >= previous test_end
+        for i in range(1, len(folds)):
+            self.assertGreaterEqual(folds[i][2], folds[i - 1][3])
 
     def test_run_walk_forward_empty(self):
         result = run_walk_forward([], lambda train, test: [])
@@ -314,6 +317,21 @@ class TestWalkForwardBacktest(unittest.TestCase):
         result = WalkForwardResult()
         summary = walk_forward_summary(result)
         self.assertEqual(summary["folds"], 0)
+        self.assertIsNone(summary["overall_accuracy"])
+        self.assertIsNone(summary["overall_roi"])
+
+    def test_walk_forward_predictor_error_visible(self):
+        games = [{"date": f"2024-0{m}-01"} for m in range(4, 10)]
+        games += [{"date": f"2024-0{m}-15"} for m in range(4, 10)]
+
+        def boom(train, test):
+            raise RuntimeError("predict failed")
+
+        result = run_walk_forward(games, boom, step_days=30, min_train_games=1)
+        self.assertGreater(len(result.folds), 0)
+        self.assertTrue(
+            any(p.get("error") for f in result.folds for p in f.predictions)
+        )
 
 
 class TestParlayCorrelation(unittest.TestCase):

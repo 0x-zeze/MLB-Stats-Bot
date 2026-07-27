@@ -37,24 +37,29 @@ class WalkForwardFold:
     predictions: list[dict[str, Any]] = field(default_factory=list)
 
     @property
-    def accuracy(self) -> float:
+    def accuracy(self) -> float | None:
         correct = sum(1 for p in self.predictions if p.get("correct"))
         total = len([p for p in self.predictions if p.get("result") in ("win", "loss")])
-        return correct / total if total > 0 else 0.0
+        return correct / total if total > 0 else None
 
     @property
-    def roi(self) -> float:
+    def roi(self) -> float | None:
+        """Stake-weighted ROI: sum(profit) / sum(stake). None if no settled bets."""
         settled = [p for p in self.predictions if p.get("result") in ("win", "loss")]
         if not settled:
-            return 0.0
+            return None
         profit = sum(safe_float(p.get("profit_loss", 0), 0) for p in settled)
+        stakes = [safe_float(p.get("units_staked"), float("nan")) for p in settled]
+        total_stake = sum(s for s in stakes if s == s and s > 0)
+        if total_stake > 0:
+            return profit / total_stake
         return profit / len(settled)
 
     @property
-    def avg_brier(self) -> float:
+    def avg_brier(self) -> float | None:
         scored = [p for p in self.predictions if p.get("brier") is not None]
         if not scored:
-            return 0.0
+            return None
         return sum(safe_float(p.get("brier"), 0) for p in scored) / len(scored)
 
 
@@ -69,24 +74,28 @@ class WalkForwardResult:
         return sum(len(f.predictions) for f in self.folds)
 
     @property
-    def overall_accuracy(self) -> float:
+    def overall_accuracy(self) -> float | None:
         correct = sum(1 for f in self.folds for p in f.predictions if p.get("correct"))
         total = len([p for f in self.folds for p in f.predictions if p.get("result") in ("win", "loss")])
-        return correct / total if total > 0 else 0.0
+        return correct / total if total > 0 else None
 
     @property
-    def overall_roi(self) -> float:
+    def overall_roi(self) -> float | None:
         settled = [p for f in self.folds for p in f.predictions if p.get("result") in ("win", "loss")]
         if not settled:
-            return 0.0
+            return None
         profit = sum(safe_float(p.get("profit_loss", 0), 0) for p in settled)
+        stakes = [safe_float(p.get("units_staked"), float("nan")) for p in settled]
+        total_stake = sum(s for s in stakes if s == s and s > 0)
+        if total_stake > 0:
+            return profit / total_stake
         return profit / len(settled)
 
     @property
-    def overall_brier(self) -> float:
+    def overall_brier(self) -> float | None:
         scored = [p for f in self.folds for p in f.predictions if p.get("brier") is not None]
         if not scored:
-            return 0.0
+            return None
         return sum(safe_float(p.get("brier"), 0) for p in scored) / len(scored)
 
     @property
@@ -105,11 +114,12 @@ def generate_walk_forward_dates(
 ) -> list[tuple[str, str, str, str]]:
     """Generate (train_start, train_end, test_start, test_end) tuples.
 
-    Each fold's training window extends from the original start to just
-    before the test window. This is an expanding window, not a rolling one,
-    so earlier data is never discarded.
+    Intervals are half-open on the test window: test is [test_start, test_end)
+    so consecutive folds never share a test day. train_end is the last day
+    included in training (day before test_start). Expanding window: train always
+    starts at original start_date.
     """
-    from datetime import date, datetime, timedelta
+    from datetime import datetime, timedelta
 
     start = datetime.fromisoformat(start_date[:10]).date()
     end = datetime.fromisoformat(end_date[:10]).date()
@@ -118,14 +128,26 @@ def generate_walk_forward_dates(
     current = start + timedelta(days=step_days)
 
     while current < end:
-        test_end = min(current + timedelta(days=step_days), end)
+        # test_end is exclusive upper bound
+        test_end = min(current + timedelta(days=step_days), end + timedelta(days=1))
+        if current >= test_end:
+            break
         folds.append((
             start.isoformat(),
             (current - timedelta(days=1)).isoformat(),
             current.isoformat(),
-            test_end.isoformat(),
+            test_end.isoformat(),  # exclusive
         ))
         current = test_end
+
+    # Disjointness: no overlapping test ranges (half-open).
+    for i in range(1, len(folds)):
+        prev_end = folds[i - 1][3]
+        this_start = folds[i][2]
+        if this_start < prev_end:
+            raise AssertionError(
+                f"Overlapping walk-forward folds: prev test_end={prev_end} this test_start={this_start}"
+            )
 
     return folds
 
@@ -159,13 +181,14 @@ def run_walk_forward(
     result = WalkForwardResult()
 
     for train_start, train_end, test_start, test_end in folds:
+        # train inclusive through train_end; test half-open [test_start, test_end)
         train_games = [
             g for g in games
             if train_start <= str(g.get("date", "")) <= train_end
         ]
         test_games = [
             g for g in games
-            if test_start <= str(g.get("date", "")) <= test_end
+            if test_start <= str(g.get("date", "")) < test_end
         ]
 
         if len(train_games) < min_train_games or not test_games:
@@ -173,8 +196,9 @@ def run_walk_forward(
 
         try:
             predictions = predict_fn(train_games, test_games)
-        except Exception:
-            predictions = []
+        except Exception as exc:
+            # Do not swallow silently — empty fold with visible error.
+            predictions = [{"error": str(exc), "result": None, "correct": False}]
 
         fold = WalkForwardFold(
             train_start=train_start,
@@ -190,20 +214,26 @@ def run_walk_forward(
     return result
 
 
+def _round_or_none(value: float | None, digits: int = 4) -> float | None:
+    if value is None:
+        return None
+    return round(value, digits)
+
+
 def walk_forward_summary(result: WalkForwardResult) -> dict[str, Any]:
     """Return a printable summary of walk-forward results."""
     return {
         "folds": len(result.folds),
         "total_predictions": result.total_predictions,
-        "overall_accuracy": round(result.overall_accuracy, 4),
-        "overall_roi": round(result.overall_roi, 4),
-        "overall_brier": round(result.overall_brier, 4),
+        "overall_accuracy": _round_or_none(result.overall_accuracy),
+        "overall_roi": _round_or_none(result.overall_roi),
+        "overall_brier": _round_or_none(result.overall_brier),
         "accuracy_by_fold": [
-            {"start": s, "end": e, "accuracy": round(a, 4)}
+            {"start": s, "end": e, "accuracy": _round_or_none(a)}
             for s, e, a in result.accuracy_by_fold
         ],
         "roi_by_fold": [
-            {"start": s, "end": e, "roi": round(r, 4)}
+            {"start": s, "end": e, "roi": _round_or_none(r)}
             for s, e, r in result.roi_by_fold
         ],
     }

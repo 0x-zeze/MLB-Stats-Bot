@@ -1429,6 +1429,9 @@ function shouldTriggerCalibrationRetrain(settledCount, alreadyQueued = false) {
 }
 
 function maybeQueueCalibrationRetrain(alreadyQueued = false) {
+  // Governance: do NOT auto-retrain or promote calibration artifacts from post-game.
+  // Only emit a proposal/outbox notice when the sample gate fires. Operator must
+  // run chronological OOF fit and explicit promotion separately.
   let settledCount = 0;
   try {
     settledCount = storage.readLedger({ status: 'settled' }).length;
@@ -1439,21 +1442,22 @@ function maybeQueueCalibrationRetrain(alreadyQueued = false) {
 
   if (!shouldTriggerCalibrationRetrain(settledCount, alreadyQueued)) return false;
 
-  runPythonModule('src.probability_calibrator', ['--retrain'], {
-    timeoutMessage: 'Calibration retrain timeout. Skipped.',
-    timeoutMs: 120_000
-  })
-    .then((output) => {
-      console.log(`Calibration retrain after ${settledCount} settled bets completed.${output ? ` ${output}` : ''}`);
-      try {
-        resetCalibrationCache();
-      } catch (resetError) {
-        console.error('Calibration cache reset failed:', resetError.message);
-      }
-    })
-    .catch((error) => {
-      console.error('Calibration retrain after settlement failed:', error.message);
-    });
+  const now = new Date().toISOString();
+  const proposal = {
+    type: 'calibration_retrain_proposal',
+    settledCount,
+    createdAt: now,
+    status: 'proposal_only',
+    note: 'Automatic promotion disabled. Run chronological OOF calibration and promote explicitly.'
+  };
+  console.log(
+    `Calibration retrain PROPOSAL only after ${settledCount} settled bets (auto-apply disabled).`
+  );
+  try {
+    storage.enqueueOutbox('calibration_retrain_proposal', String(settledCount), proposal);
+  } catch (error) {
+    console.error('Failed to record calibration proposal:', error.message);
+  }
 
   return true;
 }

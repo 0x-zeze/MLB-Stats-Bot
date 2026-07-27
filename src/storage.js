@@ -2144,6 +2144,32 @@ export class Storage {
     return null;
   }
 
+  /**
+   * Best-effort outbox insert for post-commit side effects / proposals.
+   * No-op if outbox table is absent.
+   */
+  enqueueOutbox(eventType, aggregateId, payload) {
+    const now = new Date().toISOString();
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO outbox (outbox_id, event_type, aggregate_id, payload, created_at, available_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          `${eventType}-${aggregateId || 'na'}-${Date.now()}`,
+          String(eventType || 'event'),
+          aggregateId != null ? String(aggregateId) : null,
+          toJson(payload ?? null),
+          now,
+          now
+        );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   appendChatMessage(chatId, role, content) {
     const maxMessages = 20;
     this.db
