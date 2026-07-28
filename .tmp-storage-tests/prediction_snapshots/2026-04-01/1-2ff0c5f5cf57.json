@@ -1,9 +1,9 @@
 {
-  "asOfUtc": "2026-07-28T11:34:29.696Z",
+  "asOfUtc": "2026-07-28T11:38:02.544Z",
   "calibrationArtifact": null,
   "config": null,
   "coreInputs": null,
-  "dateYmd": "2026-04-02",
+  "dateYmd": "2026-04-01",
   "decisionInputs": {
   "betDecision": null,
   "moneylineValueOptions": [
@@ -13,7 +13,7 @@
 },
   "features": null,
   "firstPitchUtc": null,
-  "gamePk": "2",
+  "gamePk": "1",
   "modelInputs": {
   "dampenedEdge": null,
   "modelBreakdown": null,
@@ -23,23 +23,23 @@
   "rawEdge": null,
   "rawHomeProbability": null
 },
-  "predictionTimestampUtc": "2026-07-28T11:34:29.696Z",
+  "predictionTimestampUtc": "2026-07-28T11:38:02.544Z",
   "quotes": {
   "currentOdds": null,
   "openingOdds": null
 },
   "schemaVersion": 1,
-  "snapshotHash": "99d992b9518f50b05cd12f920b266bc3639169bab346f0b1c7917c523460bf50",
+  "snapshotHash": "2ff0c5f5cf574e77d234506da6a1b8fbd13b6cbc033f8162105d413a1603c404",
   "teams": {
   "away": {
-  "abbreviation": "BBB",
-  "id": 200,
-  "name": "Beta Bats"
-},
-  "home": {
   "abbreviation": "AAA",
   "id": 100,
   "name": "Alpha Aces"
+},
+  "home": {
+  "abbreviation": "BBB",
+  "id": 200,
+  "name": "Beta Bats"
 }
 },
   "versions": {
