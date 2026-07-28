@@ -17,6 +17,7 @@ import {
   checkDataFreshness,
   filterSplitsBeforeDate
 } from './temporal_contract.js';
+import { predictGameMoneylineCore, PREDICTION_CORE_MODEL_VERSION } from './core/prediction_core.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const _mlbConfig = loadConfig();
@@ -3034,40 +3035,78 @@ function predictGame(
   modelMemory,
   rollingTeamStats = new Map()
 ) {
-  const awayTeam = game.teams.away.team;
-  const homeTeam = game.teams.home.team;
-  const awayProfile = teamStats.get(awayTeam.id) || {};
-  const homeProfile = teamStats.get(homeTeam.id) || {};
-  const awayRolling = rollingTeamStats.get(awayTeam.id) || null;
-  const homeRolling = rollingTeamStats.get(homeTeam.id) || null;
-  const awayStanding = standings.get(awayTeam.id) || null;
-  const homeStanding = standings.get(homeTeam.id) || null;
-  const awayStarter = game.teams.away.probablePitcher
-    ? { ...game.teams.away.probablePitcher, ...(pitcherDetails.get(game.teams.away.probablePitcher.id) || {}) }
-    : null;
-  const homeStarter = game.teams.home.probablePitcher
-    ? { ...game.teams.home.probablePitcher, ...(pitcherDetails.get(game.teams.home.probablePitcher.id) || {}) }
-    : null;
-  const awayPitcherStats = awayStarter ? pitcherStats.get(awayStarter.id) : null;
-  const homePitcherStats = homeStarter ? pitcherStats.get(homeStarter.id) : null;
-  const awayOpenerSituation = detectOpenerSituation(game, 'away', awayStarter, awayPitcherStats);
-  const homeOpenerSituation = detectOpenerSituation(game, 'home', homeStarter, homePitcherStats);
-  const effectiveAwayPitcherStats = effectivePitcherStats(awayPitcherStats, awayOpenerSituation);
-  const effectiveHomePitcherStats = effectivePitcherStats(homePitcherStats, homeOpenerSituation);
-  const awayPitcherRecent = awayStarter ? pitcherRecentStarts.get(awayStarter.id) : null;
-  const homePitcherRecent = homeStarter ? pitcherRecentStarts.get(homeStarter.id) : null;
-  const awayBullpen = bullpenProfiles.get(awayTeam.id) || finalizeBullpenProfile({ teamId: awayTeam.id, games: 0, bullpenPitches: 0, bullpenOuts: 0, relieverAppearances: 0, relieverDates: new Map(), highPitchRelievers: 0 });
-  const homeBullpen = bullpenProfiles.get(homeTeam.id) || finalizeBullpenProfile({ teamId: homeTeam.id, games: 0, bullpenPitches: 0, bullpenOuts: 0, relieverAppearances: 0, relieverDates: new Map(), highPitchRelievers: 0 });
-  const awayScheduleFatigue = scheduleFatigueProfiles.get(awayTeam.id) || finalizeScheduleFatigueProfile(awayTeam.id, [], game.officialDate || String(game.gameDate).slice(0, 10));
-  const homeScheduleFatigue = scheduleFatigueProfiles.get(homeTeam.id) || finalizeScheduleFatigueProfile(homeTeam.id, [], game.officialDate || String(game.gameDate).slice(0, 10));
-  const gameDateYmd = game.officialDate || String(game.gameDate || '').slice(0, 10);
-  const awayPitcherRest = pitcherRestProfile(awayStarter, awayPitcherRecent, gameDateYmd);
-  const homePitcherRest = pitcherRestProfile(homeStarter, homePitcherRecent, gameDateYmd);
-  const awayInjuries = injuryProfiles.get(awayTeam.id) || [];
-  const homeInjuries = injuryProfiles.get(homeTeam.id) || [];
-  const gameLineups = lineupProfiles || {};
-  const awayLineup = gameLineups.away || null;
-  const homeLineup = gameLineups.home || null;
+  // All deterministic probability math lives in the pure canonical core
+  // (src/core/prediction_core.js). This wrapper injects the externally-sourced
+  // inputs the pure core is forbidden from reading itself: evolution controls
+  // (filesystem), the calibration function (artifact), park factor baselines,
+  // and the wall-clock `now` used only for prediction tiering.
+  const evolutionControls = loadEvolutionControls();
+  const core = predictGameMoneylineCore({
+    game,
+    teamStats,
+    standings,
+    pitcherStats,
+    pitcherDetails,
+    pitcherRecentStarts,
+    bullpenProfiles,
+    scheduleFatigueProfiles,
+    headToHead,
+    injuryProfiles,
+    lineupProfiles,
+    modelMemory,
+    rollingTeamStats,
+    evolutionControls,
+    calibratePercent,
+    parkFactorBaselines: PARK_FACTOR_BASELINES,
+    nowMs: new Date(),
+    moneylineWeightMultiplierFn: moneylineWeightMultiplier,
+    defaultBullpenProfileFn: (teamId) =>
+      finalizeBullpenProfile({
+        teamId,
+        games: 0,
+        bullpenPitches: 0,
+        bullpenOuts: 0,
+        relieverAppearances: 0,
+        relieverDates: new Map(),
+        highPitchRelievers: 0
+      })
+  });
+
+  const {
+    awayTeam,
+    homeTeam,
+    awayProfile,
+    homeProfile,
+    awayRolling,
+    homeRolling,
+    awayStanding,
+    homeStanding,
+    awayStarter,
+    homeStarter,
+    awayOpenerSituation,
+    homeOpenerSituation,
+    effectiveAwayPitcherStats,
+    effectiveHomePitcherStats,
+    awayPitcherStats,
+    homePitcherStats,
+    awayPitcherRecent,
+    homePitcherRecent,
+    awayBullpen,
+    homeBullpen,
+    awayScheduleFatigue,
+    homeScheduleFatigue,
+    awayPitcherRest,
+    homePitcherRest,
+    awayInjuries,
+    homeInjuries,
+    awayLineup,
+    homeLineup,
+    matchupMemory,
+    modelBreakdown
+  } = core;
+  const homeProbability = core.calibrated.homeProbability;
+  const awayProbability = core.calibrated.awayProbability;
+  const gameDateYmd = core.gameDateYmd;
   const awayFirstInningProfile =
     firstInningProfiles.get(awayTeam.id) || defaultFirstInningProfile(awayTeam);
   const homeFirstInningProfile =
@@ -3079,233 +3118,12 @@ function predictGame(
     ? firstInningProfiles.pitchers?.get(homeStarter.id) || null
     : null;
 
-  const homeWinPct = leagueRecordPct(homeStanding?.leagueRecord || game.teams.home.leagueRecord);
-  const awayWinPct = leagueRecordPct(awayStanding?.leagueRecord || game.teams.away.leagueRecord);
-  const homeRpg = rpg(homeProfile.hitting);
-  const awayRpg = rpg(awayProfile.hitting);
-  const homeOps = statOps(homeProfile.hitting);
-  const awayOps = statOps(awayProfile.hitting);
-  const homeIso = statIso(homeProfile.hittingAdvanced);
-  const awayIso = statIso(awayProfile.hittingAdvanced);
-  const homeBatK = battingKRate(homeProfile.hittingAdvanced);
-  const awayBatK = battingKRate(awayProfile.hittingAdvanced);
-  const homeBatBb = battingBbRate(homeProfile.hittingAdvanced);
-  const awayBatBb = battingBbRate(awayProfile.hittingAdvanced);
-  const homeEra = statEra(homeProfile.pitching);
-  const awayEra = statEra(awayProfile.pitching);
-  const homeWhip = statWhip(homeProfile.pitching);
-  const awayWhip = statWhip(awayProfile.pitching);
-  const homeKMinusBb = pitchingKMinusBb(homeProfile.pitchingAdvanced);
-  const awayKMinusBb = pitchingKMinusBb(awayProfile.pitchingAdvanced);
-  const homeHr9 = pitchingHr9(homeProfile.pitchingAdvanced);
-  const awayHr9 = pitchingHr9(awayProfile.pitchingAdvanced);
-  const homeVenuePct = splitPct(homeStanding, 'home');
-  const awayVenuePct = splitPct(awayStanding, 'away');
-  const homeLastTenPct = splitPct(homeStanding, 'lastTen');
-  const awayLastTenPct = splitPct(awayStanding, 'lastTen');
-  const homeRunDiff = runDiffPerGame(homeStanding);
-  const awayRunDiff = runDiffPerGame(awayStanding);
-  const homePythagoreanPct = pythagoreanWinPct(homeStanding, homeProfile);
-  const awayPythagoreanPct = pythagoreanWinPct(awayStanding, awayProfile);
-  const homeSeasonLog5 = log5Probability(homeWinPct, awayWinPct);
-  const homePythagoreanLog5 = log5Probability(homePythagoreanPct, awayPythagoreanPct);
-  const homeRecentLog5 = log5Probability(homeLastTenPct, awayLastTenPct);
-  const homeReferenceBlend =
-    homeSeasonLog5 * 0.45 + homePythagoreanLog5 * 0.35 + homeRecentLog5 * 0.2;
-  const homeMemoryBias = teamMemoryBias(modelMemory, homeTeam.id);
-  const awayMemoryBias = teamMemoryBias(modelMemory, awayTeam.id);
-  const matchupMemory = buildMatchupMemoryContext(modelMemory, awayTeam, homeTeam);
-
-  const winPctEdge = homeWinPct - awayWinPct;
-  const offenseBlend = blendedTeamOffenseEdge(homeProfile, awayProfile, homeRolling, awayRolling);
-  const preventionBlend = blendedTeamPreventionEdge(homeProfile, awayProfile, homeRolling, awayRolling);
-  const offenseEdge = offenseBlend.edge;
-  const preventionEdge = preventionBlend.edge;
-  const spSeasonEdge = starterSeasonEdge(effectiveHomePitcherStats, effectiveAwayPitcherStats);
-  const spRecentEdgeRaw = starterRecentEdge(
-    homeOpenerSituation.isOpener ? null : homePitcherRecent,
-    awayOpenerSituation.isOpener ? null : awayPitcherRecent
+  modelBreakdown.sharpMoney = detectSharpMoneySignal(
+    homeProbability >= awayProbability ? homeTeam.name : awayTeam.name,
+    null,
+    null
   );
-  const spEdge = starterEdge(
-    effectiveHomePitcherStats,
-    effectiveAwayPitcherStats,
-    homeOpenerSituation.isOpener ? null : homePitcherRecent,
-    awayOpenerSituation.isOpener ? null : awayPitcherRecent
-  );
-  const formEdge =
-    (homeLastTenPct - awayLastTenPct) * 0.45 +
-    (homeVenuePct - awayVenuePct) * 0.3 +
-    (homeRunDiff - awayRunDiff) / 7;
-  const pythagoreanEdge = homePythagoreanPct - awayPythagoreanPct;
-  const log5Edge = homeReferenceBlend - 0.5;
-  const h2hEdge = headToHead?.games > 0 ? (headToHead.homeProbability - 50) / 50 : 0;
-  // Memory is calibration context, not a primary predictive feature. Cap its
-  // influence harder so repeated matchup notes cannot pin accuracy near 50/50.
-  const memoryEdge = (homeMemoryBias - awayMemoryBias) * 0.06 + matchupMemory.edge * 0.12;
-  const fatigueEdge = scheduleFatigueEdge(
-    homeScheduleFatigue,
-    awayScheduleFatigue,
-    homePitcherRest,
-    awayPitcherRest
-  );
-  const lineupEdge = lineupWinEdge(homeLineup, awayLineup, homeInjuries, awayInjuries);
-  const bullpenEdge = bullpenAvailabilityEdge(homeBullpen, awayBullpen);
-
-  // Platoon splits: team record vs opposing starter's handedness
-  // Data already exists in standings splitRecords but was only displayed, not computed.
-  const homeVsStarterHand = awayStarter?.pitchHand?.code === 'L'
-    ? splitPct(homeStanding, 'left')
-    : awayStarter?.pitchHand?.code === 'R'
-      ? splitPct(homeStanding, 'right')
-      : null;
-  const awayVsStarterHand = homeStarter?.pitchHand?.code === 'L'
-    ? splitPct(awayStanding, 'left')
-    : homeStarter?.pitchHand?.code === 'R'
-      ? splitPct(awayStanding, 'right')
-      : null;
-  const platoonEdge = (homeVsStarterHand != null && awayVsStarterHand != null)
-    ? (homeVsStarterHand - awayVsStarterHand) * 0.6
-    : 0;
-
-  const offenseFatigueEdge =
-    homeScheduleFatigue.offenseAdjustment - awayScheduleFatigue.offenseAdjustment;
-  const evolutionControls = loadEvolutionControls();
-  const offenseWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'offense');
-  const starterWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'starting_pitcher');
-  const bullpenWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'bullpen');
-  const recentFormWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'recent_form');
-  const homeAdvantageWeightMultiplier = moneylineWeightMultiplier(evolutionControls, 'home_advantage');
-
-  // Situational weight adjustment
-  const venueId = game.venue?.id || 0;
-  const openerDetected = homeOpenerSituation.isOpener || awayOpenerSituation.isOpener;
-  const sitWeights = situationalWeightAdjustment(venueId, openerDetected, gameDateYmd);
-
-  const offenseComponent = clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.32 * offenseWeightMultiplier * sitWeights.offense;
-  const preventionComponent = clamp(preventionEdge, -1.35, 1.35) * 0.26;
-  const starterComponent = clamp(spEdge, -1.35, 1.35) * 0.42 * starterWeightMultiplier * sitWeights.starting_pitcher;
-  // Bullpen-availability mentions historically graded 42.1% — keep the signal
-  // for late-game context but cut its moneyline weight hard.
-  const bullpenComponent = bullpenEdge * 0.35 * bullpenWeightMultiplier * sitWeights.bullpen;
-  const formComponent = clamp(formEdge, -0.3, 0.3) * 0.32 * recentFormWeightMultiplier * sitWeights.recent_form;
-  const homeFieldComponent = 0.1 * homeAdvantageWeightMultiplier * sitWeights.home_advantage;
-
-  // Weather edge: conditions that favor scoring (warm, wind out) slightly
-  // increase variance which reduces the better team's edge. Conditions that
-  // suppress scoring (cold, wind in) reduce variance and increase predictability.
-  // Scale the existing weatherRunAdjustment down for moneyline impact.
-  const weatherAdj = weatherRunAdjustment(game.weather);
-  const weatherComponent = clamp(weatherAdj * -0.08, -0.06, 0.06);
-
-  const matchupEdge =
-    offenseComponent +
-    preventionComponent +
-    starterComponent +
-    lineupEdge * (bothLineupsConfirmed({ away: awayLineup, home: homeLineup }) ? 0.95 : 0.85) +
-    bullpenComponent +
-    fatigueEdge * 0.7;
-  // Record signal uses ONLY the Log5 blend. winPctEdge and pythagoreanEdge were
-  // double-counted: homeReferenceBlend already folds in homeSeasonLog5 (season
-  // win%) and homePythagoreanLog5 (pythag), so the linear winPctEdge/
-  // pythagoreanEdge terms re-added the same information, over-weighting standings
-  // vs today's matchup. Log5 is the correct matchup-probability transform of two
-  // win rates; its weight is raised to carry the record signal the three
-  // correlated terms previously split. Calibration absorbs the residual scale.
-  const recordContextEdge =
-    log5Edge * 0.34 +
-    formComponent +
-    h2hEdge * 0.025 +
-    memoryEdge +
-    platoonEdge;
-  const recordDominated =
-    Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
-
-  // Lineup confirmation edge: when both teams post confirmed nine-hitter
-  // lineups, the model's existing matchup edge (starter/offense/bullpen)
-  // becomes more reliable because a key source of pre-game uncertainty
-  // (replacement-level fill-ins, late scratches) is removed. We amplify the
-  // existing directional edge by a small, capped amount toward the favored
-  // side — never a free bump to either side, never overrides a near-pickem.
-  const bothConfirmed = bothLineupsConfirmed({ away: awayLineup, home: homeLineup });
-  const confirmationEdge = bothConfirmed
-    ? clamp(Math.sign(matchupEdge) * Math.min(Math.abs(matchupEdge) * 0.08, 0.04), -0.04, 0.04)
-    : 0;
-
-  const edge = matchupEdge + (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) + homeFieldComponent + weatherComponent + confirmationEdge;
-
-  // Edge dampening: the model is systematically overconfident at higher edges.
-  // Analysis of 773 moneyline outcomes + 59 staked bets:
-  //   50-55% predicted → 56.8% actual (slightly underconfident ← sweet spot)
-  //   55-60% predicted → 52.2% actual (overconfident by 5pp)
-  //   65-70% predicted → 49.4% actual (overconfident by 18pp!)
-  // AGGRESSIVE dampening: the model needs heavy compression at all levels.
-  // Previous factors (0.82/0.70/0.58) were too mild — model_prob still hit
-  // 59% for 27/32 bets. New factors compress harder, especially at high edge.
-  const absEdge = Math.abs(edge);
-  const dampeningFactor = absEdge < 0.25 ? 0.65
-    : absEdge < 0.50 ? 0.50
-    : 0.38;
-  const dampenedEdge = edge * dampeningFactor;
-
-  const rawHomeProbability = clamp(sigmoid(dampenedEdge) * 100, 35, 65);
-  const rawAwayProbability = 100 - rawHomeProbability;
-  // Calibrate at the source so every surface (cards, /picks, auto-alert, stored
-  // picks, dashboard) shows the same honest, observed-frequency probability.
-  // Moneyline uses low-sample shrinkage until the metadata says its isotonic map
-  // has enough settled samples. Calibrate the favored side and derive the other
-  // as its complement so the two always sum to 100. Keep the raw model probability
-  // for conviction-based confidence/tiering.
-  let homeProbability = rawHomeProbability;
-  let awayProbability = rawAwayProbability;
-  if (rawHomeProbability >= 50) {
-    homeProbability = clamp(calibratePercent(rawHomeProbability, 'moneyline'), 30, 70);
-    awayProbability = 100 - homeProbability;
-  } else {
-    awayProbability = clamp(calibratePercent(rawAwayProbability, 'moneyline'), 30, 70);
-    homeProbability = 100 - awayProbability;
-  }
-  const modelBreakdown = {
-    rawEdge: edge,
-    dampenedEdge,
-    dampeningFactor,
-    matchupEdge,
-    recordContextEdge,
-    offenseEdge: offenseComponent,
-    preventionEdge: preventionComponent,
-    starterEdge: starterComponent,
-    starterSeasonEdge: spSeasonEdge,
-    starterRecentEdge: spRecentEdgeRaw,
-    lineupEdge: lineupEdge * (bothConfirmed ? 0.95 : 0.85),
-    confirmationEdge,
-    bullpenEdge: bullpenComponent,
-    fatigueEdge: fatigueEdge * 0.7,
-    winPctEdge,
-    pythagoreanEdge,
-    log5Edge: log5Edge * 0.34,
-    formEdge: formComponent,
-    h2hEdge: h2hEdge * 0.025,
-    memoryEdge,
-    platoonEdge,
-    homeFieldEdge: homeFieldComponent,
-    weatherEdge: weatherComponent,
-    rollingOffenseWeight: offenseBlend.rollingWeight,
-    rollingPreventionWeight: preventionBlend.rollingWeight,
-    rollingOffenseEdge: offenseBlend.rollingEdge,
-    rollingPreventionEdge: preventionBlend.rollingEdge,
-    recordDominated,
-    rawHomeProbability,
-    rawAwayProbability,
-    pureHomeProbability: homeProbability,
-    pureAwayProbability: awayProbability,
-    activeWeightVersion: evolutionControls.activeWeightVersion,
-    situationalWeights: sitWeights,
-    predictionTier: determinePredictionTier(game.gameDate),
-    sharpMoney: detectSharpMoneySignal(
-      homeProbability >= awayProbability ? homeTeam.name : awayTeam.name,
-      null,
-      null
-    )
-  };
+  modelBreakdown.modelVersion = PREDICTION_CORE_MODEL_VERSION;
 
   const home = {
     id: homeTeam.id,
