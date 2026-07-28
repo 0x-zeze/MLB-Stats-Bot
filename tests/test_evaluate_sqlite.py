@@ -172,3 +172,50 @@ def test_filter_rows_by_market_uses_market_type_and_yes_no():
 
     assert [row["final_lean"] for row in filter_rows_by_market(rows, "moneyline")] == ["Home"]
     assert [row["final_lean"] for row in filter_rows_by_market(rows, "yrfi")] == ["YES", "NO"]
+
+
+def test_calculate_metrics_uses_stake_weighted_roi_and_separate_units_per_bet():
+    rows = [
+        {"result": "win", "profit_loss": 9.0, "units_staked": 9.0, "model_prob": 0.6},
+        {"result": "loss", "profit_loss": -1.0, "units_staked": 1.0, "model_prob": 0.4},
+    ]
+    metrics = calculate_metrics(rows)
+    assert metrics["roi"] == 0.8
+    assert metrics["units_per_bet"] == 4.0
+    assert metrics["total_units_staked"] == 10.0
+
+
+def test_calculate_metrics_returns_null_roi_without_stake_data():
+    rows = [
+        {"result": "win", "profit_loss": 1.5, "units_staked": "", "model_prob": 0.6},
+        {"result": "loss", "profit_loss": -1.0, "units_staked": "", "model_prob": 0.4},
+    ]
+    metrics = calculate_metrics(rows)
+    assert metrics["roi"] is None
+    assert metrics["units_per_bet"] == 0.25
+    assert metrics["total_units_staked"] is None
+
+
+def test_market_baselines_compare_same_period_fair_and_model_probabilities():
+    from src.evaluate import market_baselines
+
+    rows = [
+        {"market_type": "moneyline", "result": "win", "fair_prob": 0.60, "model_prob": 0.55},
+        {"market_type": "moneyline", "result": "loss", "fair_prob": 0.70, "model_prob": 0.65},
+        {"market_type": "yrfi", "result": "win", "fair_prob": 0.90, "model_prob": 0.90},
+    ]
+    baseline = market_baselines(rows)
+    assert baseline["comparable_moneyline_rows"] == 2
+    assert baseline["market_favorite_accuracy"] == 0.5
+    assert baseline["brier_improvement_vs_market"] is not None
+    assert baseline["log_loss_improvement_vs_market"] is not None
+
+
+def test_settled_rows_exclude_push_from_financial_metrics():
+    rows = [
+        {"result": "push", "profit_loss": 0.0, "units_staked": 1.0, "model_prob": 0.5},
+        {"result": "win", "profit_loss": 1.0, "units_staked": 1.0, "model_prob": 0.6},
+    ]
+    metrics = calculate_metrics(rows)
+    assert metrics["bets"] == 1
+    assert metrics["roi"] == 1.0

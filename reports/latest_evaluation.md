@@ -1,11 +1,14 @@
-# Latest Evaluation (Unaudited Baseline)
+# Latest Evaluation (Unaudited, Stake-Weighted + Market Baseline)
 
-**Status:** `unaudited`  
-**Generated:** 2026-07-27  
-**Git:** `31f0f8c` on `main`  
-**Source:** `data/state.sqlite` descriptive inventory only  
+**Status:** `unaudited` — not promotion-eligible
+**Generated:** 2026-07-28
+**Git:** see `reports/latest_metrics.json` metadata
+**Source:** `data/state.sqlite` via `src/evaluate.py`
 
-This report is a **Phase 0 baseline**. It does **not** prove model edge, calibration quality, or profitability. A lower but honest later OOS result is preferable to these numbers.
+This report remains descriptive because legacy rows do not all have immutable
+pregame feature provenance. It does not prove model edge, calibration quality,
+or profitability. A lower but honest out-of-sample result is preferable to
+retrospective optimization.
 
 ## Population
 
@@ -52,9 +55,22 @@ This report is a **Phase 0 baseline**. It does **not** prove model edge, calibra
 
 Reason: no immutable calibrated probability series bound to leakage-safe outcomes yet.
 
-## Baselines
+## Same-period market baseline
 
-All chronological baselines (home, market favorite, no-vig, logistic, residual) are **blocked** until Phases 1–4.
+The current evaluator has a comparable same-period no-vig market baseline for
+47 moneyline rows:
+
+| Metric | Market | Model | Improvement |
+|--------|--------|-------|-------------|
+| Accuracy (favorite) | 53.2% | 44.7% | — |
+| Brier | 0.2444 | 0.2657 | −0.0213 |
+| Log loss | 0.6815 | 0.7250 | −0.0435 |
+
+The model trails the market on both proper scoring rules. This is an honest
+negative result, not evidence of a positive edge.
+
+Full promotion baselines (always-home, logistic, residual) remain blocked until
+larger `production_replay` populations exist.
 
 ## Test suite baseline (pre-remediation)
 

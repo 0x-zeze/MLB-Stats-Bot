@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, extname, resolve } from 'node:path';
 
 import { applyMigrations } from './storage/migrations.js';
-import { getCalibrationArtifact } from './calibration.js';
+import { getCalibrationArtifact, freezeCalibrationArtifact } from './calibration.js';
 import { buildPredictionSnapshot } from './prediction_snapshot.js';
 import { writeSnapshotFile } from './prediction_serializer.js';
 
@@ -1184,6 +1184,10 @@ export class Storage {
             stored.predictionTimestampUtc || prediction.predictionTimestampUtc || prediction.asOfUtc || null;
           prediction.calibrationVersion =
             stored.versions?.calibrationVersion || prediction.calibrationVersion || null;
+          // Reuse the immutable first-write core inputs and artifact on refresh.
+          // Never let a later mutable prediction overwrite the replay authority.
+          if (stored.coreInputs) prediction.coreInputs = stored.coreInputs;
+          if (stored.calibrationArtifact) prediction.calibrationArtifact = stored.calibrationArtifact;
           if (!prediction.versions) prediction.versions = {};
           prediction.versions.calibration = prediction.calibrationVersion;
           return stored;
@@ -1191,6 +1195,9 @@ export class Storage {
       }
 
       const cal = getCalibrationArtifact('moneyline');
+      // Frozen artifact (with mapping) so replay reconstructs the exact map.
+      const frozenCal = freezeCalibrationArtifact('moneyline');
+      prediction.calibrationArtifact = frozenCal;
       const asOfUtc = new Date().toISOString();
       const snapshot = buildPredictionSnapshot({
         prediction,
@@ -1203,7 +1210,9 @@ export class Storage {
           featureVersion: prediction.featureVersion || prediction.versions?.feature || 'live-features',
           calibrationVersion: cal.calibrationVersion,
           betPolicyVersion: prediction.betPolicyVersion || prediction.versions?.betPolicy || 'value-v1'
-        }
+        },
+        coreInputs: prediction.coreInputs || null,
+        calibrationArtifact: frozenCal
       });
 
       prediction.snapshotHash = snapshot.snapshotHash;
@@ -1228,7 +1237,9 @@ export class Storage {
           decisionInputs: snapshot.decisionInputs,
           modelInputs: snapshot.modelInputs,
           quotes: snapshot.quotes,
-          calibration: cal
+          coreInputs: snapshot.coreInputs,
+          calibration: frozenCal,
+          calibrationArtifact: snapshot.calibrationArtifact
         },
         { overwrite: false, timestamp: asOfUtc }
       );

@@ -1,12 +1,14 @@
 # Technical Audit — MLB Stats Bot
 
-**Status:** Phase 0 inventory (unaudited baseline)  
-**Revision audited:** `31f0f8c` on `main`  
-**Collected:** 2026-07-27  
-**Runtime baseline:** Node v24.18.0 (shell), Python 3.12.3  
+**Status:** historical Phase 0 inventory with 2026-07-28 remediation addendum
+**Revision audited:** `31f0f8c` on `main` (original inventory)
+**Collected:** 2026-07-27; remediation verified 2026-07-28
+**Runtime baseline:** Node v24.18.0 (shell), Python 3.12.3
 **Database:** `data/state.sqlite` (read-only inspection)
 
-This document records **observed facts** from code and live SQLite state. It is **not** a performance claim. Historical ROI/CLV must not be treated as valid evidence until leakage, immutable settlement, and live/replay parity are fixed.
+This document records **observed facts** from code and live SQLite state. It is
+not a performance claim. Historical ROI/CLV must not be treated as valid
+evidence until leakage, immutable settlement, and live/replay parity are fixed.
 
 ---
 

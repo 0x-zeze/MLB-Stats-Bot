@@ -1,17 +1,23 @@
 # Prediction Architecture
 
-**Status:** Transition document (Phases 0–2 partial + governance)
+**Status:** canonical moneyline core + recompute replay active (2026-07-28); totals/YRFI remain separate paths
 
-## Current production path (Telegram)
+## Canonical production path (Telegram)
 
 ```text
 getMlbPredictions (src/mlb.js)
-  -> attachOdds / line snapshots
-  -> attachMarketContext (pure model, market blend, value engine)
+  -> fetch point-in-time features and construct coreInputs
+  -> predictGameMoneylineCore (pure, deterministic, no I/O)
+  -> attach odds / line snapshots
+  -> attachMarketContext (market-informed display only; pure model remains authoritative for value)
   -> applyMoneylineValueMarket
   -> attachAgentAnalyses (explanation-only; cannot change pick/prob/edge/status)
-  -> storage.savePredictions (compact model pick + valuePick + betDecision)
+  -> storage.savePredictions (immutable snapshot + compatibility pick cache)
   -> recordBet for VALUE only
+
+`prediction.coreInputs` is serialized into the immutable snapshot. The exact
+calibration artifact is frozen alongside it, so later replay does not read
+current APIs, odds, configuration, or calibration files.
 ```
 
 Post-game:
@@ -51,14 +57,16 @@ LLM may only add supporting/counter factors, data-quality warnings, market disag
 
 | Path | Role |
 |------|------|
-| `src/mlb.js` + `src/index.js` | Production Telegram |
+| `src/core/prediction_core.js` | Canonical pure moneyline production calculation |
+| `src/mlb.js` + `src/index.js` | Network adapters, live orchestration, market context, Telegram |
 | Python `backtest.py` / sample pipeline | Fixture/regression only — **not** production replay |
-| `prediction_snapshot` / `prediction_serializer` / `prediction_replay` | Freeze decision inputs + deterministic projection parity |
-| Future pure `prediction_core` extract from `mlb.js` | Full live/replay parity without network |
+| `prediction_snapshot` / `prediction_serializer` / `prediction_replay` | Immutable input freeze + real pure-core recompute parity |
+| `scripts/replay_prediction.js` | CLI replay; non-zero on parity failure |
 
-Snapshot decision projection is available now (`buildPredictionSnapshot` → `replaySnapshot`). Full pure-core extraction of `predictGame` remains open.
-
-Until full production_replay exists, do not treat Python backtest ROI as live performance.
+Replay mode is `recompute` when `coreInputs` and a frozen calibration artifact
+are present. Legacy snapshots are `projection` only and are never
+promotion-eligible. Python backtest ROI remains sample-only until it consumes
+production-replay snapshots.
 
 ## Related
 

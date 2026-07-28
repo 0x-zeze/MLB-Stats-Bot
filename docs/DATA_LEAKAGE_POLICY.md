@@ -1,6 +1,6 @@
 # Data Leakage Policy
 
-**Status:** Phase 2 (partial enforcement)  
+**Status:** hard temporal validator active for snapshot validation; source adapters remain partially date-granular
 **Internal time base:** UTC  
 **Display timezone:** configured bot timezone only for UI
 

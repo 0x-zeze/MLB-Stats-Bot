@@ -2,6 +2,11 @@
 
 ## Current (compatibility) model
 
+`picks` remains a mutable latest-view cache only. Immutable historical authority
+is the prediction-run / decision / market-observation / execution / settlement
+chain. Do not use a `picks` UPSERT as evidence that an earlier prediction did
+not exist.
+
 Primary tables still used by Telegram:
 
 - `picks` — mutable per `game_pk` (UPSERT)

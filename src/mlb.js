@@ -17,7 +17,7 @@ import {
   checkDataFreshness,
   filterSplitsBeforeDate
 } from './temporal_contract.js';
-import { predictGameMoneylineCore, PREDICTION_CORE_MODEL_VERSION } from './core/prediction_core.js';
+import { predictGameMoneylineCore, buildCoreInputsSnapshot, PREDICTION_CORE_MODEL_VERSION } from './core/prediction_core.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const _mlbConfig = loadConfig();
@@ -3033,7 +3033,8 @@ function predictGame(
   injuryProfiles,
   lineupProfiles,
   modelMemory,
-  rollingTeamStats = new Map()
+  rollingTeamStats = new Map(),
+  predictionTimestampUtc = null
 ) {
   // All deterministic probability math lives in the pure canonical core
   // (src/core/prediction_core.js). This wrapper injects the externally-sourced
@@ -3041,6 +3042,7 @@ function predictGame(
   // (filesystem), the calibration function (artifact), park factor baselines,
   // and the wall-clock `now` used only for prediction tiering.
   const evolutionControls = loadEvolutionControls();
+  const decisionTimestampUtc = predictionTimestampUtc || new Date().toISOString();
   const core = predictGameMoneylineCore({
     game,
     teamStats,
@@ -3058,7 +3060,7 @@ function predictGame(
     evolutionControls,
     calibratePercent,
     parkFactorBaselines: PARK_FACTOR_BASELINES,
-    nowMs: new Date(),
+    nowMs: decisionTimestampUtc,
     moneylineWeightMultiplierFn: moneylineWeightMultiplier,
     defaultBullpenProfileFn: (teamId) =>
       finalizeBullpenProfile({
@@ -3102,10 +3104,26 @@ function predictGame(
     awayLineup,
     homeLineup,
     matchupMemory,
+    awayPythagoreanPct,
+    homePythagoreanPct,
+    homeSeasonLog5,
+    homePythagoreanLog5,
+    homeRecentLog5,
+    homeReferenceBlend,
+    awayMemoryBias,
+    homeMemoryBias,
+    fatigueEdge,
+    offenseBlend,
+    starterWeightMultiplier,
+    spRecentEdgeRaw,
+    bothConfirmed,
+    confirmationEdge,
     modelBreakdown
   } = core;
   const homeProbability = core.calibrated.homeProbability;
   const awayProbability = core.calibrated.awayProbability;
+  const rawHomeProbability = core.raw.homeProbability;
+  const rawAwayProbability = core.raw.awayProbability;
   const gameDateYmd = core.gameDateYmd;
   const awayFirstInningProfile =
     firstInningProfiles.get(awayTeam.id) || defaultFirstInningProfile(awayTeam);
@@ -3427,8 +3445,9 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
     })
   );
 
-  return games.map((game) =>
-    predictGame(
+  return games.map((game) => {
+    const predictionTimestampUtc = new Date().toISOString();
+    const prediction = predictGame(
       game,
       teamStats,
       standings,
@@ -3442,9 +3461,31 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       injuryProfiles,
       lineupProfiles.get(game.gamePk),
       modelMemory,
-      rollingTeamStats
-    )
-  );
+      rollingTeamStats,
+      predictionTimestampUtc
+    );
+    // Freeze the raw core inputs so this live prediction can be recomputed by
+    // snapshot replay (not just projected). Plain JSON; Maps serialized.
+    prediction.coreInputs = buildCoreInputsSnapshot({
+      game,
+      teamStats,
+      standings,
+      pitcherStats,
+      pitcherDetails,
+      pitcherRecentStarts,
+      bullpenProfiles,
+      scheduleFatigueProfiles,
+      headToHead: headToHeadStats.get(game.gamePk),
+      injuryProfiles,
+      lineupProfiles: lineupProfiles.get(game.gamePk) || { away: null, home: null },
+      modelMemory,
+      rollingTeamStats,
+      evolutionControls: loadEvolutionControls(),
+      parkFactorBaselines: PARK_FACTOR_BASELINES
+    });
+    prediction.predictionTimestampUtc = predictionTimestampUtc;
+    return prediction;
+  });
 }
 
 export async function getMlbScheduleChoices(dateYmd = dateInTimezone('Asia/Jakarta')) {

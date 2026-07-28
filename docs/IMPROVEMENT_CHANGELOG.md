@@ -2,6 +2,61 @@
 
 Honest log of correctness/evaluation work. No fabricated performance gains.
 
+## 2026-07-28 — Pure core + real replay + temporal wall + evaluator baselines
+
+### Commits
+
+| Commit | Summary |
+|--------|---------|
+| `892262d` | refactor: extract deterministic pure moneyline prediction core |
+| `1f596fa` | feat: implement real snapshot-based prediction replay |
+| `3c40302` | feat: enforce temporal provenance and historical data wall |
+| `426db0c` | fix: correct ROI definition and add market baselines + report metadata |
+
+### Correctness
+
+- **Pure canonical core.** `src/core/prediction_core.js` (`predictGameMoneylineCore`)
+  now owns the moneyline probability pipeline: no network, filesystem, database,
+  clock, or env access; evolution controls / calibration function / park factors /
+  `now` are injected. `predictGame` (src/mlb.js) is a thin behavior-preserving
+  wrapper. Live and replay share the same core.
+- **Real recompute replay.** Snapshots freeze raw `coreInputs` + the exact
+  `calibrationArtifact`. Replay re-runs the pure core and compares full-precision
+  raw stages (`PROBABILITY_TOLERANCE=1e-9`). Legacy snapshots fall back to
+  `projection` mode, explicitly not promotion-eligible. Fixed `stableStringify`
+  int/float hash drift. Mutation tests prove starter/lineup/calibration changes
+  alter output; irrelevant metadata does not.
+- **Temporal data wall.** `src/data/temporal_validator.js` adds
+  `TemporalLeakageError` + `validateTemporalSnapshot`; future features are
+  rejected, boxscore lineups without a pregame availability timestamp are
+  `historical_unverified` and never promotion-eligible.
+- **Evaluator.** ROI is strictly stake-weighted (`None` when no stake);
+  `units_per_bet` reported separately. Same-period no-vig market baselines added
+  (market favorite accuracy, market Brier/log loss, model-minus-market
+  improvement). `--json` writes `reports/latest_metrics.json` with git SHA,
+  dataset hash, row count, generation timestamp.
+
+### Verification
+
+- `npm test`: pass — JS 160 pass / 0 fail / 5 skipped; Python 555 pass.
+- Recompute replay parity: `parity ok: true`, `promotionEligible: true`, twice-identical.
+
+### Honest current evaluation (unaudited, NOT promotion-eligible)
+
+47 comparable moneyline rows. The model **trails** the no-vig market:
+
+| Metric | Market | Model | Improvement |
+|--------|--------|-------|-------------|
+| Accuracy (favorite) | 53.2% | 44.7% | — |
+| Brier | 0.2444 | 0.2657 | −0.0213 |
+| Log loss | 0.6815 | 0.7250 | −0.0435 |
+
+### Explicit non-claims
+
+- No prediction-skill, calibration, edge, or ROI improvement is claimed.
+- The `unaudited` ledger population is not promotion-eligible.
+- Historical rows still lack full pregame feature provenance.
+
 ## 2026-07-27 — Phase 0–2 + evaluation partial
 
 ### Commits

@@ -55,6 +55,31 @@ test('savePredictions captures immutable snapshot hash and prediction run', () =
   const { storage, tempDir } = freshStorage();
   try {
     const pred = prediction();
+    pred.coreInputs = {
+      game: {
+        gamePk: 7001,
+        gameDate: '2026-07-27T23:00:00Z',
+        officialDate: '2026-07-27',
+        teams: {
+          away: { team: { id: 101 } },
+          home: { team: { id: 202 } }
+        }
+      },
+      teamStats: {},
+      standings: {},
+      pitcherStats: {},
+      pitcherDetails: {},
+      pitcherRecentStarts: {},
+      bullpenProfiles: {},
+      scheduleFatigueProfiles: {},
+      headToHead: { games: 0 },
+      injuryProfiles: {},
+      lineupProfiles: { away: null, home: null },
+      modelMemory: {},
+      rollingTeamStats: {},
+      evolutionControls: {},
+      parkFactorBaselines: []
+    };
     storage.savePredictions('2026-07-27', [pred]);
 
     const saved = storage.getPrediction(7001);
@@ -78,6 +103,9 @@ test('savePredictions captures immutable snapshot hash and prediction run', () =
     assert.ok(feature);
     const payload = JSON.parse(feature.payload);
     assert.equal(payload.snapshotHash, saved.snapshotHash);
+    assert.equal(payload.coreInputs.game.gamePk, 7001);
+    assert.equal(payload.calibrationArtifact.market, 'moneyline');
+    assert.ok(Array.isArray(payload.calibrationArtifact.mapping));
 
     const files = storage.db
       .prepare(

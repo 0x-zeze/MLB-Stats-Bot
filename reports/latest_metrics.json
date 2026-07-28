@@ -1,27 +1,27 @@
 {
   "metadata": {
-    "git_sha": "3c40302c5e876936fcbc862c5d2add65eae361b3",
-    "dataset_hash": "11145a54fcc4bc933fa3bff3c231b618da184991e51d985870a3c8dcd2cb94d9",
-    "row_count": 81,
-    "generated_at": "2026-07-28T11:43:01.456211+00:00",
+    "git_sha": "426db0c837f99cf5501c02a256ffbebf3ccc9b19",
+    "dataset_hash": "32810503d92b4acf73abbbf86950fb5cc351618bbc0e907745767139402d96a4",
+    "row_count": 1241,
+    "generated_at": "2026-07-28T12:27:18.052086+00:00",
     "evaluator": "src/evaluate.py"
   },
   "metrics": {
-    "bets": 74,
-    "wins": 32,
-    "losses": 42,
-    "accuracy": 0.43243243243243246,
-    "win_rate": 0.43243243243243246,
-    "roi": -0.1809632281158477,
-    "units_per_bet": -0.7514864864864865,
+    "bets": 483,
+    "wins": 220,
+    "losses": 263,
+    "accuracy": 0.4554865424430642,
+    "win_rate": 0.4554865424430642,
+    "roi": -0.2883501464367068,
+    "units_per_bet": -0.1834575569358178,
     "total_units_staked": 307.3,
-    "total_profit_loss": -55.61,
+    "total_profit_loss": -88.61,
     "average_edge": 0.09755405405405405,
     "average_clv": -0.5978723404255318,
     "clv_coverage": 47,
     "edge_coverage": 74,
-    "brier_score": 0.2719383108108108,
-    "log_loss": 0.738339081062239
+    "brier_score": 0.2548667391304348,
+    "log_loss": 0.7034983141113196
   },
   "market_baselines": {
     "comparable_moneyline_rows": 47,

@@ -1,6 +1,6 @@
 # Evaluation Method
 
-**Status:** Phase 4 partial (correctness fixes in progress)  
+**Status:** correctness metrics and same-period market baselines active; production-replay promotion remains gated
 **Do not claim profitability** unless a report is labeled `production_replay` and leakage-safe.
 
 ## 1. Principles

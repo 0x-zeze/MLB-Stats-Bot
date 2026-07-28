@@ -7,6 +7,7 @@
  */
 
 import { resolve } from 'node:path';
+import { validateTemporalSnapshot } from '../src/data/temporal_validator.js';
 import { replaySnapshotFile, replayTwice } from '../src/prediction_replay.js';
 import { readSnapshotFile } from '../src/prediction_serializer.js';
 
@@ -36,9 +37,12 @@ function main() {
     process.exit(result.parity.ok ? 0 : 2);
   }
 
+  const snapshot = readSnapshotFile(args.snapshot);
+  const temporal = validateTemporalSnapshot(snapshot, null, { strict: false });
   const result = replaySnapshotFile(args.snapshot);
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  process.exit(result.parity.ok ? 0 : 2);
+  const report = { ...result, temporal };
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  process.exit(result.parity.ok && temporal.ok ? 0 : 2);
 }
 
 main();

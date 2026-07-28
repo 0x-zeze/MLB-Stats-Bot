@@ -588,7 +588,6 @@ def market_baselines(rows: list[dict[str, Any]]) -> dict[str, Any]:
         model = _decimal_probability(row.get("model_prob"))
         if fair is None or model is None:
             continue
-        side = str(row.get("side") or "").strip().lower()
         won = row_won(row)
         # Selected-side market/model probabilities.
         market_probs.append(fair)

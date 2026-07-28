@@ -16,7 +16,7 @@ Output utama bot:
 ## Quick Start
 
 ```bash
-git clone https://github.com/grahito12/MLB-Stats-Bot.git
+git clone https://github.com/0x-zeze/MLB-Stats-Bot.git
 cd MLB-Stats-Bot
 cp .env.example .env
 npm ci
@@ -110,7 +110,7 @@ Bot Telegram tidak perlu dependency tambahan karena memakai Node.js built-in `fe
 Clone repository:
 
 ```bash
-git clone https://github.com/grahito12/MLB-Stats-Bot.git
+git clone https://github.com/0x-zeze/MLB-Stats-Bot.git
 cd MLB-Stats-Bot
 ```
 

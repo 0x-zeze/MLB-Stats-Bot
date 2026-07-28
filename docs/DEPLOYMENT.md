@@ -21,7 +21,7 @@ Optional API keys:
 ## Fresh Clone
 
 ```bash
-git clone https://github.com/grahito12/MLB-Stats-Bot.git
+git clone https://github.com/0x-zeze/MLB-Stats-Bot.git
 cd MLB-Stats-Bot
 cp .env.example .env
 ```
