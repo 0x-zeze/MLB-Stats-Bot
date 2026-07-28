@@ -40,9 +40,28 @@
 
 Sample size, period, qualified bets, accuracy, log loss, Brier, ECE/MCE (when available), ROI stake-weighted, average odds/edge (coverage), CLV (coverage), drawdown, profit factor, streaks, segment breakdowns, uncertainty, git/model/calibration versions, exclusions.
 
-## 6. Baselines (blocked until replay)
+## 6. Baselines
 
-Always home, market favorite, no-vig market, regularized logistic, current rule model, improved model, market residual — same chronological snapshots only.
+`src/evaluate.py` now reports same-period no-vig market baselines for comparable
+moneyline rows: market favorite accuracy, market Brier/log loss, and
+model-minus-market improvements. Current SQLite output remains labeled
+`unaudited` because its historical feature provenance is incomplete.
+
+The following promotion baselines remain blocked until a sufficiently large
+`production_replay` population exists: always home, regularized logistic,
+current rule model, improved model, and market residual. All must use the same
+chronological snapshots and prediction timing.
+
+Current report command:
+
+```bash
+python3 -m src.evaluate --sqlite data/state.sqlite --market all \
+  --json reports/latest_metrics.json --report
+```
+
+`reports/latest_metrics.json` binds `git_sha`, `dataset_hash`, row count, and
+UTC generation time. ROI is `sum(profit_loss) / sum(units_staked)`; when stake
+is unavailable it is `null`, while `units_per_bet` is reported separately.
 
 ## 7. Related docs
 
