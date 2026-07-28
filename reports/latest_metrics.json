@@ -1,81 +1,38 @@
 {
-  "status": "unaudited",
-  "audit_version": 1,
-  "generated_at": "2026-07-27T00:00:00.000Z",
-  "git_revision": "31f0f8c3fa6763bfe34945dd049c8d19baece379",
-  "branch": "main",
-  "population": {
-    "label": "live_sqlite_descriptive_only",
-    "database": "data/state.sqlite",
-    "picks_rows": 1145,
-    "picks_date_min": "2026-04-28",
-    "picks_date_max": "2026-07-27",
-    "note": "Not a leakage-safe production_replay. Do not use for model promotion."
+  "metadata": {
+    "git_sha": "3c40302c5e876936fcbc862c5d2add65eae361b3",
+    "dataset_hash": "11145a54fcc4bc933fa3bff3c231b618da184991e51d985870a3c8dcd2cb94d9",
+    "row_count": 81,
+    "generated_at": "2026-07-28T11:43:01.456211+00:00",
+    "evaluator": "src/evaluate.py"
   },
-  "exclusions": {
-    "ambiguous_identity_rows": "not fully quarantined yet",
-    "missing_prediction_timestamp": "all historical rows lack enforced as_of provenance",
-    "open_totals": 7,
-    "processed_but_open_ledger": 7,
-    "pick_vs_value_divergences_observed": 7,
-    "side_mismatches_observed": 1
-  },
-  "moneyline_settled": {
-    "n_bets": 47,
-    "wins": 21,
-    "losses": 26,
-    "pushes": 0,
-    "total_units_staked": 169.0,
-    "total_units_pl": -32.95,
-    "roi_stake_weighted": -0.19497,
-    "roi_bet_count_legacy_incorrect": -0.70106,
+  "metrics": {
+    "bets": 74,
+    "wins": 32,
+    "losses": 42,
+    "accuracy": 0.43243243243243246,
+    "win_rate": 0.43243243243243246,
+    "roi": -0.1809632281158477,
+    "units_per_bet": -0.7514864864864865,
+    "total_units_staked": 307.3,
+    "total_profit_loss": -55.61,
+    "average_edge": 0.09755405405405405,
+    "average_clv": -0.5978723404255318,
     "clv_coverage": 47,
-    "clv_n": 47,
-    "average_clv": -0.5979,
-    "min_clv": -5.2,
-    "max_clv": 5.2
+    "edge_coverage": 74,
+    "brier_score": 0.2719383108108108,
+    "log_loss": 0.738339081062239
   },
-  "totals_settled": {
-    "n_bets": 27,
-    "wins": 11,
-    "losses": 16,
-    "total_units_pl": -22.66,
-    "note": "Separate market; settlement path incomplete for remaining open rows."
+  "market_baselines": {
+    "comparable_moneyline_rows": 47,
+    "market_favorite_accuracy": 0.5319148936170213,
+    "model_accuracy": 0.44680851063829785,
+    "market_brier_score": 0.24436640425531914,
+    "model_brier_score": 0.2657151914893617,
+    "brier_improvement_vs_market": -0.021348787234042543,
+    "market_log_loss": 0.6814893875757352,
+    "model_log_loss": 0.7250114403547586,
+    "log_loss_improvement_vs_market": -0.043522052779023435
   },
-  "scoring": {
-    "brier_score": null,
-    "log_loss": null,
-    "ece": null,
-    "mce": null,
-    "reason_unavailable": "Requires immutable calibrated probabilities and leakage-safe labels; not computed in Phase 0."
-  },
-  "baselines": {
-    "always_home": null,
-    "market_favorite": null,
-    "no_vig_market": null,
-    "reason_unavailable": "Blocked until Phase 4–5 chronological replay."
-  },
-  "versions": {
-    "model_version": null,
-    "feature_version": null,
-    "calibration_version": null,
-    "bet_policy_version": null,
-    "calibration_meta_present": true,
-    "calibration_maps_present": true,
-    "calibration_map_points": {
-      "moneyline": 4,
-      "yrfi": 3
-    }
-  },
-  "test_baseline": {
-    "npm_check": "pass",
-    "test_js": { "pass": 112, "fail": 0, "skipped": 5 },
-    "test_py": { "pass": 542, "fail": 0 }
-  },
-  "warnings": [
-    "ROI and CLV are descriptive dumps from current ledger only.",
-    "CLV may be attached to prediction.pick side while P/L uses ledger.side.",
-    "Python backtest is not production JS replay.",
-    "Historical features may include lookahead; do not claim OOS skill."
-  ]
+  "population": "unaudited"
 }

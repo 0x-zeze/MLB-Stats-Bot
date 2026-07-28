@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
+import subprocess
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -441,6 +444,7 @@ def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "accuracy": None,
             "win_rate": None,
             "roi": None,
+            "units_per_bet": None,
             "total_units_staked": 0.0,
             "total_profit_loss": 0.0,
             "average_edge": None,
@@ -457,8 +461,11 @@ def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     profit = sum(safe_float(row.get("profit_loss"), 0.0) for row in bets)
     stakes = [safe_float(row.get("units_staked"), float("nan")) for row in bets]
     total_stake = sum(s for s in stakes if s == s and s > 0)
-    # Fall back to bet-count only when no stake data exists at all.
-    roi = (profit / total_stake) if total_stake > 0 else (profit / len(bets) if bets else None)
+    # ROI is strictly stake-weighted: sum(profit) / sum(stake). When no stake
+    # data exists it is None — never profit/bet-count (that is units_per_bet).
+    roi = (profit / total_stake) if total_stake > 0 else None
+    # units_per_bet is a separate, explicitly-named metric (profit per bet).
+    units_per_bet = (profit / len(bets)) if bets else None
 
     edges = [
         v
@@ -479,6 +486,7 @@ def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "accuracy": wins / len(bets),
         "win_rate": wins / len(bets),
         "roi": roi,
+        "units_per_bet": units_per_bet,
         "total_units_staked": total_stake if total_stake > 0 else None,
         "total_profit_loss": profit,
         "average_edge": (sum(edges) / len(edges)) if edges else None,
@@ -519,12 +527,136 @@ def calibration_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _git_sha() -> str | None:
+    """Current git revision for report provenance (None when unavailable)."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        sha = out.stdout.strip()
+        return sha or None
+    except Exception:
+        return None
+
+
+def _dataset_hash(rows: list[dict[str, Any]]) -> str | None:
+    """Stable hash of the evaluated rows so a report is bound to its dataset."""
+    if not rows:
+        return None
+    canonical = json.dumps(rows, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _american_no_vig_pair(away_odds: float, home_odds: float) -> tuple[float, float] | None:
+    """Same-book American odds -> (away_no_vig, home_no_vig) probabilities."""
+
+    def implied(odds: float) -> float:
+        return 100.0 / (odds + 100.0) if odds > 0 else abs(odds) / (abs(odds) + 100.0)
+
+    try:
+        away_implied = implied(float(away_odds))
+        home_implied = implied(float(home_odds))
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    total = away_implied + home_implied
+    if total <= 0:
+        return None
+    return away_implied / total, home_implied / total
+
+
+def market_baselines(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compare the model against no-vig market baselines on the same rows.
+
+    A model is not 'improved' only because its raw win rate is higher; it must
+    beat the same-period no-vig market on Brier / log loss. Uses the ledger's
+    fair_prob (same-book no-vig when available, else raw implied executable)
+    for the market side and the model's selected-side probability.
+    """
+    bets = [r for r in settled_rows(rows) if str(r.get("market_type", "moneyline")).lower() == "moneyline"]
+    model_probs: list[float] = []
+    market_probs: list[float] = []
+    outcomes: list[float] = []
+    market_favorite_correct = 0
+    comparable = 0
+
+    for row in bets:
+        fair = _decimal_probability(row.get("fair_prob"))
+        model = _decimal_probability(row.get("model_prob"))
+        if fair is None or model is None:
+            continue
+        side = str(row.get("side") or "").strip().lower()
+        won = row_won(row)
+        # Selected-side market/model probabilities.
+        market_probs.append(fair)
+        model_probs.append(model)
+        outcomes.append(won)
+        comparable += 1
+        # Market favorite: the side with fair_prob >= 0.5 wins per the market.
+        market_picked_selected = fair >= 0.5
+        if (market_picked_selected and won == 1) or (not market_picked_selected and won == 0):
+            market_favorite_correct += 1
+
+    if comparable == 0:
+        return {
+            "comparable_moneyline_rows": 0,
+            "market_favorite_accuracy": None,
+            "model_accuracy": None,
+            "market_brier_score": None,
+            "model_brier_score": None,
+            "brier_improvement_vs_market": None,
+            "market_log_loss": None,
+            "model_log_loss": None,
+            "log_loss_improvement_vs_market": None,
+        }
+
+    model_accuracy = sum(outcomes) / comparable
+    market_brier = brier_score(market_probs, outcomes)
+    model_brier = brier_score(model_probs, outcomes)
+    market_ll = log_loss(market_probs, outcomes)
+    model_ll = log_loss(model_probs, outcomes)
+    return {
+        "comparable_moneyline_rows": comparable,
+        "market_favorite_accuracy": market_favorite_correct / comparable,
+        "model_accuracy": model_accuracy,
+        "market_brier_score": market_brier,
+        "model_brier_score": model_brier,
+        # Positive improvement means the model beats the no-vig market.
+        "brier_improvement_vs_market": (market_brier - model_brier) if market_brier is not None and model_brier is not None else None,
+        "market_log_loss": market_ll,
+        "model_log_loss": model_ll,
+        "log_loss_improvement_vs_market": (market_ll - model_ll) if market_ll is not None and model_ll is not None else None,
+    }
+
+
+def report_metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Provenance metadata so a report is bound to revision + dataset."""
+    return {
+        "git_sha": _git_sha(),
+        "dataset_hash": _dataset_hash(rows),
+        "row_count": len(rows),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "evaluator": "src/evaluate.py",
+    }
+
+
 def build_report(rows: list[dict[str, Any]]) -> str:
     """Build a text evaluation report."""
     metrics = calculate_metrics(rows)
     calibration_input = calibration_rows(rows)
+    baselines = market_baselines(rows)
     lines = [
         format_metrics(metrics),
+        "",
+        "Market baselines (no-vig, same period):",
+        f"  comparable moneyline rows: {baselines['comparable_moneyline_rows']}",
+        f"  market favorite accuracy: {_pct(baselines['market_favorite_accuracy'])}",
+        f"  model accuracy: {_pct(baselines['model_accuracy'])}",
+        f"  market Brier: {_flt(baselines['market_brier_score'])}  model Brier: {_flt(baselines['model_brier_score'])}  improvement: {_flt(baselines['brier_improvement_vs_market'])}",
+        f"  market log loss: {_flt(baselines['market_log_loss'])}  model log loss: {_flt(baselines['model_log_loss'])}  improvement: {_flt(baselines['log_loss_improvement_vs_market'])}",
         "",
         *format_group_report(performance_by_confidence(rows), "Performance by Confidence"),
         "",
@@ -537,12 +669,21 @@ def build_report(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _pct(value: Any) -> str:
+    return f"{value * 100:.1f}%" if isinstance(value, (int, float)) else "n/a"
+
+
+def _flt(value: Any) -> str:
+    return f"{value:.4f}" if isinstance(value, (int, float)) else "n/a"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate MLB prediction logs.")
     parser.add_argument("--log", default=str(data_path("predictions_log.csv")), help="Predictions log CSV fallback")
     parser.add_argument("--sqlite", default=str(data_path("state.sqlite")), help="Live SQLite state database")
     parser.add_argument("--market", choices=["moneyline", "yrfi", "all"], default="all")
     parser.add_argument("--report", action="store_true", help="Print evaluation report")
+    parser.add_argument("--json", default=None, help="Write metrics+baselines+metadata JSON to this path")
     return parser.parse_args()
 
 
@@ -565,6 +706,17 @@ def main() -> None:
     if not settled_rows(rows):
         print(empty_data_message(args.sqlite, args.log))
         return
+    if args.json:
+        payload = {
+            "metadata": report_metadata(rows),
+            "metrics": calculate_metrics(rows),
+            "market_baselines": market_baselines(rows),
+            "population": "unaudited",
+        }
+        out_path = Path(args.json)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {out_path}")
     if args.report:
         print(build_report(rows))
     else:

@@ -1,5 +1,5 @@
 {
-  "asOfUtc": "2026-07-28T11:38:02.546Z",
+  "asOfUtc": "2026-07-28T11:43:50.544Z",
   "calibrationArtifact": null,
   "config": null,
   "coreInputs": null,
@@ -23,13 +23,13 @@
   "rawEdge": null,
   "rawHomeProbability": null
 },
-  "predictionTimestampUtc": "2026-07-28T11:38:02.546Z",
+  "predictionTimestampUtc": "2026-07-28T11:43:50.544Z",
   "quotes": {
   "currentOdds": null,
   "openingOdds": null
 },
   "schemaVersion": 1,
-  "snapshotHash": "77c1dd715c5d97898515e42479d29c780595351657d313997d68f1239928a208",
+  "snapshotHash": "69ddd84c744b52c3446bd4c17b94dfef311017112b00c71dc1865ffa2f2b1fc1",
   "teams": {
   "away": {
   "abbreviation": "BBB",
