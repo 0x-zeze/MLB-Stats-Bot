@@ -8,7 +8,7 @@
   "markets": {
     "moneyline": {
       "status": "success",
-      "samples": 1105,
+      "samples": 1116,
       "bins": 8,
       "map_points": 4,
       "low_confidence_bins": false

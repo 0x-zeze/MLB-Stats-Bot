@@ -31,6 +31,60 @@ import { clamp, sigmoid, toNumber } from '../utils.js';
 
 export const PREDICTION_CORE_MODEL_VERSION = 'moneyline-core-v1.0';
 
+/**
+ * Serialize the externally-sourced core input bundle into plain JSON so it can
+ * be frozen into an immutable prediction snapshot for later recompute replay.
+ * Maps become plain objects keyed by id; park factor baselines become an array
+ * of { id, value }. Functions (calibratePercent, weight multiplier) are NOT
+ * serialized — replay reconstructs them from the frozen calibration artifact.
+ */
+export function buildCoreInputsSnapshot({
+  game,
+  teamStats,
+  standings,
+  pitcherStats,
+  pitcherDetails,
+  pitcherRecentStarts,
+  bullpenProfiles,
+  scheduleFatigueProfiles,
+  headToHead,
+  injuryProfiles,
+  lineupProfiles,
+  modelMemory,
+  rollingTeamStats,
+  evolutionControls,
+  parkFactorBaselines
+} = {}) {
+  const mapToObject = (value) => {
+    if (value == null) return null;
+    if (value instanceof Map) return Object.fromEntries(value);
+    return value;
+  };
+  const parkEntries =
+    parkFactorBaselines instanceof Map
+      ? [...parkFactorBaselines.entries()].map(([id, value]) => ({ id, value }))
+      : Array.isArray(parkFactorBaselines)
+        ? parkFactorBaselines
+        : [];
+  return {
+    game: game || null,
+    teamStats: mapToObject(teamStats),
+    standings: mapToObject(standings),
+    pitcherStats: mapToObject(pitcherStats),
+    pitcherDetails: mapToObject(pitcherDetails),
+    pitcherRecentStarts: mapToObject(pitcherRecentStarts),
+    bullpenProfiles: mapToObject(bullpenProfiles),
+    scheduleFatigueProfiles: mapToObject(scheduleFatigueProfiles),
+    headToHead: headToHead || null,
+    injuryProfiles: mapToObject(injuryProfiles),
+    lineupProfiles: lineupProfiles || { away: null, home: null },
+    modelMemory: modelMemory || {},
+    rollingTeamStats: mapToObject(rollingTeamStats),
+    evolutionControls: evolutionControls || {},
+    parkFactorBaselines: parkEntries
+  };
+}
+
 // League-average fallbacks (mirrors DEFAULTS in mlb.js). Kept local so the
 // core carries no import from the network-bound module.
 const DEFAULTS = {
@@ -908,14 +962,24 @@ export function predictGameMoneylineCore(input) {
 
   // Calibration is the FINAL probability transform. Calibrate the favored side
   // and derive the other as its complement so both always sum to 100.
+  // `homeProbability`/`awayProbability` are the display-rounded values used by
+  // every surface. `homeProbabilityPrecise`/`awayProbabilityPrecise` keep the
+  // unrounded calibrated value so replay can compare against the exact
+  // production number without display-rounding noise.
   let homeProbability = rawHomeProbability;
   let awayProbability = rawAwayProbability;
+  let homeProbabilityPrecise = rawHomeProbability;
+  let awayProbabilityPrecise = rawAwayProbability;
   if (rawHomeProbability >= 50) {
     homeProbability = clamp(calibratePercent(rawHomeProbability, 'moneyline'), 30, 70);
     awayProbability = 100 - homeProbability;
+    homeProbabilityPrecise = homeProbability;
+    awayProbabilityPrecise = awayProbability;
   } else {
     awayProbability = clamp(calibratePercent(rawAwayProbability, 'moneyline'), 30, 70);
     homeProbability = 100 - awayProbability;
+    awayProbabilityPrecise = awayProbability;
+    homeProbabilityPrecise = homeProbability;
   }
 
   const modelBreakdown = {
@@ -997,7 +1061,9 @@ export function predictGameMoneylineCore(input) {
     },
     calibrated: {
       awayProbability,
-      homeProbability
+      homeProbability,
+      awayProbabilityPrecise,
+      homeProbabilityPrecise
     },
     modelBreakdown
   };

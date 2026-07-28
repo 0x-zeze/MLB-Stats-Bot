@@ -11,6 +11,12 @@ import { createHash } from 'node:crypto';
 export const SNAPSHOT_SCHEMA_VERSION = 1;
 
 function stableStringify(value) {
+  // Normalize numbers so integral floats (119.0) and ints (119) hash identically.
+  // JSON round-trips can turn an int Map key / value into a float; without this
+  // the same logical input hashes differently after serialization.
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? String(value) : JSON.stringify(value);
+  }
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value);
   }
@@ -40,7 +46,9 @@ export function buildPredictionSnapshot({
   versions = {},
   features = null,
   quotes = null,
-  config = null
+  config = null,
+  coreInputs = null,
+  calibrationArtifact = null
 } = {}) {
   if (!prediction?.gamePk) {
     throw new Error('buildPredictionSnapshot requires prediction.gamePk');
@@ -73,6 +81,7 @@ export function buildPredictionSnapshot({
       openingOdds: prediction.openingOdds || null
     },
     modelInputs: {
+      // Display-rounded calibrated probabilities (what every surface shows).
       pureAwayProbability:
         prediction.away?.pureModelProbability ??
         prediction.modelBreakdown?.pureAwayProbability ??
@@ -81,6 +90,11 @@ export function buildPredictionSnapshot({
         prediction.home?.pureModelProbability ??
         prediction.modelBreakdown?.pureHomeProbability ??
         null,
+      // Unrounded raw (pre-calibration) stages — full precision from modelBreakdown.
+      rawAwayProbability: prediction.modelBreakdown?.rawAwayProbability ?? null,
+      rawHomeProbability: prediction.modelBreakdown?.rawHomeProbability ?? null,
+      dampenedEdge: prediction.modelBreakdown?.dampenedEdge ?? null,
+      rawEdge: prediction.modelBreakdown?.rawEdge ?? null,
       modelBreakdown: prediction.modelBreakdown || null
     },
     decisionInputs: {
@@ -95,6 +109,12 @@ export function buildPredictionSnapshot({
         versions.calibrationVersion || prediction.calibrationVersion || null,
       betPolicyVersion: versions.betPolicyVersion || prediction.betPolicyVersion || null
     },
+    // Frozen raw core inputs (plain JSON, Maps already serialized) + the exact
+    // calibration artifact. When present, replay RECOMPUTES the prediction with
+    // the pure core instead of only projecting stored decision fields.
+    coreInputs: coreInputs || prediction.coreInputs || null,
+    calibrationArtifact:
+      calibrationArtifact || prediction.calibrationArtifact || null,
     config: config || null
   };
 

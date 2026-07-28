@@ -3,62 +3,91 @@
   "mistake_patterns": [
     {
       "caution": "Prefer NO BET or LEAN ONLY when edge is marginal and no Tier 1 signal confirms the side.",
-      "count": 118,
+      "count": 122,
       "factor": "market_edge",
       "latest_summary": "The agent acted on a weak model edge.",
       "pattern_id": "loss-weak-edge",
       "production_authority": "advisory_only",
       "severity": "high",
       "source_loss_ids": [
-        "loss-fb7162387e",
-        "loss-8bc67c2622",
-        "loss-20cd9d1b7a",
-        "loss-b639d7de6d",
         "loss-dffc32ebf8",
         "loss-e58e34e978",
         "loss-4441aae8e1",
-        "loss-34be022efd"
+        "loss-34be022efd",
+        "loss-33180e362b",
+        "loss-db487de519",
+        "loss-4de053c528",
+        "loss-ec686a2b22"
       ],
       "type": "weak_edge"
     },
     {
       "caution": "Do not let record, H2H, or recent form dominate weak game-specific matchup evidence.",
-      "count": 49,
+      "count": 50,
       "factor": "record_context",
       "latest_summary": "The moneyline pick leaned too much on record, form, H2H, or previous-series context instead of game-specific matchup signals.",
       "pattern_id": "loss-record-bias",
       "production_authority": "advisory_only",
       "severity": "high",
       "source_loss_ids": [
-        "loss-61bc02bbae",
         "loss-b9935250d9",
         "loss-3200768147",
         "loss-435bca33fc",
         "loss-11f32f7850",
         "loss-5868ec6a48",
         "loss-dd5a284a50",
-        "loss-efb5672372"
+        "loss-efb5672372",
+        "loss-b0343fc951"
       ],
       "type": "record_bias"
     },
     {
       "caution": "Do not let starting-pitcher edge dominate without offense, lineup, and bullpen confirmation.",
-      "count": 818,
+      "count": 824,
       "factor": "starting_pitcher",
       "pattern_id": "factor-starting-pitcher",
       "production_authority": "advisory_only",
       "reason_quality": {
-        "accuracy": 55.7,
+        "accuracy": 55.4,
         "factor": "starting_pitcher",
-        "loss_mentions": 818,
-        "losses": 378,
-        "sample_size": 854,
+        "loss_mentions": 824,
+        "losses": 385,
+        "sample_size": 864,
         "verdict": "needs_review",
-        "weighted_accuracy": 55.6,
-        "wins": 476
+        "weighted_accuracy": 55.2,
+        "wins": 479
       },
       "severity": "medium",
       "source_loss_ids": [],
+      "type": "factor_needs_review"
+    },
+    {
+      "caution": "Prefer NO BET or LEAN ONLY when edge is marginal and no Tier 1 signal confirms the side.",
+      "count": 122,
+      "factor": "market_edge",
+      "pattern_id": "factor-market-edge",
+      "production_authority": "advisory_only",
+      "reason_quality": {
+        "accuracy": 54.7,
+        "factor": "market_edge",
+        "loss_mentions": 122,
+        "losses": 140,
+        "sample_size": 309,
+        "verdict": "needs_review",
+        "weighted_accuracy": 53.7,
+        "wins": 169
+      },
+      "severity": "medium",
+      "source_loss_ids": [
+        "loss-dffc32ebf8",
+        "loss-e58e34e978",
+        "loss-4441aae8e1",
+        "loss-34be022efd",
+        "loss-33180e362b",
+        "loss-db487de519",
+        "loss-4de053c528",
+        "loss-ec686a2b22"
+      ],
       "type": "factor_needs_review"
     },
     {
@@ -82,49 +111,20 @@
       "type": "factor_needs_review"
     },
     {
-      "caution": "Prefer NO BET or LEAN ONLY when edge is marginal and no Tier 1 signal confirms the side.",
-      "count": 118,
-      "factor": "market_edge",
-      "pattern_id": "factor-market-edge",
-      "production_authority": "advisory_only",
-      "reason_quality": {
-        "accuracy": 54.7,
-        "factor": "market_edge",
-        "loss_mentions": 118,
-        "losses": 140,
-        "sample_size": 309,
-        "verdict": "needs_review",
-        "weighted_accuracy": 53.7,
-        "wins": 169
-      },
-      "severity": "medium",
-      "source_loss_ids": [
-        "loss-fb7162387e",
-        "loss-8bc67c2622",
-        "loss-20cd9d1b7a",
-        "loss-b639d7de6d",
-        "loss-dffc32ebf8",
-        "loss-e58e34e978",
-        "loss-4441aae8e1",
-        "loss-34be022efd"
-      ],
-      "type": "factor_needs_review"
-    },
-    {
       "caution": "Use this repeated miss pattern as caution context; current validated data still wins.",
-      "count": 49,
+      "count": 50,
       "factor": "record_recent_form",
       "pattern_id": "factor-record-recent-form",
       "production_authority": "advisory_only",
       "reason_quality": {
-        "accuracy": 53.6,
+        "accuracy": 53.7,
         "factor": "record_recent_form",
-        "loss_mentions": 49,
+        "loss_mentions": 50,
         "losses": 213,
-        "sample_size": 459,
+        "sample_size": 460,
         "verdict": "needs_review",
-        "weighted_accuracy": 53.6,
-        "wins": 246
+        "weighted_accuracy": 53.7,
+        "wins": 247
       },
       "severity": "medium",
       "source_loss_ids": [],
@@ -160,11 +160,11 @@
   "production_authority": "advisory_memory_only",
   "rollback_supported": true,
   "sample": {
-    "evaluated": 1105,
-    "language_losses": 1105,
-    "lessons": 1105,
-    "wrong_predictions": 494
+    "evaluated": 1116,
+    "language_losses": 1116,
+    "lessons": 1116,
+    "wrong_predictions": 501
   },
-  "updated_at": "2026-07-27T02:26:13.079719+00:00",
+  "updated_at": "2026-07-28T05:02:32.242275+00:00",
   "version": "audit-memory-v1.0"
 }

@@ -234,6 +234,67 @@ export function hasCalibrationMap(market = 'moneyline') {
   return artifact.mapPresent && artifact.mode !== 'identity';
 }
 
+/**
+ * Pure calibration from an explicit frozen artifact — no filesystem, no cache.
+ * Used by snapshot replay so the exact historical calibration is applied
+ * without silently substituting the newest on-disk map.
+ *
+ * @param {number} rawProbability 0-1
+ * @param {object} artifact { mode, mapping, shrinkFactor? }
+ * @returns {number} calibrated probability 0-1
+ */
+export function calibrateProbabilityWithArtifact(rawProbability, artifact) {
+  const raw = Number(rawProbability);
+  if (!Number.isFinite(raw)) return rawProbability;
+  const mode = String(artifact?.mode || 'identity');
+  const mapping = Array.isArray(artifact?.mapping) ? artifact.mapping : null;
+  const shrinkFactor = Number.isFinite(Number(artifact?.shrinkFactor))
+    ? Number(artifact.shrinkFactor)
+    : 0.5;
+
+  const shrink = (p) => 0.5 + (p - 0.5) * (1 - shrinkFactor);
+
+  if (mode === 'map' && mapping && mapping.length > 0) {
+    return clamp(interpolate(mapping, raw), 0.05, 0.95);
+  }
+  if (mode === 'map_low_sample_shrink') {
+    let base = mapping && mapping.length > 0 ? interpolate(mapping, raw) : raw;
+    base = shrink(base);
+    return clamp(base, 0.05, 0.95);
+  }
+  if (mode === 'shrink_toward_50') {
+    return clamp(shrink(raw), 0.05, 0.95);
+  }
+  // identity
+  return raw;
+}
+
+/**
+ * Percent-scale convenience for replay (matches calibratePercent rounding).
+ * @param {number} rawPercent 0-100
+ * @param {object} artifact
+ */
+export function calibratePercentWithArtifact(rawPercent, artifact) {
+  const raw = Number(rawPercent);
+  if (!Number.isFinite(raw)) return rawPercent;
+  const side = raw > 1 ? raw / 100 : raw;
+  return Math.round(calibrateProbabilityWithArtifact(side, artifact) * 1000) / 10;
+}
+
+/** Build a frozen, serializable calibration artifact from the live loader. */
+export function freezeCalibrationArtifact(market = 'moneyline') {
+  const artifact = getCalibrationArtifact(market);
+  const mapping = loadCalibrationMaps()[artifact.market] || null;
+  return {
+    market: artifact.market,
+    mode: artifact.mode,
+    mapping: mapping ? mapping.map((p) => [Number(p[0]), Number(p[1])]) : null,
+    shrinkFactor: SHRINKAGE_FACTOR[artifact.market] ?? null,
+    artifactHash: artifact.artifactHash,
+    calibrationVersion: artifact.calibrationVersion
+  };
+}
+
 /** Attach artifact identity onto a prediction object (mutates lightly). */
 export function attachCalibrationIdentity(prediction, market = 'moneyline') {
   if (!prediction || typeof prediction !== 'object') return prediction;
