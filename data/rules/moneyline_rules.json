@@ -63,6 +63,17 @@
       "notes": "option.side !== ctx.modelFavoredSide (computed in host from pureModelProbabilityForSide)."
     },
     {
+      "id": "js.value_profile",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 65,
+      "action": "NO_BET",
+      "handler": "valueProfile",
+      "params": { "scope_side": "home", "min_raw_edge": 0.5, "max_raw_edge": 1.0, "max_odds": -110, "min_odds": -160 },
+      "message": "di luar zona value empiris (HOME + rawEdge 0.5..1.0 + odds -160..-110)",
+      "notes": "Empirical +ROI window from 1168 graded picks (2026-04-28..2026-07-29): HOME pick + modelBreakdown.rawEdge in [0.5,1.0] + odds in [-160,-110] = 127 samples, 64.6% WR, +8.9% ROI. HOME-scoped only: away picks pass through untouched so the legacy away-underdog value niche stays intact (backtest covered HOME only). In-sample; review every ~2 weeks. abs() on rawEdge for robustness."
+    },
+    {
       "id": "js.conviction_floor",
       "engines": ["js"],
       "tier": 1,

@@ -370,6 +370,7 @@ test('record dominated favorite is downgraded to no bet even with positive value
       moneylineBook: 'FanDuel'
     },
     modelBreakdown: {
+      rawEdge: 0.6,
       matchupEdge: 0.04,
       recordContextEdge: 0.22,
       recordDominated: true

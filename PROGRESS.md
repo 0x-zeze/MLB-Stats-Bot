@@ -11,6 +11,37 @@ Branch: `main` (WIP committed here per request).
 
 ---
 
+## UPDATE — `js.value_profile` empirical value gate (HOME-scoped)
+
+Added a 14th default-path JS handler `valueProfile` (rule `js.value_profile`,
+order 65) that downgrades a **HOME** pick to NO_BET when it falls outside the
+empirically profitable window: `rawEdge ∈ [0.5,1.0]` and `odds ∈ [-160,-110]`.
+Backtest basis: 1168 graded picks (2026-04-28..07-29) → that window = 127
+samples, 64.6% WR, +8.9% ROI vs −1.7% baseline on all odds picks. In-sample;
+flagged for ~2-week review.
+
+**Key design decision (option B):** the gate is **HOME-scoped** (`scope_side:
+"home"`). Away picks pass through untouched — the legacy away-underdog value
+niche (conviction floor + quality + away-dog limit) is preserved because the
+backtest covered HOME only. An earlier `home_only:true` draft blocked all away
+picks and collided with the away-value test; scoping to HOME resolved it with
+**zero changes to existing goldens**.
+
+- `src/rule_engine.js` — `valueProfile` handler.
+- `data/rules/moneyline_rules.json` — `js.value_profile` rule.
+- `tests/fixtures/moneyline_corpus.js` — 5 new `value_profile_*` isolation cases
+  (in-window VALUE; rawEdge low/high, odds juicy/heavy → NO BET). Corpus 25 cases.
+- `tests/fixtures/moneyline_goldens.json` — re-captured (25); only the 5 new
+  entries differ from the prior 20.
+- `tests/test_moneyline_value_engine.js` — record-dominated case given in-window
+  `rawEdge:0.6` so the record/H2H downgrade (not the gate) owns the primary reason.
+
+Gates: `npm run check` OK; JS `node --test tests/*.js` 175 pass / 0 fail / 5 skip;
+Python unittest 487 (3 errors are pre-existing `pytest`-not-installed import
+fails, unrelated).
+
+---
+
 ## 0. One thing the plan got wrong (correction)
 
 `src/market_comparison.py` has **NO** NO_BET/LEAN/BET thresholds. It is pure math:

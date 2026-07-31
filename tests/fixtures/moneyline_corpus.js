@@ -4,9 +4,10 @@
 // captured from the pre-refactor implementation. Builders are called at
 // evaluation time so freshness-sensitive timestamps stay "now".
 //
-// Covers the 13 default-path JS handlers (the two audit-guardrail handlers only
+// Covers the 14 default-path JS handlers (the two audit-guardrail handlers only
 // fire when an approved evolution rule is present — those are exercised by
 // tests/test_moneyline_value_engine.js with a temp MLB_EVOLUTION_DATA_DIR).
+// The five value_profile_* cases isolate the HOME-scoped empirical value gate.
 
 function fresh() {
   return new Date().toISOString();
@@ -63,12 +64,15 @@ function game(overrides = {}) {
 
 // A strong, clean home-favorite VALUE pick used as the base for single-rule
 // isolation: high conviction, winning record, favored side, fresh close odds.
+// rawEdge 0.6 sits inside the js.value_profile window so the base stays VALUE
+// eligible; cases that isolate other rules override rawEdge out of the window.
 function cleanHome(overrides = {}) {
   return game({
     away: { winProbability: 36, record: { wins: 30, losses: 45, pct: '.400' } },
     home: { winProbability: 64, record: { wins: 45, losses: 30, pct: '.600' } },
     currentOdds: { awayMoneyline: 150, homeMoneyline: -130, moneylineBook: 'FanDuel', oddsFetchedAt: fresh() },
     modelBreakdown: {
+      rawEdge: 0.6,
       matchupEdge: 0.3,
       recordContextEdge: 0.02,
       recordDominated: false,
@@ -78,6 +82,29 @@ function cleanHome(overrides = {}) {
       lineupEdge: 0.05
     },
     ...overrides
+  });
+}
+
+// js.value_profile gate coverage. Each case is a clean HOME favorite that
+// passes every other rule (edge >= 4%, quality >= .520, conviction >= 52,
+// 5 model factors agree, fresh odds, confirmed lineups, pitcher present);
+// only the one value_profile window dimension under test is pushed out of
+// range, so the gate fires — or not — in isolation.
+function valueProfileCase({ rawEdge, homeMoneyline, homeProb = 64, awayProb = 36 }) {
+  return game({
+    away: { winProbability: awayProb, record: { wins: 30, losses: 45, pct: '.400' } },
+    home: { winProbability: homeProb, record: { wins: 45, losses: 30, pct: '.600' } },
+    currentOdds: { awayMoneyline: 150, homeMoneyline, moneylineBook: 'FanDuel', oddsFetchedAt: fresh() },
+    modelBreakdown: {
+      rawEdge,
+      matchupEdge: 0.3,
+      recordContextEdge: 0.02,
+      recordDominated: false,
+      starterEdge: 0.2,
+      offenseEdge: 0.1,
+      bullpenEdge: 0.05,
+      lineupEdge: 0.05
+    }
   });
 }
 
@@ -114,7 +141,8 @@ export const CORPUS = {
   away_underdog_over_115: () => game({
     away: { winProbability: 64, record: { wins: 45, losses: 30, pct: '.600' } },
     home: { winProbability: 36, record: { wins: 30, losses: 45, pct: '.400' } },
-    currentOdds: { awayMoneyline: 160, homeMoneyline: -150, moneylineBook: 'FanDuel', oddsFetchedAt: fresh() }
+    currentOdds: { awayMoneyline: 160, homeMoneyline: -150, moneylineBook: 'FanDuel', oddsFetchedAt: fresh() },
+    modelBreakdown: { rawEdge: 0.6, matchupEdge: 0.3, recordContextEdge: 0.02, recordDominated: false, starterEdge: 0.2, offenseEdge: 0.1, bullpenEdge: 0.05, lineupEdge: 0.05 }
   }),
 
   away_underdog_exactly_115: () => game({
@@ -137,6 +165,7 @@ export const CORPUS = {
 
   sharp_contra: () => cleanHome({
     modelBreakdown: {
+      rawEdge: 0.6,
       matchupEdge: 0.3, recordContextEdge: 0.02, recordDominated: false,
       starterEdge: 0.2, offenseEdge: 0.1, bullpenEdge: 0.05, lineupEdge: 0.05,
       sharpMoney: { direction: 'against_model', magnitude: 12 }
@@ -145,6 +174,7 @@ export const CORPUS = {
 
   sharp_contra_exactly_10: () => cleanHome({
     modelBreakdown: {
+      rawEdge: 0.6,
       matchupEdge: 0.3, recordContextEdge: 0.02, recordDominated: false,
       starterEdge: 0.2, offenseEdge: 0.1, bullpenEdge: 0.05, lineupEdge: 0.05,
       sharpMoney: { direction: 'against_model', magnitude: 10 }
@@ -153,7 +183,7 @@ export const CORPUS = {
 
   record_dominated: () => cleanHome({
     currentOdds: { awayMoneyline: 125, homeMoneyline: -110, moneylineBook: 'FanDuel', oddsFetchedAt: fresh() },
-    modelBreakdown: { matchupEdge: 0.04, recordContextEdge: 0.22, recordDominated: true }
+    modelBreakdown: { rawEdge: 0.6, matchupEdge: 0.04, recordContextEdge: 0.22, recordDominated: true }
   }),
 
   // The next four handlers are all gated on `option.edge < STRONG_VALUE_EDGE
@@ -164,14 +194,14 @@ export const CORPUS = {
     home: { winProbability: 56, record: { wins: 45, losses: 30, pct: '.600' } },
     away: { winProbability: 44, record: { wins: 30, losses: 45, pct: '.400' } },
     currentOdds: { awayMoneyline: undefined, homeMoneyline: -140, moneylineBook: 'FanDuel', oddsFetchedAt: fresh() },
-    modelBreakdown: { matchupEdge: 0.05, recordContextEdge: 0.02, recordDominated: false, starterEdge: 0.2, offenseEdge: 0.1, bullpenEdge: 0.05, lineupEdge: 0.05 }
+    modelBreakdown: { rawEdge: 0.6, matchupEdge: 0.05, recordContextEdge: 0.02, recordDominated: false, starterEdge: 0.2, offenseEdge: 0.1, bullpenEdge: 0.05, lineupEdge: 0.05 }
   }),
 
   few_factors_agree: () => cleanHome({
     home: { winProbability: 56, record: { wins: 45, losses: 30, pct: '.600' } },
     away: { winProbability: 44, record: { wins: 30, losses: 45, pct: '.400' } },
     currentOdds: { awayMoneyline: undefined, homeMoneyline: -140, moneylineBook: 'FanDuel', oddsFetchedAt: fresh() },
-    modelBreakdown: { matchupEdge: 0.3, recordContextEdge: 0.02, recordDominated: false, starterEdge: 0.2, offenseEdge: -0.1, bullpenEdge: -0.05, lineupEdge: -0.05 }
+    modelBreakdown: { rawEdge: 0.6, matchupEdge: 0.3, recordContextEdge: 0.02, recordDominated: false, starterEdge: 0.2, offenseEdge: -0.1, bullpenEdge: -0.05, lineupEdge: -0.05 }
   }),
 
   lineup_incomplete: () => cleanHome({
@@ -197,7 +227,17 @@ export const CORPUS = {
     away: { winProbability: 40, record: { wins: 30, losses: 45, pct: '.400' }, starter: null },
     home: { winProbability: 60, record: { wins: 40, losses: 40, pct: '.500' } },
     currentOdds: { awayMoneyline: 180, homeMoneyline: -200, moneylineBook: 'FanDuel', oddsFetchedAt: fresh() },
-    modelBreakdown: { matchupEdge: 0.02, recordContextEdge: 0.3, recordDominated: true },
+    modelBreakdown: { rawEdge: 0.6, matchupEdge: 0.02, recordContextEdge: 0.3, recordDominated: true },
     lineups: { away: { confirmed: false, count: 3 }, home: { confirmed: false, count: 5 } }
-  })
+  }),
+
+  value_profile_in_window: () => valueProfileCase({ rawEdge: 0.6, homeMoneyline: -140 }),
+
+  value_profile_raw_edge_low: () => valueProfileCase({ rawEdge: 0.2, homeMoneyline: -140 }),
+
+  value_profile_raw_edge_high: () => valueProfileCase({ rawEdge: 1.5, homeMoneyline: -140 }),
+
+  value_profile_odds_too_juicy: () => valueProfileCase({ rawEdge: 0.6, homeMoneyline: -105 }),
+
+  value_profile_odds_too_heavy: () => valueProfileCase({ rawEdge: 0.6, homeMoneyline: -200, homeProb: 74, awayProb: 26 })
 };

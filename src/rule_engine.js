@@ -97,6 +97,29 @@ export const JS_HANDLERS = {
     return { fired: ctx.option.side !== ctx.modelFavoredSide };
   },
 
+  // Empirical value window (HOME-scoped). Backtested 1168 graded picks
+  // (Apr–Jul 2026): HOME + rawEdge in [0.5,1.0] + odds in [-160,-110] =
+  // 127 samples, 64.6% WR, +8.9% ROI vs baseline −1.7% on all odds picks.
+  // This gate ONLY scopes the side named by params.scope_side (default
+  // 'home'): a HOME pick outside the window is downgraded to NO_BET, while
+  // picks on any other side pass through untouched so the legacy away-value
+  // niche (conviction floor + quality + away-dog limit) stays intact.
+  valueProfile(ctx, params) {
+    const { option } = ctx;
+    const scopeSide = params.scope_side || 'home';
+    // Out of scope (e.g. away pick): gate stays silent, other rules decide.
+    if (option.side !== scopeSide) return { fired: false };
+    const minEdge = toNumber(params.min_raw_edge, 0.5);
+    const maxEdge = toNumber(params.max_raw_edge, 1.0);
+    const maxOdds = toNumber(params.max_odds, -110);
+    const minOdds = toNumber(params.min_odds, -160);
+    const rawEdge = Math.abs(toNumber(ctx.item.modelBreakdown?.rawEdge, 0));
+    if (rawEdge < minEdge || rawEdge > maxEdge) return { fired: true };
+    const odds = Number(option.odds);
+    if (odds > maxOdds || odds < minOdds) return { fired: true };
+    return { fired: false };
+  },
+
   // src/mlb.js:566-568 — calibrated conviction floor.
   convictionFloor(ctx, params) {
     const floor = toNumber(params.min_probability, 52);
