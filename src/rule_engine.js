@@ -51,9 +51,11 @@ export const JS_HANDLERS = {
     return reason ? { fired: true, override: reason } : { fired: false };
   },
 
-  // src/mlb.js:533-535 — configurable value-edge floor.
+  // src/mlb.js:533-535 — configurable value-edge floor. Skipped when the
+  // validated model-away vs market-home disagreement bypass is active.
   edgeFloor(ctx) {
     const { option, edgeThreshold } = ctx;
+    if (ctx.disagreementAwayBypass) return { fired: false };
     if (option.edge < edgeThreshold) {
       return {
         fired: true,
@@ -116,8 +118,10 @@ export const JS_HANDLERS = {
     return { fired: false };
   },
 
-  // src/mlb.js:566-568 — calibrated conviction floor.
+  // src/mlb.js:566-568 — calibrated conviction floor. Skipped when the
+  // validated model-away vs market-home disagreement bypass is active.
   convictionFloor(ctx, params) {
+    if (ctx.disagreementAwayBypass) return { fired: false };
     const floor = toNumber(params.min_probability, 52);
     const prob = toNumber(ctx.option.modelProbability, 0);
     if (prob < floor) {
@@ -200,6 +204,16 @@ export const JS_HANDLERS = {
     const probEdge = Math.abs(toNumber(ctx.option.modelProbability, 50) - 50);
     const fired = (ctx.option.edge < maxValueEdge || probEdge < maxProbEdge) && matchupEdge < maxMatchup;
     return { fired: Boolean(fired) };
+  },
+
+  // Model-vs-market disagreement bypass (validated by scripts/model_edge_validation.py).
+  // When model picks AWAY while market favors HOME, this rule marks the case as
+  // a validated disagreement. It does NOT fire itself — it only annotates ctx so
+  // the host can relax edge/conviction floors for this asymmetric edge.
+  // Walk-forward: train 81% WR, test 97% WR, n=183 (2026-07-02..08-03).
+  // The other direction (model home vs market away) is NOT promoted.
+  disagreementAway(ctx) {
+    return { fired: false };
   },
 
   // src/mlb.js:634-638 — an incomplete lineup with sub-strong value edge.

@@ -20,12 +20,20 @@ The output is for analysis and education. It is not guaranteed betting advice.
 ## Operating posture (2026-08)
 
 - **No edge claim.** Ledger/evaluate still show model trailing no-vig market
-  (negative Brier improvement vs market) and weak probability ranking.
+  on broad evaluation, even though recent odds-available slices show strong
+  directional accuracy.
 - **Selection is conservative research mode:** existing hard NO_BET guardrails
   stay; empirical “value profile” gates stay **off** until holdout proves them.
-- **Promotion bar for any new filter:** pre-registered holdout (see
-  `scripts/holdout_validate_rule.py`), n large enough, WR above odds break-even,
-  non-negative ROI — not in-sample mining alone.
+- **Market-anchored residual:** VALUE grading can borrow a small amount of
+  no-vig market probability via `MONEYLINE_MARKET_RESIDUAL_WEIGHT`. Default is
+  **0**; only raise it when `npm run model:validate` shows walk-forward gains.
+- **Disagreement bypass:** `js.disagreement_away` relaxes edge/conviction floors
+  when model picks away but market favors home — the validated asymmetric edge
+  (81–97% WR walk-forward, n=183). Only this direction is promoted; the reverse
+  is not.
+- **Promotion bar for any new filter or weight:** pre-registered holdout, n
+  large enough, WR above odds break-even, non-negative ROI — not in-sample
+  mining alone.
 - **Modeling priority** over more selection rules: improve rank-order vs market
   before adding edge slices.
 

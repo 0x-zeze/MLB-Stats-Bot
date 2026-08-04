@@ -18,6 +18,7 @@ import {
   filterSplitsBeforeDate
 } from './temporal_contract.js';
 import { predictGameMoneylineCore, buildCoreInputsSnapshot, PREDICTION_CORE_MODEL_VERSION } from './core/prediction_core.js';
+import { marketAnchoredProbabilities } from './market_residual.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const _mlbConfig = loadConfig();
@@ -512,7 +513,7 @@ function moneylineValueOption(item, side) {
   if (!Number.isFinite(Number(odds)) || impliedProbability === null) return null;
 
   const team = side === 'away' ? item.away : item.home;
-  const modelProbability = pureModelProbabilityForSide(item, side);
+  let modelProbability = pureModelProbabilityForSide(item, side);
 
   // Fair de-vig only when both sides share the same bookmaker. Best executable
   // side price may still come from line shopping (side-specific book).
@@ -525,7 +526,19 @@ function moneylineValueOption(item, side) {
   const fairFromDevig =
     devig?.usableAsFair && devig[side] != null ? (side === 'away' ? devig.away : devig.home) : null;
   const fairProbability = fairFromDevig != null ? fairFromDevig : impliedProbability;
-  const edge = modelProbability - fairProbability;
+
+  // Market-anchored residual: when explicitly enabled, grading probability
+  // borrows a small amount of no-vig market signal. The model's own pick and
+  // displayed win probabilities stay untouched; this only changes VALUE
+  // probability/edge math so sizing/edge are less miscalibrated.
+  const anchored = marketAnchoredProbabilities({
+    modelHomeProbability: pureModelProbabilityForSide(item, 'home'),
+    modelAwayProbability: pureModelProbabilityForSide(item, 'away'),
+    homeMoneyline: item.currentOdds?.homeMoneyline,
+    awayMoneyline: item.currentOdds?.awayMoneyline
+  });
+  const gradingProbability = anchored ? (side === 'away' ? anchored.away : anchored.home) : modelProbability;
+  const edge = gradingProbability - fairProbability;
   const sideBook =
     side === 'away'
       ? item.currentOdds?.awayMoneylineBook || item.currentOdds?.moneylineBook
@@ -539,6 +552,8 @@ function moneylineValueOption(item, side) {
     odds,
     book: sideBook || 'market',
     modelProbability: round1(modelProbability),
+    gradingProbability: round1(gradingProbability),
+    marketResidualWeight: anchored ? anchored.weight : 0,
     impliedProbability: round1(impliedProbability),
     fairProbability: round1(fairProbability),
     fairSource: fairFromDevig != null ? 'same_book_devig' : 'raw_implied_executable',
@@ -547,7 +562,7 @@ function moneylineValueOption(item, side) {
     edge: round1(edge),
     // Quarter-Kelly stake (% of bankroll) off the calibrated model probability
     // and offered odds. null when there is no positive-EV stake.
-    kellyStakePercent: edge > 0 ? quarterKellyPercent(modelProbability, odds) : null
+    kellyStakePercent: edge > 0 ? quarterKellyPercent(gradingProbability, odds) : null
   };
 }
 
@@ -604,7 +619,17 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
     oddsFreshnessReason: moneylineOddsFreshnessReason(item),
     modelFavoredSide: pureModelProbabilityForSide(item, 'home') >= pureModelProbabilityForSide(item, 'away') ? 'home' : 'away',
     pickedTeamWinPct: leagueRecordPct(pickedTeamRecord),
-    getEvolutionRule
+    getEvolutionRule,
+    // Disagreement bypass: when model picks away but market favors home, this is
+    // the validated asymmetric edge (scripts/model_edge_validation.py). The host
+    // uses this flag to relax edge/conviction floors for this specific case.
+    disagreementAwayBypass: (() => {
+      const modelHomeProb = pureModelProbabilityForSide(item, 'home');
+      const modelAwayProb = 100 - modelHomeProb;
+      const marketHomeProb = toNumber(option.fairProbability ?? option.impliedProbability, 50);
+      const marketAwayProb = 100 - marketHomeProb;
+      return modelAwayProb > modelHomeProb && marketHomeProb > marketAwayProb;
+    })()
   };
   return evaluateMoneyline(ctx);
 }
@@ -685,6 +710,8 @@ export function applyMoneylineValueMarket(item) {
         odds: best.odds,
         book: best.book,
         modelProbability: best.modelProbability,
+        gradingProbability: best.gradingProbability ?? best.modelProbability,
+        marketResidualWeight: best.marketResidualWeight ?? 0,
         impliedProbability: best.impliedProbability,
         edge: best.edge,
         reason: reasons[0] || `model ${best.modelProbability.toFixed(1)}% vs implied ${best.impliedProbability.toFixed(1)}%`,

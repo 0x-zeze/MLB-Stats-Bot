@@ -86,6 +86,17 @@
       "notes": "option.modelProbability < min_probability. prob = modelProbability.toFixed(1); floor renders as String(min_probability) == '52' to match template-literal ${MIN_VALUE_PROBABILITY}."
     },
     {
+      "id": "js.disagreement_away",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 75,
+      "action": "NO_BET",
+      "handler": "disagreementAway",
+      "params": {},
+      "message": "disagreement model-away vs market-home terdeteksi",
+      "notes": "Validated by scripts/model_edge_validation.py: model-away vs market-home disagreement shows 81-97% WR walk-forward (n=183). This rule never fires; it exists as a marker for the host to relax edge/conviction floors when this asymmetric edge is detected. Only promotes the validated direction; model-home vs market-away is not promoted."
+    },
+    {
       "id": "js.sharp_contra",
       "engines": ["js"],
       "tier": 1,

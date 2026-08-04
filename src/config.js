@@ -60,6 +60,11 @@ function numberFromEnv(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function positiveIntFromEnv(value, fallback) {
+  const parsed = intFromEnv(value, fallback);
+  return parsed > 0 ? parsed : fallback;
+}
+
 export function loadConfig() {
   loadDotEnv();
 
@@ -81,6 +86,25 @@ export function loadConfig() {
     modelMemory: boolFromEnv(process.env.MODEL_MEMORY, true),
     minimumMoneylineEdge: numberFromEnv(process.env.MINIMUM_MONEYLINE_EDGE, 0.04),
     moneylineOddsMaxAgeMinutes: numberFromEnv(process.env.MONEYLINE_ODDS_MAX_AGE_MINUTES, 10),
+    // Market-anchored residual probability for VALUE grading only. 0 disables
+    // blending; positive values borrow a small amount of no-vig market signal
+    // while keeping the model's own pick/winner intact.
+    moneylineMarketResidualWeight: numberFromEnv(process.env.MONEYLINE_MARKET_RESIDUAL_WEIGHT, 0),
+    news: {
+      enabled: boolFromEnv(process.env.NEWS_ENABLED, false),
+      feeds: process.env.NEWS_FEEDS_JSON || '',
+      timeoutMs: positiveIntFromEnv(process.env.NEWS_REQUEST_TIMEOUT_MS, 8000),
+      cacheTtlMs: positiveIntFromEnv(process.env.NEWS_CACHE_TTL_MINUTES, 15) * 60 * 1000,
+      staleIfErrorMs: positiveIntFromEnv(process.env.NEWS_STALE_IF_ERROR_HOURS, 12) * 60 * 60 * 1000,
+      maxResponseBytes: positiveIntFromEnv(process.env.NEWS_MAX_RESPONSE_BYTES, 1000000),
+      maxItems: positiveIntFromEnv(process.env.NEWS_MAX_ITEMS_PER_FEED, 25),
+      maxArticlesPerGame: positiveIntFromEnv(process.env.NEWS_MAX_ARTICLES_PER_GAME, 5),
+      maxTitleChars: positiveIntFromEnv(process.env.NEWS_MAX_TITLE_CHARS, 240),
+      maxSummaryChars: positiveIntFromEnv(process.env.NEWS_MAX_SUMMARY_CHARS, 600),
+      maxAgeHours: positiveIntFromEnv(process.env.NEWS_MAX_AGE_HOURS, 48),
+      includePicks: boolFromEnv(process.env.NEWS_INCLUDE_PICKS, false),
+      includeAlerts: boolFromEnv(process.env.NEWS_INCLUDE_ALERTS, false)
+    },
     interactiveAgent: boolFromEnv(process.env.INTERACTIVE_AGENT, true),
     printAlertToTerminal: boolFromEnv(process.env.PRINT_ALERT_TO_TERMINAL, false),
     maxGamesPerMessage: intFromEnv(process.env.MAX_GAMES_PER_MESSAGE, 8),
