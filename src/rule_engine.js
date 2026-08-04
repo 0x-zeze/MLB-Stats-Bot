@@ -97,13 +97,9 @@ export const JS_HANDLERS = {
     return { fired: ctx.option.side !== ctx.modelFavoredSide };
   },
 
-  // Empirical value window (HOME-scoped). Backtested 1168 graded picks
-  // (Apr–Jul 2026): HOME + rawEdge in [0.5,1.0] + odds in [-160,-110] =
-  // 127 samples, 64.6% WR, +8.9% ROI vs baseline −1.7% on all odds picks.
-  // This gate ONLY scopes the side named by params.scope_side (default
-  // 'home'): a HOME pick outside the window is downgraded to NO_BET, while
-  // picks on any other side pass through untouched so the legacy away-value
-  // niche (conviction floor + quality + away-dog limit) stays intact.
+  // Empirical value window (HOME-scoped). DISABLED via enabled:false in
+  // moneyline_rules.json. Claimed 127@64.6% not reproducible; holdout n small.
+  // Re-arm with enabled:true only after holdout_validate_rule.py clears bar.
   valueProfile(ctx, params) {
     const { option } = ctx;
     const scopeSide = params.scope_side || 'home';
@@ -237,7 +233,7 @@ export const JS_HANDLERS = {
 // is applied by the host in applyMoneylineValueMarket).
 export function evaluateMoneyline(ctx) {
   const rules = loadMoneylineRules().rules
-    .filter((rule) => rule.engines.includes('js'))
+    .filter((rule) => rule.engines.includes('js') && rule.enabled !== false)
     .sort((a, b) => a.order - b.order);
 
   const reasons = [];

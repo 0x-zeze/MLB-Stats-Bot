@@ -11,14 +11,15 @@ Branch: `main` (WIP committed here per request).
 
 ---
 
-## UPDATE — `js.value_profile` empirical value gate (HOME-scoped)
+## UPDATE — `js.value_profile` empirical value gate (HOME-scoped) — DISABLED
 
-Added a 14th default-path JS handler `valueProfile` (rule `js.value_profile`,
-order 65) that downgrades a **HOME** pick to NO_BET when it falls outside the
-empirically profitable window: `rawEdge ∈ [0.5,1.0]` and `odds ∈ [-160,-110]`.
-Backtest basis: 1168 graded picks (2026-04-28..07-29) → that window = 127
-samples, 64.6% WR, +8.9% ROI vs −1.7% baseline on all odds picks. In-sample;
-flagged for ~2-week review.
+Added a 14th JS handler `valueProfile` (rule `js.value_profile`, order 65) that
+was intended to NO_BET HOME picks outside `rawEdge ∈ [0.5,1.0]` and
+`odds ∈ [-160,-110]`. Claimed basis: 1168 graded picks (2026-04-28..07-29) →
+127 samples, 64.6% WR, +8.9% ROI. **2026-08 holdout audit:** claim not
+reproducible from stored payloads (~24 @ 50% WR / negative ROI in-sample;
+holdout n=12). Rule set to `"enabled": false` (inactive; handler retained). Re-check with
+`npm run holdout:value-profile` before re-arming.
 
 **Key design decision (option B):** the gate is **HOME-scoped** (`scope_side:
 "home"`). Away picks pass through untouched — the legacy away-underdog value

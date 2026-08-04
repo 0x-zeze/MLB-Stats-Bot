@@ -59,7 +59,12 @@ def _load_rules_params(rules_path: Path) -> dict[str, Any]:
         return {}
     for rule in catalog.get("rules") or []:
         if rule.get("id") == "js.value_profile":
-            return dict(rule.get("params") or {})
+            params = dict(rule.get("params") or {})
+            engines = rule.get("engines") or []
+            params["_engines"] = list(engines)
+            # Live only when JS-scoped and not explicitly disabled.
+            params["_live"] = "js" in engines and rule.get("enabled") is not False
+            return params
     return {}
 
 
@@ -377,6 +382,8 @@ def analyze(
 
     return {
         "rule_id": "js.value_profile",
+        "rule_live": bool(params.get("_live")),
+        "rule_engines": list(params.get("_engines") or []),
         "filter": {
             "scope_side": scope_side,
             "min_raw_edge": min_raw_edge,
@@ -415,6 +422,10 @@ def _print_report(report: dict[str, Any]) -> None:
     print("=" * 64)
     print("js.value_profile holdout validation")
     print("=" * 64)
+    live = report.get("rule_live")
+    if live is False:
+        print("NOTE: rule is DISABLED in moneyline_rules.json (enabled:false).")
+        print("      This script still scores the *filter* on history for research.")
     print(
         f"Filter: side={f['scope_side']} rawEdge=[{f['min_raw_edge']},{f['max_raw_edge']}] "
         f"odds=[{f['min_odds']},{f['max_odds']}]"

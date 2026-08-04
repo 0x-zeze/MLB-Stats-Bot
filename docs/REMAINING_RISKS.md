@@ -26,6 +26,7 @@ data wall, and evaluator market baselines.
 | Live snapshots do not yet persist `coreInputs` | **Mitigated for new predictions** — `getMlbPredictions` freezes coreInputs and `storage.js` persists them; older rows remain projection-only |
 | Totals not on pure core | **Open** — only moneyline extracted; totals still a separate path |
 | YRFI/NRFI market | **Closed** — removed; no per-game edge, was advisory-only |
+| `js.value_profile` empirical gate | **Disabled** (`enabled:false`) — claimed 127@64.6% not reproducible; holdout n=12 |
 
 ## P2
 

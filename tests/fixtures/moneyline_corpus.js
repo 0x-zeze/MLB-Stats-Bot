@@ -85,11 +85,10 @@ function cleanHome(overrides = {}) {
   });
 }
 
-// js.value_profile gate coverage. Each case is a clean HOME favorite that
-// passes every other rule (edge >= 4%, quality >= .520, conviction >= 52,
-// 5 model factors agree, fresh odds, confirmed lineups, pitcher present);
-// only the one value_profile window dimension under test is pushed out of
-// range, so the gate fires — or not — in isolation.
+// js.value_profile is DISABLED (engines=[]). Cases remain as regression
+// fixtures: clean HOME favorites that pass every other rule. With the gate
+// off they all resolve VALUE; re-arm the rule and re-capture goldens to
+// re-isolate rawEdge/odds window dimensions.
 function valueProfileCase({ rawEdge, homeMoneyline, homeProb = 64, awayProb = 36 }) {
   return game({
     away: { winProbability: awayProb, record: { wins: 30, losses: 45, pct: '.400' } },

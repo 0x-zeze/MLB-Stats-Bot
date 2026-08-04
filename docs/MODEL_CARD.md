@@ -17,6 +17,18 @@ moneyline model-pick only.
 
 The output is for analysis and education. It is not guaranteed betting advice.
 
+## Operating posture (2026-08)
+
+- **No edge claim.** Ledger/evaluate still show model trailing no-vig market
+  (negative Brier improvement vs market) and weak probability ranking.
+- **Selection is conservative research mode:** existing hard NO_BET guardrails
+  stay; empirical “value profile” gates stay **off** until holdout proves them.
+- **Promotion bar for any new filter:** pre-registered holdout (see
+  `scripts/holdout_validate_rule.py`), n large enough, WR above odds break-even,
+  non-negative ROI — not in-sample mining alone.
+- **Modeling priority** over more selection rules: improve rank-order vs market
+  before adding edge slices.
+
 ## Data Sources
 
 - MLB StatsAPI schedule, game, venue, probable pitcher, standings, and boxscore context.

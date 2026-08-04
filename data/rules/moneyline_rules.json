@@ -65,13 +65,14 @@
     {
       "id": "js.value_profile",
       "engines": ["js"],
+      "enabled": false,
       "tier": 1,
       "order": 65,
       "action": "NO_BET",
       "handler": "valueProfile",
       "params": { "scope_side": "home", "min_raw_edge": 0.5, "max_raw_edge": 1.0, "max_odds": -110, "min_odds": -160 },
       "message": "di luar zona value empiris (HOME + rawEdge 0.5..1.0 + odds -160..-110)",
-      "notes": "Empirical +ROI window from 1168 graded picks (2026-04-28..2026-07-29): HOME pick + modelBreakdown.rawEdge in [0.5,1.0] + odds in [-160,-110] = 127 samples, 64.6% WR, +8.9% ROI. HOME-scoped only: away picks pass through untouched so the legacy away-underdog value niche stays intact (backtest covered HOME only). In-sample; review every ~2 weeks. abs() on rawEdge for robustness."
+      "notes": "DISABLED 2026-08 (enabled:false). Claimed in-sample 127 @ 64.6% WR / +8.9% ROI was not reproducible from stored picks (rebuild ~24 @ 50% WR / negative ROI); holdout n=12 too small. Re-enable only after npm run holdout:value-profile shows holdout n>=30 and WR above ~55-58% for -160..-110."
     },
     {
       "id": "js.conviction_floor",
