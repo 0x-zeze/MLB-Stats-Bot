@@ -216,6 +216,27 @@ export const JS_HANDLERS = {
     return { fired: false };
   },
 
+  // Multi-factor confidence gate: block VALUE when SP/form/lineup/injury factors
+  // strongly oppose the pick, unless the validated disagreement-away bypass is on.
+  factorConfidence(ctx, params) {
+    if (ctx.disagreementAwayBypass) return { fired: false };
+    const level = ctx.option?.confidenceLevel || ctx.item?.valueConfidence?.level || ctx.item?.pickConfidence?.level;
+    const minLevel = params.min_level || 'sedang';
+    const order = { rendah: 0, sedang: 1, tinggi: 2, elite: 3 };
+    const current = order[String(level || 'rendah').toLowerCase()] ?? 0;
+    const required = order[String(minLevel).toLowerCase()] ?? 1;
+    if (current < required) {
+      return {
+        fired: true,
+        tokens: {
+          level: level || 'rendah',
+          summary: ctx.option?.confidenceSummary || ctx.item?.pickConfidence?.summary || 'faktor lemah'
+        }
+      };
+    }
+    return { fired: false };
+  },
+
   // src/mlb.js:634-638 — an incomplete lineup with sub-strong value edge.
   lineupIncomplete(ctx, params) {
     const minCount = toNumber(params.min_count, 9);

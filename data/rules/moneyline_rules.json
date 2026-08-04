@@ -97,6 +97,17 @@
       "notes": "Validated by scripts/model_edge_validation.py: model-away vs market-home disagreement shows 81-97% WR walk-forward (n=183). This rule never fires; it exists as a marker for the host to relax edge/conviction floors when this asymmetric edge is detected. Only promotes the validated direction; model-home vs market-away is not promoted."
     },
     {
+      "id": "js.factor_confidence",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 76,
+      "action": "NO_BET",
+      "handler": "factorConfidence",
+      "params": { "min_level": "sedang" },
+      "message": "multi-factor confidence {level}: {summary}",
+      "notes": "Blocks VALUE when multi-factor confidence (SP/form/H2H/injury/lineup/bullpen) is below min_level. Uses confidence_signals.js built from existing modelBreakdown. Skipped under disagreementAwayBypass."
+    },
+    {
       "id": "js.sharp_contra",
       "engines": ["js"],
       "tier": 1,

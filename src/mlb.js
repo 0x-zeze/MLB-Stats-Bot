@@ -19,6 +19,7 @@ import {
 } from './temporal_contract.js';
 import { predictGameMoneylineCore, buildCoreInputsSnapshot, PREDICTION_CORE_MODEL_VERSION } from './core/prediction_core.js';
 import { marketAnchoredProbabilities } from './market_residual.js';
+import { attachPickConfidence, buildPickConfidence } from './confidence_signals.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
 const _mlbConfig = loadConfig();
@@ -555,8 +556,14 @@ function moneylineValueOption(item, side) {
       ? item.currentOdds?.awayMoneylineBook || item.currentOdds?.moneylineBook
       : item.currentOdds?.homeMoneylineBook || item.currentOdds?.moneylineBook;
 
+  // Multi-factor confidence (SP/form/H2H/injury/lineup) adjusts stake after
+  // disagreement boost. Elite factors up to 1.25x; weak factors down to 0.75x.
+  const factorConfidence = buildPickConfidence(item, side);
+  const confidenceMultiplier = factorConfidence?.stakeMultiplier ?? 1.0;
+
   const baseKelly = edge > 0 ? quarterKellyPercent(gradingProbability, odds) : null;
-  const kellyStakePercent = baseKelly !== null ? round1(baseKelly * disagreementBoost) : null;
+  const kellyStakePercent =
+    baseKelly !== null ? round1(baseKelly * disagreementBoost * confidenceMultiplier) : null;
 
   return {
     side,
@@ -576,6 +583,10 @@ function moneylineValueOption(item, side) {
     edge: round1(edge),
     disagreementBoost,
     isDisagreement: isDisagreement && side === 'away',
+    confidenceLevel: factorConfidence?.level ?? null,
+    confidenceScore: factorConfidence?.score ?? null,
+    confidenceSummary: factorConfidence?.summary ?? null,
+    confidenceMultiplier,
     // Quarter-Kelly stake (% of bankroll) off the calibrated model probability
     // and offered odds. null when there is no positive-EV stake.
     kellyStakePercent
@@ -733,6 +744,10 @@ export function applyMoneylineValueMarket(item) {
         kellyStakePercent: best.kellyStakePercent,
         disagreementBoost: best.disagreementBoost ?? 1,
         isDisagreement: best.isDisagreement ?? false,
+        confidenceLevel: best.confidenceLevel ?? null,
+        confidenceScore: best.confidenceScore ?? null,
+        confidenceSummary: best.confidenceSummary ?? null,
+        confidenceMultiplier: best.confidenceMultiplier ?? 1,
         reason: reasons[0] || `model ${best.modelProbability.toFixed(1)}% vs implied ${best.impliedProbability.toFixed(1)}%`,
         reasons,
         auditAdjustments,
@@ -746,6 +761,9 @@ export function applyMoneylineValueMarket(item) {
         auditAdjustments,
         auditMemoryNotes: memoryNotes
       };
+
+  // Multi-factor pick confidence for display (SP/form/H2H/injury/lineup).
+  attachPickConfidence(item);
 
   return item;
 }
@@ -782,9 +800,14 @@ export function moneylineDecisionLines(item) {
   // A graded bet (cleared the conviction floor): show the actionable priced pick
   // framed by its confidence. By construction the value side is >=62% here.
   if (decision.status === 'VALUE') {
+    const factorLevel = decision.confidenceLevel || item?.pickConfidence?.level || item?.valueConfidence?.level;
+    const factorSummary = decision.confidenceSummary || item?.valueConfidence?.summary || item?.pickConfidence?.summary;
+    const factorLine = factorLevel
+      ? ` | factors ${factorLevel}${factorSummary ? ` — ${factorSummary}` : ''}`
+      : '';
     return [
       uiKV('💰', 'Pick', `${decision.teamName} ${formatMoneylineOdds(decision.odds)} | ${decision.book}`),
-      uiKV('🎚️', 'Confidence', `${confidenceText(toNumber(decision.modelProbability, 0))} | edge ${decision.edge >= 0 ? '+' : ''}${toNumber(decision.edge, 0).toFixed(1)}%`)
+      uiKV('🎚️', 'Confidence', `${confidenceText(toNumber(decision.modelProbability, 0))} | edge ${decision.edge >= 0 ? '+' : ''}${toNumber(decision.edge, 0).toFixed(1)}%${factorLine}`)
     ];
   }
 
