@@ -71,7 +71,23 @@ function migrateStorage() {
   run(nodeCommand(), ['scripts/migrate_state_to_sqlite.js']);
 }
 
+function runModelValidation() {
+  console.log('Running moneyline model validation (npm run model)...');
+  const result = spawnSync(npmCommand(), ['run', 'model'], {
+    cwd: rootDir,
+    stdio: 'inherit'
+  });
+  if (result.error) {
+    console.warn(`Model validation failed to start: ${result.error.message}`);
+    return;
+  }
+  if (result.status !== 0) {
+    console.warn(`Model validation exited with code ${result.status}; continuing startup.`);
+  }
+}
+
 ensureRootDependencies();
 ensureDashboardDependencies();
 ensurePythonDependencies();
 migrateStorage();
+runModelValidation();
