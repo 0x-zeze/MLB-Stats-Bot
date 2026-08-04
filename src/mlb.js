@@ -823,14 +823,25 @@ export function moneylineDecisionLines(item) {
   }
 
   // Below the floor or no odds: show the MODEL's favored side as an advisory
-  // lean with its confidence — never dressed up as a recommended bet.
+  // lean with multi-factor confidence — never dressed up as a recommended bet.
   const model = modelPickSide(item);
+  const factorLevel = decision.confidenceLevel || item?.pickConfidence?.level;
+  const factorSummary = decision.confidenceSummary || item?.pickConfidence?.summary;
+  const factorLine = factorLevel
+    ? ` | factors ${factorLevel}${factorSummary ? ` — ${factorSummary}` : ''}`
+    : '';
   const oddsContext = item.valuePick && Number.isFinite(Number(item.valuePick.odds))
     ? ` | best price ${formatMoneylineOdds(item.valuePick.odds)} ${item.valuePick.book}`
     : '';
-  return [
-    uiKV('🎚️', 'Confidence', `${model.team?.name || 'lean'} ${confidenceText(model.percent)} (advisory)${oddsContext}`)
+  const lines = [
+    uiKV('🎚️', 'Confidence', `${model.team?.name || 'lean'} ${confidenceText(model.percent)} (advisory)${factorLine}${oddsContext}`)
   ];
+  // Surface news risk even when not hard-vetoing (informational).
+  const riskFlags = item?.newsContext?.newsRisk?.flags || [];
+  if (riskFlags.length) {
+    lines.push(uiKV('📰', 'News risk', riskFlags.map((f) => f.flag).slice(0, 4).join(', ')));
+  }
+  return lines;
 }
 
 function dataQualityText(item) {
@@ -3131,6 +3142,20 @@ export function formatPredictions(
         uiSection('🏥', 'Injury Report'),
         ...injuryLines,
         '',
+        // Always surface news risk flags when present (veto support), even if
+        // full news section is off. Probability impact remains none.
+        ...((item.newsContext?.newsRisk?.flags || []).length
+          ? [
+              uiSection('📰', 'News Risk'),
+              ...item.newsContext.newsRisk.flags.slice(0, 4).map((f) =>
+                uiBullet('•', `[${f.severity}] ${f.flag}${f.title ? `: ${f.title}` : ''}`)
+              ),
+              item.newsContext.newsRisk.veto
+                ? uiKV('🛑', 'Veto', (item.newsContext.newsRisk.vetoReasons || []).join(' | '))
+                : null,
+              ''
+            ]
+          : []),
         ...(includeNews
           ? [
               uiSection('📰', 'External News'),

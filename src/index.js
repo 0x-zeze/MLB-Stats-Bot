@@ -860,7 +860,12 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
   const pick = predictionPick(prediction);
   const agentActive = Boolean(prediction.agentAnalysis);
   const reasons = agentActive ? prediction.agentAnalysis.reasons : prediction.reasons;
-  const confidence = agentActive ? prediction.agentAnalysis.confidence : 'model';
+  const pickConfidence = prediction.pickConfidence || prediction.valueConfidence;
+  const confidence = agentActive
+    ? prediction.agentAnalysis.confidence
+    : pickConfidence?.level
+      ? `${pickConfidence.level}${pickConfidence.summary ? ` — ${pickConfidence.summary}` : ''}`
+      : 'model';
   const pickProbability =
     pick.id === prediction.away.id ? probabilities.away : probabilities.home;
   const opponent = pick.id === prediction.away.id ? prediction.home : prediction.away;
@@ -872,7 +877,21 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
   const modelReferenceLines = prediction.modelReferenceLines?.length
     ? prediction.modelReferenceLines.map((line) => `• ${line}`)
     : [`• ${prediction.modelReferenceLine}`];
-
+  const newsRisk = prediction.newsContext?.newsRisk;
+  const newsRiskLines = newsRisk?.flags?.length
+    ? [
+        uiSection('📰', 'News Risk'),
+        ...newsRisk.flags.slice(0, 4).map((f) => `• [${f.severity}] ${f.flag}: ${f.title || f.source || ''}`),
+        newsRisk.veto ? uiKV('🛑', 'Veto', (newsRisk.vetoReasons || []).join(' | ')) : null,
+        ''
+      ]
+    : prediction.newsContext?.status && prediction.newsContext.status !== 'disabled'
+      ? [
+          uiSection('📰', 'News'),
+          uiBullet('•', `status ${prediction.newsContext.status} | articles ${prediction.newsContext.articles?.length || 0}`),
+          ''
+        ]
+      : [];
 
   return [
     uiTitle('📊', 'MLB Prediction'),
@@ -888,6 +907,7 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
     uiKV('📈', 'Win Probability', percent(pickProbability)),
     uiKV('🥊', 'Opponent', `${opponent.name} | ${percent(opponentProbability)}`),
     uiKV('🎚️', 'Confidence', confidence),
+    uiKV('📌', 'Status', prediction.betDecision?.status || 'n/a'),
     ...moneylineDecisionLines(prediction),
     uiKV('📡', 'Source', agentActive ? 'Analyst Agent + live MLB stats' : 'Baseline model + live MLB stats'),
     '',
@@ -905,6 +925,7 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
     uiSection('🏥', 'Injury Report'),
     ...injuryLines,
     '',
+    ...newsRiskLines,
     uiSection('🧠', 'ML Reference'),
     ...modelReferenceLines,
     '',
