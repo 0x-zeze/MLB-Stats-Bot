@@ -68,7 +68,7 @@ No production code was modified for this baseline.
 | bet_ledger | 81 |
 | line_snapshots | 1406 |
 | feature_snapshots | 958 |
-| yrfi_results | 1145 |
+| yrfi_results | 1145 (historical only; no longer written/read after YRFI removal) |
 | line_alerts | 15 |
 | chat_history | 20 |
 | chat_settings | 1 |
@@ -126,7 +126,7 @@ CLV in `evaluatePostGames` uses `prediction.pick`; P/L uses `bet_ledger.side`.
 
 - `game_pk TEXT PRIMARY KEY` + `ON CONFLICT DO UPDATE` → **mutable prediction identity**.
 - No `prediction_run_id`, model/feature/calibration/policy versions, or snapshot hash.
-- `ON DELETE CASCADE` from picks can delete financial children (`bet_ledger`, `yrfi_results`).
+- `ON DELETE CASCADE` from picks can delete financial children (`bet_ledger`; historical `yrfi_results` rows if present).
 
 ### `bet_ledger`
 
@@ -182,7 +182,7 @@ Safer date-aware paths exist (`fetchRollingTeamStats`, bullpen/fatigue/H2H/etc.)
 ### 5.4 Calibration
 
 - Runtime maps present in data dir (`calibration_maps.json`, meta claims success).
-- Maps are **sparse** (moneyline 4 points, yrfi 3 points); no artifact hash bound per prediction.
+- Maps are **sparse** (moneyline); YRFI maps retired with the market removal. Artifact hash bound per new prediction where supported.
 - JS (`src/calibration.js`) and Python calibrators can diverge; silent identity fallback when maps missing.
 - `maybeQueueCalibrationRetrain` can auto-retrain after settled multiples — promotion path not evidence-gated.
 
@@ -289,7 +289,7 @@ Existing reusable tests: `tests/test_bet_ledger.js`, moneyline value engine, fea
 |----|---------|
 | P3-manual-check-file-list | package.json check enumerates files |
 | P3-model-card-todos | incomplete performance docs |
-| P3-yrfi-synthetic-pl | evaluate mixes populations |
+| P3-yrfi-synthetic-pl | **Closed** — YRFI path removed from evaluate |
 
 ---
 

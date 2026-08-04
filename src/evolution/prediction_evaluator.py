@@ -137,11 +137,6 @@ def _predicted_probability(trajectory: dict[str, Any], market: str, lean: str) -
         if lean.lower().startswith("under"):
             return probability(prediction.get("under_probability"), 0.5)
         return probability(prediction.get("over_probability"), 0.5)
-    if market == "yrfi":
-        # stored yrfi_probability is the YES (run in 1st inning) probability;
-        # a NO pick wins when no run scores, so invert.
-        yes_prob = probability(prediction.get("yrfi_probability"), 0.5)
-        return 1.0 - yes_prob if lean.strip().upper() == "NO" else yes_prob
     return probability(prediction.get("moneyline_probability"), 0.5)
 
 
@@ -155,8 +150,6 @@ def _has_predicted_probability(trajectory: dict[str, Any], market: str, lean: st
     prediction = trajectory.get("prediction") or {}
     if market == "totals":
         key = "under_probability" if lean.lower().startswith("under") else "over_probability"
-    elif market == "yrfi":
-        key = "yrfi_probability"
     else:
         key = "moneyline_probability"
     return prediction.get(key) not in (None, "")
@@ -311,17 +304,6 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         elif lean.lower().startswith("under"):
             correct = line is not None and actual_total < line
             status = "win" if correct else "loss"
-    elif not no_bet and market == "yrfi":
-        first_inning_run = final_result.get("first_inning_run")
-        if first_inning_run is not None:
-            if lean.upper() == "YES":
-                correct = bool(first_inning_run)
-            else:
-                correct = not bool(first_inning_run)
-            status = "win" if correct else "loss"
-        else:
-            status = "no_bet"
-            no_bet = True
     elif not no_bet:
         predicted_winner = lean
         # Use word-boundary matching to avoid "Sox" matching both "Red Sox" and "White Sox"
@@ -391,7 +373,6 @@ def evaluate_prediction(trajectory: dict[str, Any], final_result: dict[str, Any]
         "actual_total": actual_total,
         "moneyline_correct": correct if market == "moneyline" else None,
         "total_lean_correct": correct if market == "totals" else None,
-        "yrfi_nrfi_correct": correct if market == "yrfi" else None,
         "no_bet_appropriate": no_bet_appropriate,
         "profit_loss": profit_loss,
         "clv": _clv(trajectory, final_result, lean),

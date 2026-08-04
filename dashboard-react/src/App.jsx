@@ -5,7 +5,6 @@ import HeroSection from './components/HeroSection.jsx';
 import TodaySlate from './components/TodaySlate.jsx';
 import PredictionDetail from './components/PredictionDetail.jsx';
 import MoneylineSection from './components/MoneylineSection.jsx';
-import YrfiSection from './components/YrfiSection.jsx';
 import TeamAnalytics from './components/TeamAnalytics.jsx';
 import DataQualitySection from './components/DataQualitySection.jsx';
 import MemorySection from './components/MemorySection.jsx';
@@ -145,7 +144,6 @@ export default function App() {
           {selectedGame && <PredictionDetail game={selectedGame} onClose={() => setSelectedGame(null)} />}
           <div className="grid lg:grid-cols-2 gap-6">
             <MoneylineSection games={games} />
-            <YrfiSection games={games} />
           </div>
         </div>
       )}
@@ -166,13 +164,6 @@ export default function App() {
         </div>
       )}
 
-
-      {activeTab === 'yrfi' && (
-        <div className="space-y-6 animate-fade-in">
-          <h2 className="text-xl font-black uppercase tracking-tight text-ink">YRFI / NRFI Analysis</h2>
-          <YrfiSection games={games} />
-        </div>
-      )}
 
       {activeTab === 'backtest' && (
         <div className="space-y-6 animate-fade-in">

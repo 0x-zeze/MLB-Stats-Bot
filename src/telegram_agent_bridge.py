@@ -10,7 +10,6 @@ from .agent_tools import (
     get_game_context,
     get_today_games,
     predict_moneyline,
-    predict_yrfi,
 )
 from .knowledge.baseball_knowledge import BaseballKnowledgeBase
 from .utils import format_probability
@@ -23,7 +22,7 @@ KNOWLEDGE_QUESTIONS = {
     "bullpen": "Why is bullpen fatigue important for MLB betting?",
     "market": "How do moneyline odds become implied probability?",
     "value": "Why can a team be favored but still not be a good value bet?",
-    "markets": "What is the difference between moneyline and YRFI/NRFI?",
+    "markets": "What is the difference between moneyline and totals bets?",
     "f5": "What are the best indicators for first 5 innings bets?",
 }
 
@@ -105,22 +104,6 @@ def moneyline(game_id: str) -> dict[str, Any]:
 
 
 
-def yrfi(game_id: str) -> dict[str, Any]:
-    result = predict_yrfi(game_id)
-    quality = result.get("quality_report", {})
-    lines = [
-        "YRFI / NRFI",
-        result.get("matchup", "-"),
-        f"Lean: {result.get('lean', '-')}",
-        f"YRFI: {_pct(result.get('yrfi_probability'))}",
-        f"NRFI: {_pct(result.get('nrfi_probability'))}",
-        f"Confidence: {result.get('confidence', '-')}",
-        f"Decision: {result.get('decision', '-')}",
-        f"Quality: {quality.get('score', 0)}/100",
-        f"No-bet: {'YES' if result.get('no_bet') else 'NO'}",
-    ]
-    return {"text": "\n".join(lines)}
-
 def context(game_id: str) -> dict[str, Any]:
     item = get_game_context(game_id)
     weather = item.get("weather", {})
@@ -138,20 +121,17 @@ def context(game_id: str) -> dict[str, Any]:
 
 def full(game_id: str) -> dict[str, Any]:
     ml = predict_moneyline(game_id)
-    first = predict_yrfi(game_id)
-    quality = first.get("quality_report", ml.get("quality_report", {}))
+    quality = ml.get("quality_report", {})
     lines = [
         "MLB Game Analysis",
         ml["matchup"],
         f"ML pick: {ml['predicted_winner']} ({ml['confidence']})",
         f"Home/Away: {_pct(ml['home_win_probability'])} / {_pct(ml['away_win_probability'])}",
-        f"YRFI lean: {first.get('lean', '-')} ({first.get('confidence', '-')})",
-        f"YRFI/NRFI: {_pct(first.get('yrfi_probability'))} / {_pct(first.get('nrfi_probability'))}",
-        f"Decision: ML {ml.get('decision', '-')} | YRFI {first.get('decision', '-')}",
+        f"Decision: ML {ml.get('decision', '-')}",
         f"Quality: {quality.get('score', 0)}/100",
         "",
         "Factors:",
-        *[f"- {factor}" for factor in (ml.get("main_factors", []) + first.get("main_factors", []))[:4]],
+        *[f"- {factor}" for factor in ml.get("main_factors", [])[:4]],
         f"No-bet: {'YES' if ml.get('no_bet') else 'NO'}",
     ]
     return {"text": "\n".join(lines)}
@@ -183,8 +163,6 @@ def main(argv: list[str] | None = None) -> None:
         _json(game_menu(value))
     elif action == "moneyline":
         _json(moneyline(value))
-    elif action == "yrfi":
-        _json(yrfi(value))
     elif action == "context":
         _json(context(value))
     elif action == "full":

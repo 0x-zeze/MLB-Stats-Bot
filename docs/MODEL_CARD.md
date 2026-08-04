@@ -6,9 +6,14 @@ This document is a credibility template. Do not fill in performance numbers unle
 
 The project estimates MLB pre-game probabilities and leans for:
 
-- Moneyline winner.
-- Total runs / over-under lean.
-- First inning YRFI/NRFI context.
+- Moneyline winner (primary market).
+- Total runs / over-under lean (secondary path; not the promotion focus).
+
+**YRFI/NRFI removed (2026-08):** First-inning-run prediction was retired after
+historical analysis showed no per-game edge (near-zero correlation with
+outcomes; severe overconfidence in high probability bins). The market had
+already been advisory-only (`YRFI_ACTIVE` off by default). Scope is now
+moneyline model-pick only.
 
 The output is for analysis and education. It is not guaranteed betting advice.
 
@@ -65,8 +70,8 @@ prediction snapshots persist:
 
 Calibration is intended to be fit chronologically out-of-fold. Automatic
 post-settlement retraining is **proposal-only** and cannot promote an artifact.
-The current maps are sparse (moneyline 4 points, YRFI 3 points), so they are
-not evidence of robust OOS calibration by themselves.
+The current moneyline maps are sparse, so they are not evidence of robust OOS
+calibration by themselves. YRFI calibration maps are no longer trained or applied.
 
 ## Backtest Report
 

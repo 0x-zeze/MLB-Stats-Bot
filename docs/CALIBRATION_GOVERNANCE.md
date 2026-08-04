@@ -94,7 +94,8 @@ calibrationStatus = insufficient_sample
 
 ## 9. Per-market separation
 
-Moneyline, totals, and YRFI/NRFI each have their own calibration artifact. One
+Moneyline (and totals if active) each have their own calibration artifact. YRFI/NRFI
+calibration was retired with the market. One
 map is never shared across markets.
 
 ## 10. Related

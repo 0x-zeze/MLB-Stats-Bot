@@ -18,16 +18,13 @@ class PerMarketCalibratorTests(unittest.TestCase):
 
     def test_calibrate_passthrough_when_no_map(self):
         with patch.object(pc, "_cached_maps", {}):
-            self.assertEqual(pc.calibrate(0.62, market="yrfi"), 0.62)
+            self.assertEqual(pc.calibrate(0.62, market="moneyline"), 0.62)
 
     def test_calibrate_uses_market_specific_map(self):
         maps = {
             "moneyline": [(0.4, 0.35), (0.6, 0.55)],
-            "yrfi": [(0.4, 0.50), (0.6, 0.50)],  # flat -> always 0.50
         }
         with patch.object(pc, "_cached_maps", maps):
-            # totals map collapses everything toward 0.50
-            self.assertAlmostEqual(pc.calibrate(0.55, market="yrfi"), 0.50, places=4)
             # moneyline map interpolates 0.5 -> 0.45
             self.assertAlmostEqual(pc.calibrate(0.5, market="moneyline"), 0.45, places=4)
 
@@ -50,8 +47,8 @@ class PerMarketCalibratorTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             outcomes = Path(tmp) / "prediction_outcomes.csv"
             rows = ["game_id,market,result,brier_score,evaluation_json"]
-            # 60 moneyline rows spread across probability bins, win-rate tracks prob.
-            for i in range(60):
+            # 80 moneyline rows spread across probability bins (80% train = 64 >= MIN_SAMPLES=50).
+            for i in range(80):
                 prob = 0.40 + (i % 6) * 0.04
                 won = 1 if (i % 10) < int(prob * 10) else 0
                 ej = json.dumps({"model_probability": prob})
@@ -68,8 +65,6 @@ class PerMarketCalibratorTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "success")
             self.assertIn("moneyline", result["calibrated_markets"])
-            # yrfi had no samples -> skipped, not crashed
-            self.assertEqual(result["markets"]["yrfi"]["status"], "skipped")
             self.assertTrue(maps_path.exists())
             # legacy file kept in sync for older readers
             self.assertTrue(legacy_path.exists())

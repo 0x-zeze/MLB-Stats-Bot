@@ -1,7 +1,7 @@
 """Isotonic regression calibrator for model probabilities.
 
 Maps raw model probabilities to calibrated probabilities using historical
-prediction outcomes, per active market (moneyline, yrfi). Uses
+prediction outcomes, per active market (moneyline). Uses
 piecewise-linear interpolation from binned averages (no sklearn dependency).
 """
 
@@ -20,34 +20,28 @@ _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _OUTCOMES_PATH = _DATA_DIR / "evolution" / "prediction_outcomes.csv"
 # Legacy single-market (moneyline) map; kept for backward compatibility.
 _CALIBRATION_MAP_PATH = _DATA_DIR / "calibration_map.json"
-# Per-market maps: {"moneyline": [[x,y],...], "yrfi": [...]}.
+# Per-market maps: {"moneyline": [[x,y],...]}.
 _CALIBRATION_MAPS_PATH = _DATA_DIR / "calibration_maps.json"
 # Per-market fit metadata, including sample counts used by runtime policy gates.
 _CALIBRATION_META_PATH = _DATA_DIR / "calibration_meta.json"
 _SQLITE_PATH = _DATA_DIR / "state.sqlite"
 
-_MARKETS = ("moneyline", "yrfi")
+_MARKETS = ("moneyline",)
 
 _MIN_SAMPLES = 50
 _BUCKET_SIZE = 0.03
 _MIN_BIN_COUNT = 3
 
 # Per-market overrides for low-volume markets. Moneyline has enough samples for
-# tight defaults. YRFI is thinner: a wider bucket lets it form stable bins, but
-# the per-bin floor stays at 4 so a tiny tail bin cannot become an extreme anchor.
-# Markets absent here use the defaults.
-_MARKET_PARAMS: dict[str, dict[str, float]] = {
-    "yrfi": {"min_samples": 40, "bucket_size": 0.05, "min_bin_count": 4},
-}
+# tight defaults. Markets absent here use the defaults.
+_MARKET_PARAMS: dict[str, dict[str, float]] = {}
 
 _SQLITE_MARKET_PARAMS: dict[str, dict[str, float]] = {
     "moneyline": {"min_samples": 25, "bucket_size": 0.04, "min_bin_count": 2},
-    "yrfi": {"min_samples": 30, "bucket_size": 0.05, "min_bin_count": 2},
 }
 
 _MIN_ISOTONIC_SAMPLES_FOR_TRUST = {
     "moneyline": 150,  # isotonic overfits below this; use shrinkage instead
-    "yrfi": 40,
 }
 
 _SHRINKAGE_FACTOR = {
@@ -191,8 +185,6 @@ def _normalize_probability(value: Any) -> float | None:
 
 def _normalize_market(value: Any) -> str | None:
     market = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if market in {"first_inning", "yrfi", "nrfi"}:
-        return "yrfi"
     if market == "moneyline":
         return "moneyline"
     return None
@@ -204,7 +196,7 @@ def _extract_predicted_probability(row: dict[str, Any]) -> float | None:
         try:
             data = json.loads(eval_json)
             # The evaluator stores the authoritative per-market win probability
-            # for the picked side here (moneyline and yrfi alike). Prefer
+            # for the picked side here. Prefer
             # it so every active market calibrates, not just moneyline.
             predicted = safe_float(data.get("predicted_probability"), None)
             if predicted is not None:
@@ -229,18 +221,24 @@ def _extract_predicted_probability(row: dict[str, Any]) -> float | None:
     return None
 
 
-def _make_isotonic(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """Apply pool adjacent violators to enforce monotonicity."""
+def _make_isotonic(points: list[tuple[float, float, int]]) -> list[tuple[float, float]]:
+    """Apply weighted pool adjacent violators to enforce monotonicity.
+
+    Each point is (x, y, count). PAV merges use sample-count weighted averages
+    so large bins dominate over small outlier bins.
+    """
     if not points:
         return []
     points = sorted(points, key=lambda p: p[0])
 
-    blocks: list[list[tuple[float, float]]] = [[points[0]]]
+    blocks: list[list[tuple[float, float, int]]] = [[points[0]]]
     for point in points[1:]:
         blocks.append([point])
         while len(blocks) >= 2:
-            last_avg = sum(p[1] for p in blocks[-1]) / len(blocks[-1])
-            prev_avg = sum(p[1] for p in blocks[-2]) / len(blocks[-2])
+            last_n = sum(p[2] for p in blocks[-1])
+            prev_n = sum(p[2] for p in blocks[-2])
+            last_avg = sum(p[1] * p[2] for p in blocks[-1]) / last_n if last_n else 0.0
+            prev_avg = sum(p[1] * p[2] for p in blocks[-2]) / prev_n if prev_n else 0.0
             if prev_avg <= last_avg:
                 break
             blocks[-2].extend(blocks[-1])
@@ -248,8 +246,9 @@ def _make_isotonic(points: list[tuple[float, float]]) -> list[tuple[float, float
 
     result: list[tuple[float, float]] = []
     for block in blocks:
-        avg_x = sum(p[0] for p in block) / len(block)
-        avg_y = sum(p[1] for p in block) / len(block)
+        total_n = sum(p[2] for p in block)
+        avg_x = sum(p[0] * p[2] for p in block) / total_n if total_n else sum(p[0] for p in block) / len(block)
+        avg_y = sum(p[1] * p[2] for p in block) / total_n if total_n else sum(p[1] for p in block) / len(block)
         result.append((avg_x, avg_y))
     return result
 
@@ -275,7 +274,7 @@ def _fit_market_map(
         bucket_idx = int(prob / bucket_size)
         buckets.setdefault(bucket_idx, []).append((prob, outcome))
 
-    binned_points: list[tuple[float, float]] = []
+    binned_points: list[tuple[float, float, int]] = []
     low_confidence_bins = False
     for bucket_idx in sorted(buckets):
         points = buckets[bucket_idx]
@@ -285,7 +284,7 @@ def _fit_market_map(
             low_confidence_bins = True
         avg_prob = sum(p[0] for p in points) / len(points)
         avg_outcome = sum(p[1] for p in points) / len(points)
-        binned_points.append((avg_prob, avg_outcome))
+        binned_points.append((avg_prob, avg_outcome, len(points)))
 
     if len(binned_points) < 3:
         return None, {
@@ -316,7 +315,7 @@ def _fit_market_map(
     # Degenerate guard: if pool-adjacent-violators collapsed everything to a single
     # flat level (all y within 1e-6), the market has no monotonic signal — the
     # mapping would just pull every probability to one constant (this is what
-    # happened to yrfi: a single [0.598 -> 0.406] point). Skip it and let
+    # happened historically: a single [0.598 -> 0.406] point). Skip it and let
     # calibrate() fall back to the raw probability, which is strictly safer than
     # forcing a constant. A genuine calibration map needs >=2 distinct outputs.
     distinct_y = {round(y, 6) for _, y in calibration_map}
@@ -358,10 +357,6 @@ def _write_calibration_maps(
                 "min_samples_for_isotonic": _MIN_ISOTONIC_SAMPLES_FOR_TRUST["moneyline"],
                 "low_sample_strategy": "shrink_toward_50",
                 "shrinkage_factor": _SHRINKAGE_FACTOR["moneyline"],
-            },
-            "yrfi": {
-                "min_samples_for_isotonic": _MIN_ISOTONIC_SAMPLES_FOR_TRUST["yrfi"],
-                "low_sample_strategy": "isotonic",
             },
         },
     }
@@ -433,16 +428,21 @@ def _fit_all_markets(
 
 
 def retrain() -> dict[str, Any]:
-    """Rebuild per-market calibration maps from prediction outcomes."""
+    """Rebuild per-market calibration maps from prediction outcomes.
+
+    Uses a chronological 80/20 split: fit on the oldest 80% of rows, evaluate
+    on the held-out 20% tail. This prevents in-sample overfitting where the
+    same data is used for both fitting and Brier evaluation.
+    """
     if not _OUTCOMES_PATH.exists():
         return {"status": "error", "reason": "prediction_outcomes.csv not found", "source": "CSV prediction_outcomes"}
 
-    rows_by_market: dict[str, list[tuple[float, float]]] = {m: [] for m in _MARKETS}
+    dated_rows: list[tuple[str, str, float, float]] = []
     with open(_OUTCOMES_PATH, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             market = _normalize_market(row.get("market", ""))
-            if market not in rows_by_market:
+            if market not in set(_MARKETS):
                 continue
             result = row.get("result", "").strip().lower()
             if result not in ("win", "loss"):
@@ -450,11 +450,21 @@ def retrain() -> dict[str, Any]:
             prob = _extract_predicted_probability(row)
             if prob is None:
                 continue
+            date_str = row.get("date", "") or ""
             outcome = 1.0 if result == "win" else 0.0
-            rows_by_market[market].append((prob, outcome))
+            dated_rows.append((date_str, market, prob, outcome))
+
+    # Sort chronologically so the split is temporal, not random.
+    dated_rows.sort(key=lambda r: r[0])
+    cutoff_idx = int(len(dated_rows) * 0.80)
+    train_rows = dated_rows[:cutoff_idx]
+
+    rows_by_market: dict[str, list[tuple[float, float]]] = {m: [] for m in _MARKETS}
+    for _date, market, prob, outcome in train_rows:
+        rows_by_market[market].append((prob, outcome))
 
     maps, per_market = _fit_all_markets(rows_by_market)
-    return _write_calibration_maps(maps, per_market, source="CSV prediction_outcomes")
+    return _write_calibration_maps(maps, per_market, source=f"CSV prediction_outcomes (chronological 80% train, {cutoff_idx}/{len(dated_rows)} rows)")
 
 
 def retrain_from_sqlite(sqlite_path: str | Path | None = None) -> dict[str, Any]:
@@ -485,25 +495,6 @@ def retrain_from_sqlite(sqlite_path: str | Path | None = None) -> dict[str, Any]
                     continue
                 outcome = 1.0 if str(row["result"]).strip().lower() == "win" else 0.0
                 rows_by_market[market].append((prob, outcome))
-
-            try:
-                yrfi_rows = conn.execute(
-                    """
-                    SELECT probability, correct
-                    FROM yrfi_results
-                    WHERE correct IS NOT NULL
-                    """
-                )
-            except sqlite3.Error:
-                yrfi_rows = []
-            for row in yrfi_rows:
-                prob = _normalize_probability(row["probability"])
-                if prob is None:
-                    continue
-                outcome = safe_float(row["correct"], None)
-                if outcome not in (0.0, 1.0):
-                    continue
-                rows_by_market["yrfi"].append((prob, float(outcome)))
         finally:
             conn.close()
     except sqlite3.Error as exc:

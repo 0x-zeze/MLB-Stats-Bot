@@ -5,6 +5,7 @@ import {
   ANALYST_SYSTEM_PROMPT
 } from './analystSkill.js';
 import { uiKV, uiTitle, UI_LINE, UI_THIN_LINE } from './telegramFormat.js';
+import { formatNewsDigest } from './news.js';
 import { getCalibrationPenalty, loadEvolutionControls } from './evolutionControls.js';
 import { hasCalibrationMap } from './calibration.js';
 
@@ -167,8 +168,28 @@ function compactGameForAgent(item, evolutionData) {
     signalPriority: {
       tier1: ['probable pitchers', 'confirmed lineup/player availability', 'team offense', 'bullpen usage', 'park factor', 'market odds/value'],
       tier2: ['weather', 'platoon splits', 'recent form', 'Pythagorean/Log5'],
-      tier3: ['team record', 'previous series winner', 'head-to-head trends', 'public betting percentage']
+      tier3: ['team record', 'previous series winner', 'head-to-head trends', 'public betting percentage', 'external news/opinion context']
     },
+    newsContext: item.newsContext
+      ? {
+          status: item.newsContext.status,
+          displayOnly: true,
+          probabilityImpact: 'none',
+          sourceStatus: item.newsContext.sourceStatus,
+          articles: (item.newsContext.articles || []).slice(0, 5).map((article) => ({
+            source: article.source,
+            sourceName: article.sourceName,
+            contentType: article.contentType,
+            title: article.title,
+            summary: article.summary,
+            url: article.url,
+            author: article.author,
+            publishedAt: article.publishedAt,
+            availableAt: article.availableAt,
+            matchedEntities: article.matchedEntities
+          }))
+        }
+      : null,
     headToHead: {
       games: item.headToHead?.games || 0,
       awayWins: item.headToHead?.awayWins || 0,
@@ -203,18 +224,6 @@ function compactGameForAgent(item, evolutionData) {
     betDecision: item.betDecision,
     auditMemoryNotes: item.auditMemoryNotes,
     baselineReasons: item.reasons,
-    firstInning: item.firstInning
-      ? {
-          baselinePick: item.firstInning.baselinePick,
-          baselineProbability: Math.round(item.firstInning.baselineProbability),
-          topRate: Math.round(item.firstInning.topRate),
-          bottomRate: Math.round(item.firstInning.bottomRate),
-          h2h: item.firstInning.h2h,
-          awayProfileLine: item.firstInning.awayProfileLine,
-          homeProfileLine: item.firstInning.homeProfileLine,
-          baselineReasons: item.firstInning.reasons
-        }
-      : null,
     memoryAdjustment: item.memoryAdjustment,
     matchupMemory: item.matchupMemory
       ? {
@@ -373,55 +382,6 @@ function probabilityFromObject(raw, prediction, side) {
   return undefined;
 }
 
-function normalizeYesNo(value, fallback = 'NO') {
-  const text = String(value || fallback).toLowerCase();
-  if (['yes', 'yrfi', 'y', 'run', 'ada', 'over'].some((token) => text.includes(token))) {
-    return 'YES';
-  }
-  if (['no', 'nrfi', 'n', 'tidak', 'under'].some((token) => text.includes(token))) {
-    return 'NO';
-  }
-  return fallback;
-}
-
-function sanitizeFirstInningAnalysis(prediction, raw) {
-  const source =
-    raw?.firstInning ??
-    raw?.first_inning ??
-    raw?.yrfiNrfi ??
-    raw?.yrfi_nrfi ??
-    raw?.firstInningRun ??
-    null;
-
-  const baseline = prediction.firstInning || {};
-  const deterministicPick = baseline.baselinePick || 'NO';
-  const deterministicProbability = clamp(
-    Math.round(toNumber(baseline.baselineProbability, 50)),
-    20,
-    80
-  );
-  if (!source || typeof source !== 'object') {
-    return {
-      pick: deterministicPick,
-      probability: deterministicProbability,
-      confidence: deterministicConfidenceFromProbability(deterministicProbability),
-      reasons: baseline.reasons || []
-    };
-  }
-
-  const reasons = Array.isArray(source.reasons)
-    ? source.reasons.map((item) => String(item).trim()).filter(Boolean).slice(0, 3)
-    : baseline.reasons || [];
-
-  return {
-    pick: deterministicPick,
-    probability: deterministicProbability,
-    confidence: deterministicConfidenceFromProbability(deterministicProbability),
-    reasons,
-    risk: String(source.risk || '').slice(0, 180)
-  };
-}
-
 /**
  * LLM is explanation-only. Probability adjustments from the model are recorded
  * as rejected proposals and never applied to away/home probabilities, pick, edge,
@@ -554,7 +514,6 @@ function sanitizeAnalysis(prediction, raw) {
       confidence: deterministicConfidenceFromPrediction(prediction, pickProbability),
       probabilityShift
     }),
-    firstInning: sanitizeFirstInningAnalysis(prediction, raw),
     source: 'analyst-agent'
   };
 }
@@ -640,12 +599,16 @@ function asksForTopPicks(question) {
   return pickIntent && fiveIntent;
 }
 
+function asksForNews(question) {
+  return /\b(news|berita|headline|opini|expert)\b/i.test(String(question || ''));
+}
+
 function confidenceScore(label) {
   return { high: 3, medium: 1.5, low: 0 }[String(label || '').toLowerCase()] || 0;
 }
 
 function teamSideForPick(prediction) {
-  const pickId = prediction.agentAnalysis?.pickTeamId ?? prediction.winner?.id;
+  const pickId = prediction.winner?.id;
   if (String(pickId) === String(prediction.away?.id)) return 'away';
   if (String(pickId) === String(prediction.home?.id)) return 'home';
   return toNumber(prediction.home?.winProbability, 50) >= toNumber(prediction.away?.winProbability, 50)
@@ -714,8 +677,8 @@ function topPickCandidate(prediction) {
   // directly for display/edge — calibrating again here would double-apply.
   const probability = normalizeProbability(
     side === 'away'
-      ? prediction.agentAnalysis?.awayProbability ?? prediction.away?.winProbability
-      : prediction.agentAnalysis?.homeProbability ?? prediction.home?.winProbability,
+      ? prediction.away?.winProbability
+      : prediction.home?.winProbability,
     50
   );
   // Raw (pre-calibration) model probability drives conviction-based confidence
@@ -726,7 +689,7 @@ function topPickCandidate(prediction) {
       : prediction.home?.winProbabilityRaw ?? prediction.home?.winProbability,
     probability
   );
-  const confidence = prediction.agentAnalysis?.confidence || deterministicConfidenceFromPrediction(prediction, rawProbability);
+  const confidence = deterministicConfidenceFromPrediction(prediction, rawProbability);
   const calibratedEdgeInfo = calibratedEdge(prediction, pick);
   // Prefer the calibrated edge; fall back to the stored raw edge when no odds.
   const edge = calibratedEdgeInfo
@@ -886,7 +849,7 @@ function isAcceptablePick(candidate) {
   return conviction > 50;
 }
 
-export function buildTopPicksAnswer(predictions, question = '', limit = 5, memorySummary = null) {
+export function buildTopPicksAnswer(predictions, question = '', limit = 5, memorySummary = null, options = {}) {
   if (!asksForTopPicks(question) || !Array.isArray(predictions) || predictions.length === 0) {
     return null;
   }
@@ -992,6 +955,16 @@ export function buildTopPicksAnswer(predictions, question = '', limit = 5, memor
     // Konfirmasi & Alasan
     lines.push(`     ${uiKV('📋', 'Konfirmasi', confirmationSignals(candidate.prediction).join('  |  '))}`);
     lines.push(`     ${uiKV('💡', 'Alasan', shortReason(candidate))}`);
+    if (options.includeNews) {
+      const articles = candidate.prediction.newsContext?.articles || [];
+      const contextStatus = candidate.prediction.newsContext?.status;
+      if (articles.length > 0) {
+        const newsLine = articles.slice(0, 2).map((article) => `[${article.sourceName}] ${article.title}`).join(' | ');
+        lines.push(`     ${uiKV('📰', 'External', newsLine)}`);
+      } else if (contextStatus && contextStatus !== 'disabled') {
+        lines.push(`     ${uiKV('📰', 'External', `tidak ada artikel cocok (${contextStatus})`)}`);
+      }
+    }
 
     // Memory context per pick
     if (memorySummary) {
@@ -1064,7 +1037,7 @@ async function analyzeWithExternalAgent(config, predictions, memorySummary, evol
         games: predictions.map((p) => compactGameForAgent(p, evolutionData)),
         outputContract: {
           analyses:
-            'Array of { gamePk, reasons, risk, memoryNote, firstInning: { reasons, risk } }. Numeric probabilities, totals, confidence, and final pick are deterministic model fields; do not invent them.'
+            'Array of { gamePk, reasons, risk, memoryNote }. Numeric probabilities, totals, confidence, and final pick are deterministic model fields; do not invent them.'
         }
       })
     });
@@ -1106,15 +1079,7 @@ async function analyzeWithLocalAgent(config, predictions, memorySummary, evoluti
           confidence: 'optional; system confidence comes from deterministic model and quality rules',
           reasons: ['2-3 alasan singkat bahasa Indonesia'],
           risk: 'risiko terbesar pick ini',
-          memoryNote: 'bagaimana matchup memory/memory mempengaruhi analisa, atau netral',
-          firstInning: {
-            required: true,
-            pick: 'optional; system will keep deterministic firstInning baseline pick',
-            probability: 'optional; copy deterministic baseline if supplied',
-            confidence: 'optional; system confidence remains deterministic',
-            reasons: ['2-3 alasan singkat dari riwayat first inning, starter, H2H'],
-            risk: 'risiko terbesar untuk verdict first inning'
-          }
+          memoryNote: 'bagaimana matchup memory/memory mempengaruhi analisa, atau netral'
         }
       ]
     }
@@ -1222,15 +1187,30 @@ async function askLocalAgent(config, { question, dateYmd, predictions, memorySum
 }
 
 export async function answerInteractiveQuestion(config, payload) {
+  if (!config.interactiveAgent && asksForNews(payload.question)) {
+    return formatNewsDigest(payload.predictions);
+  }
   if (!config.interactiveAgent) return null;
 
-  const deterministicAnswer = buildTopPicksAnswer(payload.predictions, payload.question, 5, payload.memorySummary);
+  const deterministicAnswer = buildTopPicksAnswer(
+    payload.predictions,
+    payload.question,
+    5,
+    payload.memorySummary,
+    { includeNews: Boolean(config.news?.includePicks) }
+  );
   if (deterministicAnswer) return deterministicAnswer;
 
-  if (config.analystAgent.mode === 'external') {
-    return askExternalAgent(config, payload);
+  try {
+    const answer = config.analystAgent.mode === 'external'
+      ? await askExternalAgent(config, payload)
+      : await askLocalAgent(config, payload);
+    if (answer) return answer;
+  } catch (error) {
+    console.warn('[analyst] interactive request failed:', error.message);
   }
 
-  return askLocalAgent(config, payload);
+  if (asksForNews(payload.question)) return formatNewsDigest(payload.predictions);
+  return null;
 }
 

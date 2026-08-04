@@ -1,9 +1,9 @@
 """Analyze prediction outcomes and surface moneyline-specific edge improvements.
 
 Reads graded picks from data/evolution/prediction_outcomes.csv through the same
-loader the audit uses, then writes a human-readable report. The report separates
-moneyline from YRFI so headline win rate is not polluted by advisory/low-edge
-markets. It also adds weekly moneyline cohorts so we can track whether a week is
+loader the audit uses, then writes a human-readable report. The report focuses
+on moneyline-only results so the headline win rate reflects the bot's active
+market. It also adds weekly moneyline cohorts so we can track whether a week is
 getting enough auditable picks and how far that cohort sits from a 70% win-rate
 target.
 
@@ -30,7 +30,7 @@ from .evolution.evolution_audit import (
 from .utils import safe_float
 
 _REPORT_PATH = Path(__file__).resolve().parent.parent / "data" / "docs" / "picks-analysis.md"
-_MARKETS = ("moneyline", "yrfi")
+_MARKETS = ("moneyline",)
 _WEEKLY_TARGET_WIN_RATE = 70.0
 
 
@@ -301,11 +301,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append("# Analisa Picks — Moneyline Weekly Edge\n")
     lines.append(
         f"Dataset: **{report['total_rows']} outcome aktif** dari "
-        "`data/evolution/prediction_outcomes.csv`, dipisah per market.\n"
-    )
-    lines.append(
-        "> Fokus utama: moneyline-only. YRFI dipisah karena historis advisory/negatif, "
-        "jadi tidak boleh menutupi edge moneyline.\n"
+        "`data/evolution/prediction_outcomes.csv`.\n"
     )
     lines.append(
         "> Catatan tracking: semua moneyline prediksi yang tersimpan sebelum game bisa diaudit. "
@@ -313,7 +309,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     )
 
     o = report["overall_metrics"]
-    lines.append("## Ringkasan Aktif (Moneyline + YRFI)\n")
+    lines.append("## Ringkasan Aktif (Moneyline)\n")
     lines.append("| Metrik | Nilai |")
     lines.append("|---|---:|")
     lines.append(f"| Sample (decided) | {o['decided']} / {o['sample']} |")
@@ -374,7 +370,7 @@ def _recommendations(report: dict[str, Any]) -> list[str]:
     if moneyline:
         m = moneyline["metrics"]
         recs.append(
-            f"- **Moneyline headline**: baca terpisah dari YRFI. Saat ini {m['wins']}-{m['losses']} "
+            f"- **Moneyline headline**: saat ini {m['wins']}-{m['losses']} "
             f"({m['win_rate']}%) dari {m['decided']} decided picks."
         )
         weak_weeks = [w for w in moneyline["weekly"] if w["meets_sample"] and w["win_rate"] < _WEEKLY_TARGET_WIN_RATE]
@@ -396,13 +392,6 @@ def _recommendations(report: dict[str, Any]) -> list[str]:
                     "Cap confidence/value untuk bucket ini sampai sample baru membaik."
                 )
                 break
-    yrfi = report["markets"].get("yrfi")
-    if yrfi:
-        ym = yrfi["metrics"]
-        recs.append(
-            f"- **YRFI tetap terpisah**: {ym['wins']}-{ym['losses']} ({ym['win_rate']}%). "
-            "Jangan campur ke headline moneyline."
-        )
     if not recs:
         recs.append("- Tidak ada masalah sistematis terdeteksi pada dataset ini.")
     return recs

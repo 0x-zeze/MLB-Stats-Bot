@@ -305,7 +305,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--season", type=int, help="Season year, for example 2024")
     parser.add_argument("--start-date", help="Start date YYYY-MM-DD")
     parser.add_argument("--end-date", help="End date YYYY-MM-DD")
-    parser.add_argument("--market", choices=["moneyline", "yrfi"], default="moneyline")
+    parser.add_argument("--market", choices=["moneyline"], default="moneyline")
     parser.add_argument("--log", default=str(data_path("predictions_log.csv")), help="Output predictions log CSV")
     parser.add_argument("--no-write", action="store_true", help="Do not write predictions log")
     return parser.parse_args()

@@ -4,18 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .first_inning import (
-    FirstInningContext,
-    LEAGUE_AVG_VENUE_YRFI_RATE,
-    get_sp_first_inning_stats,
-    predict_first_inning,
-)
 from .model import BaselinePredictionModel
-from .park_factors import BALLPARK_YRFI_RATES, DEFAULT_YRFI_RATE
 from .probability_calibrator import calibrate
 from .situational_weights import SituationalWeightEngine, classify_park_type, determine_seasonal_phase
 from .utils import clamp, confidence_label, logistic, safe_float
-from .weather import yrfi_weather_adjustment
 
 
 def predict_moneyline_from_features(
@@ -90,135 +82,6 @@ def predict_moneyline_from_features(
     }
 
 
-def _resolve_venue_yrfi_rate(park: Any) -> float:
-    """Look up ballpark YRFI historical rate from park data."""
-    try:
-        if park is not None:
-            park_name = getattr(park, "park", None) or getattr(park, "name", None)
-            if park_name:
-                return BALLPARK_YRFI_RATES.get(park_name.strip(), DEFAULT_YRFI_RATE)
-    except Exception:
-        pass
-    return DEFAULT_YRFI_RATE
-
-
-def predict_first_inning_from_features(
-    collected: dict[str, Any],
-    features: dict[str, Any],
-) -> dict[str, Any]:
-    """Produce deterministic first-inning YRFI/NRFI prediction."""
-    home_pitcher = collected.get("home_pitcher")
-    away_pitcher = collected.get("away_pitcher")
-    park = collected.get("park")
-    weather = collected.get("weather")
-
-    try:
-        weather_yrfi_adj = yrfi_weather_adjustment(weather)
-    except Exception:
-        weather_yrfi_adj = 0.0
-
-    # --- SP first-inning stats from JSON (override pitcher object defaults) ---
-    try:
-        away_name = getattr(away_pitcher, "pitcher", None) or getattr(away_pitcher, "name", None) if away_pitcher else None
-        home_name = getattr(home_pitcher, "pitcher", None) or getattr(home_pitcher, "name", None) if home_pitcher else None
-        away_sp_stats = get_sp_first_inning_stats(away_name)
-        home_sp_stats = get_sp_first_inning_stats(home_name)
-    except Exception:
-        away_sp_stats, home_sp_stats = {}, {}
-
-    # ERA: prefer JSON first_inning_era > pitcher object first_inning_era > 4.50
-    away_fi_era = safe_float(
-        away_sp_stats.get("first_inning_era")
-        or (getattr(away_pitcher, "first_inning_era", None) if away_pitcher else None),
-        4.50,
-    )
-    home_fi_era = safe_float(
-        home_sp_stats.get("first_inning_era")
-        or (getattr(home_pitcher, "first_inning_era", None) if home_pitcher else None),
-        4.50,
-    )
-
-    # First-pitch strike rate: prefer JSON > pitcher object > 0.60
-    away_fpstrike = safe_float(
-        away_sp_stats.get("first_pitch_strike_pct")
-        or (getattr(away_pitcher, "first_pitch_strike_rate", None) if away_pitcher else None),
-        0.60,
-    )
-    home_fpstrike = safe_float(
-        home_sp_stats.get("first_pitch_strike_pct")
-        or (getattr(home_pitcher, "first_pitch_strike_rate", None) if home_pitcher else None),
-        0.60,
-    )
-
-    # Avg pitches first inning: prefer JSON > 16.0
-    away_avg_pitches = safe_float(away_sp_stats.get("avg_pitches_first_inning"), 16.0)
-    home_avg_pitches = safe_float(home_sp_stats.get("avg_pitches_first_inning"), 16.0)
-
-    context = FirstInningContext(
-        away_first_inning_scoring_rate=safe_float(
-            features.get("first_inning", {}).get("away_first_inning_scoring_rate"), 0.27
-        ),
-        home_first_inning_scoring_rate=safe_float(
-            features.get("first_inning", {}).get("home_first_inning_scoring_rate"), 0.27
-        ),
-        away_first_inning_allowed_rate=safe_float(
-            features.get("first_inning", {}).get("away_first_inning_allowed_rate"), 0.27
-        ),
-        home_first_inning_allowed_rate=safe_float(
-            features.get("first_inning", {}).get("home_first_inning_allowed_rate"), 0.27
-        ),
-        away_pitcher_first_inning_era=away_fi_era,
-        home_pitcher_first_inning_era=home_fi_era,
-        away_pitcher_first_inning_whip=safe_float(
-            getattr(away_pitcher, "first_inning_whip", None), 1.40
-        ) if away_pitcher else 1.40,
-        home_pitcher_first_inning_whip=safe_float(
-            getattr(home_pitcher, "first_inning_whip", None), 1.40
-        ) if home_pitcher else 1.40,
-        away_leadoff_obp=safe_float(
-            features.get("first_inning", {}).get("away_leadoff_obp"), 0.330
-        ),
-        home_leadoff_obp=safe_float(
-            features.get("first_inning", {}).get("home_leadoff_obp"), 0.330
-        ),
-        away_pitcher_first_pitch_strike_rate=away_fpstrike,
-        home_pitcher_first_pitch_strike_rate=home_fpstrike,
-        venue_yrfi_rate=_resolve_venue_yrfi_rate(park),
-        park_run_factor=safe_float(
-            getattr(park, "run_factor", None), 100.0
-        ) if park else 100.0,
-        away_pitcher_k_rate=safe_float(
-            getattr(away_pitcher, "k_rate", None), 0.22
-        ) if away_pitcher else 0.22,
-        home_pitcher_k_rate=safe_float(
-            getattr(home_pitcher, "k_rate", None), 0.22
-        ) if home_pitcher else 0.22,
-        away_pitcher_ground_ball_rate=safe_float(
-            getattr(away_pitcher, "ground_ball_rate", None), 0.44
-        ) if away_pitcher else 0.44,
-        home_pitcher_ground_ball_rate=safe_float(
-            getattr(home_pitcher, "ground_ball_rate", None), 0.44
-        ) if home_pitcher else 0.44,
-        away_pitcher_avg_pitches_first_inning=away_avg_pitches,
-        home_pitcher_avg_pitches_first_inning=home_avg_pitches,
-        weather_yrfi_adjustment=weather_yrfi_adj,
-    )
-
-    prediction = predict_first_inning(context)
-
-    return {
-        "matchup": collected["context"]["matchup"],
-        "yrfi_probability": prediction.yrfi_probability,
-        "nrfi_probability": prediction.nrfi_probability,
-        "top_first_run_probability": prediction.top_first_run_probability,
-        "bottom_first_run_probability": prediction.bottom_first_run_probability,
-        "lean": prediction.lean,
-        "confidence": prediction.confidence,
-        "main_factors": prediction.main_factors,
-        "source": "deterministic_python_model",
-    }
-
-
 def build_predictions(
     collected: dict[str, Any],
     features: dict[str, Any],
@@ -237,5 +100,4 @@ def build_predictions(
         "moneyline": predict_moneyline_from_features(
             collected, features, weight_overrides=weight_overrides
         ),
-        "first_inning": predict_first_inning_from_features(collected, features),
     }

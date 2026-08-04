@@ -388,7 +388,7 @@ export function buildEvolutionContext() {
   if (isCacheValid()) return _cache;
 
   const activeMarket = 'moneyline';
-  const activeMarkets = new Set(['moneyline', 'yrfi']);
+  const activeMarkets = new Set(['moneyline']);
   const allOutcomes = readPredictionOutcomes().filter((row) => activeMarkets.has(String(row.market || 'moneyline').toLowerCase()));
   const outcomes = allOutcomes.filter((row) => String(row.market || 'moneyline').toLowerCase() === activeMarket);
   const losses = readJsonlFile('language_losses').filter((row) => String(row.market || 'moneyline').toLowerCase() === activeMarket);
@@ -402,7 +402,7 @@ export function buildEvolutionContext() {
 
   const sampleSize = {
     totalEvaluated: outcomes.length,
-    activeMarkets: ['moneyline', 'yrfi'],
+    activeMarkets: ['moneyline'],
     contextMarket: activeMarket,
     totalLessons: allLessons.length,
     totalLosses: losses.length

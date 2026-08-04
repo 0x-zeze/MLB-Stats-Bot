@@ -12,6 +12,7 @@ class LanguageLossTests(unittest.TestCase):
         # circular "100% loss" pattern. It must now fall through to a substantive,
         # non-circular loss_type instead.
         trajectory = sample_trajectory(
+            market="totals",
             prediction={
                 "final_lean": "Over 8.5",
                 "confidence": "High",

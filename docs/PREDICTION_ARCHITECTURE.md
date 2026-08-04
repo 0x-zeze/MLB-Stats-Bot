@@ -1,6 +1,6 @@
 # Prediction Architecture
 
-**Status:** canonical moneyline core + recompute replay active (2026-07-28); totals/YRFI remain separate paths
+**Status:** canonical moneyline core + recompute replay active (2026-07-28); totals remain a separate path; YRFI/NRFI removed (no edge, was advisory-only)
 
 ## Canonical production path (Telegram)
 
@@ -10,6 +10,7 @@ getMlbPredictions (src/mlb.js)
   -> predictGameMoneylineCore (pure, deterministic, no I/O)
   -> attach odds / line snapshots
   -> attachMarketContext (market-informed display only; pure model remains authoritative for value)
+  -> optional attachNewsContext (timestamped Tier-3 display context; no probability/core-input impact)
   -> applyMoneylineValueMarket
   -> attachAgentAnalyses (explanation-only; cannot change pick/prob/edge/status)
   -> storage.savePredictions (immutable snapshot + compatibility pick cache)

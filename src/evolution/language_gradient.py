@@ -38,7 +38,7 @@ GRADIENT_MAP = {
     ),
     "weather_misread": (
         "weather_adjustment",
-        "Require fresh weather context before confident YRFI decisions.",
+        "Require fresh weather context before confident moneyline decisions.",
         "tool_order_update",
     ),
     "bad_data_quality": (

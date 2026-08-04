@@ -164,7 +164,6 @@ def _read_telegram_state_from_sqlite() -> dict[str, Any] | None:
                     "correctPicks": mem_row["correct_picks"],
                     "wrongPicks": mem_row["wrong_picks"],
                     "byConfidence": json.loads(mem_row["by_confidence"] or "{}"),
-                    "firstInning": json.loads(mem_row["first_inning"] or "{}"),
                     "teamBias": json.loads(mem_row["team_bias"] or "{}"),
                     "matchupMemory": json.loads(mem_row["matchup_memory"] or "{}"),
                     "learningLog": json.loads(mem_row["learning_log"] or "[]"),
@@ -812,13 +811,6 @@ def _ledger_financial_metrics(rows: list[dict[str, Any]]) -> dict[str, float]:
     }
 
 
-def _is_first_inning_market(row: dict[str, Any]) -> bool:
-    market = str(row.get("market") or "").lower()
-    side = str(row.get("side") or "").lower()
-    team = str(row.get("team") or "").lower()
-    return any(token in market or token in side or token in team for token in ("yrfi", "nrfi", "first inning", "first_inning"))
-
-
 def get_telegram_model_performance() -> dict[str, Any] | None:
     """Return model performance from Telegram memory so it matches /memory."""
     state = load_telegram_state()
@@ -833,7 +825,6 @@ def get_telegram_model_performance() -> dict[str, Any] | None:
     learning_log = memory.get("learningLog") or []
     rolling_3d = _rolling_win_rate(learning_log, days=3)
     by_confidence = memory.get("byConfidence") or {}
-    first_inning = memory.get("firstInning") or {}
     calibration = _telegram_calibration_rows(state)
     if not calibration:
         calibration = [
@@ -848,16 +839,13 @@ def get_telegram_model_performance() -> dict[str, Any] | None:
 
     ledger = get_bet_ledger()
     settled_ledger = _settled_ledger_rows(ledger.get("settled") or [])
-    ledger_metrics = _ledger_financial_metrics(settled_ledger) if settled_ledger else None
-    moneyline_rows = [row for row in settled_ledger if not _is_first_inning_market(row)]
-    first_inning_rows = [row for row in settled_ledger if _is_first_inning_market(row)]
-    moneyline_metrics = _ledger_financial_metrics(moneyline_rows) if moneyline_rows else None
-    first_inning_metrics = _ledger_financial_metrics(first_inning_rows) if first_inning_rows else None
+    moneyline_rows = [row for row in settled_ledger if str(row.get("market") or "moneyline").lower() == "moneyline"]
+    ledger_metrics = _ledger_financial_metrics(moneyline_rows) if moneyline_rows else None
 
     return {
         "overall": {
             "total_predictions": int(total),
-            "bets_taken": len(settled_ledger),
+            "bets_taken": len(moneyline_rows),
             "wins": int(correct),
             "losses": int(wrong),
             "win_rate": win_rate,
@@ -872,13 +860,7 @@ def get_telegram_model_performance() -> dict[str, Any] | None:
             "source": "telegram+ledger" if ledger_metrics else "telegram_prediction_only",
         },
         "by_market": [
-            {"market": "moneyline", "bets": len(moneyline_rows), "win_rate": win_rate, "roi": moneyline_metrics["roi"] if moneyline_metrics else None},
-            {
-                "market": "first inning",
-                "bets": len(first_inning_rows),
-                "win_rate": _accuracy(first_inning.get("correctPicks", 0), first_inning.get("totalPicks", 0)),
-                "roi": first_inning_metrics["roi"] if first_inning_metrics else None,
-            },
+            {"market": "moneyline", "bets": len(moneyline_rows), "win_rate": win_rate, "roi": ledger_metrics["roi"] if ledger_metrics else None},
         ],
         "by_total_range": [],
         "calibration": calibration,
@@ -993,7 +975,7 @@ def get_prediction_history() -> list[dict[str, Any]]:
             {
                 "date": row.get("date"),
                 "matchup": f"{row.get('away_team')} @ {row.get('home_team')}",
-                "market_type": "yrfi" if str(prediction).upper() in ("YES", "NO") else "moneyline",
+                "market_type": "moneyline",
                 "prediction": prediction,
                 "decision": "NO BET" if prediction == "NO BET" else "BET",
                 "confidence": str(row.get("confidence", "")).title(),
@@ -1210,8 +1192,7 @@ def run_dashboard_backtest(params: dict[str, Any]) -> dict[str, Any]:
     requested_market = params.get("market_type") or params.get("market") or "moneyline"
     market_map = {
         "moneyline": ["moneyline"],
-                "yrfi": ["yrfi"],
-        "all": ["moneyline", "yrfi"],
+        "all": ["moneyline"],
     }
     markets = market_map.get(requested_market)
     if not markets:

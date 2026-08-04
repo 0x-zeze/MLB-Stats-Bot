@@ -22,7 +22,6 @@ from .feature_engineering_layer import build_game_features
 from .market_comparison import compare_markets
 from .player_contribution import calculate_team_player_score
 from .prediction_layer import build_predictions
-from .probability_calibrator import calibrate
 from .prediction_tier import (
     apply_tier_confidence_cap,
     determine_prediction_tier,
@@ -50,10 +49,9 @@ def _apply_market_to_moneyline(
     return output
 
 
-def _supporting_factors(moneyline: dict[str, Any], first_inning: dict[str, Any]) -> list[str]:
+def _supporting_factors(moneyline: dict[str, Any]) -> list[str]:
     factors = []
     factors.extend(moneyline.get("main_factors", []))
-    factors.extend(first_inning.get("main_factors", []))
     unique: list[str] = []
     for factor in factors:
         if factor not in unique:
@@ -341,14 +339,8 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
     if conf_mod < 1.0:
         moneyline["dynamic_confidence_modifier"] = conf_mod
 
-    first_inning_raw = deepcopy(raw_predictions["first_inning"])
-    first_inning_raw["model_edge"] = abs(first_inning_raw.get("yrfi_probability", 0.5) - 0.5)
-    first_inning_raw["market_type"] = "yrfi"
-    first_inning = apply_confidence_downgrade(first_inning_raw, quality_report)
-
     # Apply tier confidence cap
     moneyline["confidence"] = apply_tier_confidence_cap(moneyline["confidence"], tier)
-    first_inning["confidence"] = apply_tier_confidence_cap(first_inning["confidence"], tier)
 
     market = collected.get("market") or {}
     moneyline["model_probability"] = max(
@@ -357,21 +349,13 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
     )
     moneyline["american_odds"] = (
         market.get("home_moneyline")
-        if moneyline.get("predicted_winner") == getattr(collected["game"], "home_team", None)
+        if moneyline.get("predicted_winner") == getattr(collected.get("game"), "home_team", None)
         else market.get("away_moneyline")
-    )
-    first_inning["model_probability"] = calibrate(
-        max(
-            first_inning.get("yrfi_probability", 0.0),
-            first_inning.get("nrfi_probability", 0.0),
-        ),
-        market="yrfi",
     )
 
     moneyline = apply_risk_framework(moneyline, quality_report)
-    first_inning = apply_risk_framework(first_inning, quality_report)
 
-    supporting_factors = _supporting_factors(moneyline, first_inning)
+    supporting_factors = _supporting_factors(moneyline)
 
     result = {
         "stages": {
@@ -400,7 +384,6 @@ def run_prediction_pipeline(game_id: str | int) -> dict[str, Any]:
             "refresh_recommended": tier.refresh_recommended,
         },
         "moneyline": moneyline,
-        "first_inning": first_inning,
         "supporting_factors": supporting_factors,
         # --- New outputs from dynamic weights & player contribution -----------
         "game_mode": dynamic_weights["mode"],

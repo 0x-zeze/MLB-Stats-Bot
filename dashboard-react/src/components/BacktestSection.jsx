@@ -75,7 +75,6 @@ export default function BacktestSection() {
             >
               <option value="all">All Markets</option>
               <option value="moneyline">Moneyline</option>
-                            <option value="yrfi">YRFI</option>
             </select>
           </div>
           <Button type="submit" size="sm" variant="primary" disabled={running}>

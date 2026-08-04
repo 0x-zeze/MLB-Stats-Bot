@@ -24,7 +24,8 @@ data wall, and evaluator market baselines.
 | Feature snapshots without first-pitch hard wall | Partial write-once only; temporal validator enforces as_of <= first_pitch |
 | Evolution can still touch production-adjacent files | Open (promotion not fully sandboxed) |
 | Live snapshots do not yet persist `coreInputs` | **Mitigated for new predictions** — `getMlbPredictions` freezes coreInputs and `storage.js` persists them; older rows remain projection-only |
-| Totals / YRFI not on pure core | **Open** — only moneyline extracted; totals/YRFI still separate |
+| Totals not on pure core | **Open** — only moneyline extracted; totals still a separate path |
+| YRFI/NRFI market | **Closed** — removed; no per-game edge, was advisory-only |
 
 ## P2
 

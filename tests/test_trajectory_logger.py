@@ -19,7 +19,8 @@ class TrajectoryLoggerTests(unittest.TestCase):
                     "actual_away_score": 2,
                     "result": "loss",
                     "data_quality": {"score": 77, "lineup": "Projected", "weather": "Missing"},
-                    "yrfi": {"pick": "YES", "probability": 55},
+                    "moneyline": {"model_probability": 55, "current_odds": {"awayMoneyline": "+120"}},
+                    "final_lean": "Tampa Bay Rays",
                 }
             )
             stored = read_jsonl("trajectories")
@@ -29,7 +30,8 @@ class TrajectoryLoggerTests(unittest.TestCase):
         self.assertNotIn("actual_home_score", serialized)
         self.assertNotIn("actual_away_score", serialized)
         self.assertNotIn('"result"', serialized)
-        self.assertEqual(record["prediction"]["final_lean"], "YES")
+        self.assertEqual(record["prediction"]["final_lean"], "Tampa Bay Rays")
+        self.assertEqual(record["market"], "moneyline")
         self.assertEqual(record["trajectory_key"], trajectory_dedupe_key(record))
 
     def test_duplicate_trajectory_is_not_appended_twice(self):
@@ -39,7 +41,8 @@ class TrajectoryLoggerTests(unittest.TestCase):
                 "date": "2026-04-30",
                 "away_team": "Tampa Bay Rays",
                 "home_team": "Cleveland Guardians",
-                "yrfi": {"pick": "YES", "probability": 55},
+                "moneyline": {"model_probability": 55},
+                "final_lean": "Tampa Bay Rays",
             }
             first = log_prediction_trajectory(context)
             second = log_prediction_trajectory(context)
@@ -56,11 +59,12 @@ class TrajectoryLoggerTests(unittest.TestCase):
                 "date": "2026-04-30",
                 "away_team": "Tampa Bay Rays",
                 "home_team": "Cleveland Guardians",
-                "yrfi": {"pick": "YES", "probability": 55},
+                "moneyline": {"model_probability": 55},
+                "final_lean": "Tampa Bay Rays",
             }
             log_prediction_trajectory(context)
             changed = dict(context)
-            changed["yrfi"] = {"pick": "NO", "probability": 45}
+            changed["final_lean"] = "Cleveland Guardians"
             log_prediction_trajectory(changed)
             stored = read_jsonl("trajectories")
 

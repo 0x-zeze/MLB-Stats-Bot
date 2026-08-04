@@ -7,8 +7,7 @@ Output utama bot:
 - Pre-game alert setiap pertandingan.
 - Persentase kemenangan tiap tim.
 - Alasan pick dari Analyst Agent.
-- Analisa "Will there be a run in the 1st inning?" atau YRFI/NRFI.
-- Post-game recap dan memory learning.
+- Post-game recap dan memory learning (moneyline).
 - Tanya jawab interaktif di Telegram.
 
 > Catatan: bot ini adalah alat analisa dan edukasi. Probabilitas yang ditampilkan adalah estimasi model, bukan kepastian hasil.
@@ -77,6 +76,7 @@ Data yang dianalisa:
 - First inning scored/allowed profile.
 - Bullpen fatigue 3 hari terakhir.
 - Injury report 40-man roster dari MLB StatsAPI.
+- Optional external MLB news context via permitted RSS/Atom feeds (verified: MLB Trade Rumors, CBS Sports MLB, Baseball America). Context display-only; tidak mengubah probabilitas.
 - Starting pitcher last 5 starts.
 - Splits vs LHP/RHP.
 - Post-game memory dari pick sebelumnya.
@@ -91,7 +91,7 @@ Data yang dianalisa:
 - Live odds line movement alert untuk moneyline dan total runs.
 - Moneyline value engine dengan `VALUE / NO BET / LEAN ONLY` agar pick tidak bias ke probabilitas terbesar saja.
 - Post-game recap otomatis.
-- Memory learning untuk full-game pick dan YRFI/NRFI.
+- Memory learning untuk full-game (moneyline) pick.
 - Python ML engine berbasis CSV lokal untuk Pythagorean, Log5, odds edge, dan model sklearn opsional.
 - Terminal hanya untuk log, bukan output utama.
 
@@ -1189,8 +1189,6 @@ Bullpen
 - NYY bullpen fatigue high
 - TEX bullpen fatigue medium
 
-First Inning
-Will there be a run in the 1st? YES / YRFI 54%
 ```
 
 ## Analyst Agent
@@ -1215,7 +1213,6 @@ Prinsip analisa:
 - Starter recent form penting.
 - Bullpen fatigue memengaruhi risk.
 - H2H dipakai hati-hati karena sample kecil.
-- First inning dianalisa terpisah dari full-game pick.
 - Injury report dipakai sebagai availability risk, terutama hitter inti, starter, catcher, dan reliever leverage.
 - Memory adalah sinyal kecil, bukan penentu utama.
 
@@ -1227,7 +1224,7 @@ ML reference layer yang ikut masuk ke Agent:
 - Recent window last 5-10 games dan last 3-5 starter starts.
 - Anti data leakage: tidak memakai data yang belum tersedia sebelum game.
 - Market-edge thinking jika odds/implied probability ditambahkan dari external agent.
-- Score/run thinking sebagai pendukung full-game dan YRFI/NRFI.
+- Score/run thinking sebagai pendukung full-game moneyline.
 
 Referensi GitHub yang dipakai sebagai inspirasi metodologi:
 
@@ -1237,26 +1234,13 @@ Referensi GitHub yang dipakai sebagai inspirasi metodologi:
 - https://github.com/kylejohnson363/Predicting-MLB-Games-with-Machine-Learning
 - https://github.com/laplaces42/mlb_game_predictor
 
-## First Inning / YRFI-NRFI
+## YRFI/NRFI (removed)
 
-Setiap game punya pertanyaan:
-
-```text
-Will there be a run in the 1st inning?
-```
-
-Verdict:
-
-- `YES / YRFI`: ada kecenderungan run di inning pertama.
-- `NO / NRFI`: condong tidak ada run di inning pertama.
-
-Sinyal yang dipakai:
-
-- Team scored 1st inning.
-- Team allowed 1st inning.
-- Recent any-run first inning.
-- H2H first-inning run.
-- Starting pitcher hari itu.
+First-inning-run (YRFI/NRFI) prediction was **removed**. Historical analysis found
+no per-game edge (near-zero correlation with outcomes; overconfidence in high
+bins). The market had already been advisory-only (`YRFI_ACTIVE` off by default).
+The bot is **moneyline model-pick only**. Historical `yrfi_results` rows in SQLite
+are retained but no longer written or graded.
 
 ## Post-game Memory
 
@@ -1264,9 +1248,8 @@ Saat game final:
 
 1. Bot membaca hasil akhir.
 2. Membandingkan pick agent vs winner aktual.
-3. Membandingkan YRFI/NRFI vs first inning aktual.
-4. Menyimpan hasil ke `data/state.sqlite`.
-5. Mengirim post-game recap ke Telegram.
+3. Menyimpan hasil ke `data/state.sqlite`.
+4. Mengirim post-game recap ke Telegram.
 
 Cek memory:
 
@@ -1276,9 +1259,8 @@ Cek memory:
 
 Memory yang disimpan:
 
-- Full-game accuracy.
+- Full-game (moneyline) accuracy.
 - Accuracy per confidence bucket.
-- YRFI/NRFI accuracy.
 - Recent learning log.
 - Bias kecil per team.
 

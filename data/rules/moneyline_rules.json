@@ -224,18 +224,7 @@
       "handler": "edgeUnavailable",
       "params": {},
       "message": "model edge unavailable",
-      "notes": "edge_value is None. First branch of the edge if/elif; mutually exclusive with yrfi/edge_floor."
-    },
-    {
-      "id": "py.yrfi_edge_floor",
-      "engines": ["py"],
-      "tier": 1,
-      "order": 21,
-      "action": "NO_BET",
-      "handler": "yrfiEdgeFloor",
-      "params": { "threshold": 0.06 },
-      "message": "YRFI model edge below 6%",
-      "notes": "edge_value is not None && market_type == 'yrfi' && abs(edge_value) < threshold."
+      "notes": "edge_value is None. First branch of the edge if/elif; mutually exclusive with edge_floor."
     },
     {
       "id": "py.edge_floor",
@@ -246,7 +235,7 @@
       "handler": "edgeFloor",
       "params": { "source": "dashboard_settings", "default": 0.04 },
       "message": "model edge below {threshold_pct}",
-      "notes": "edge_value is not None && market_type != 'yrfi' && abs(edge_value) < threshold. threshold = _moneyline_edge_threshold() passed via ctx. threshold_pct = f'{threshold*100:.0f}%'."
+      "notes": "edge_value is not None && abs(edge_value) < threshold. threshold = _moneyline_edge_threshold() passed via ctx. threshold_pct = f'{threshold*100:.0f}%'."
     },
     {
       "id": "py.data_quality_floor",

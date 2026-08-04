@@ -181,11 +181,6 @@ def predict_moneyline(game_id: str | int) -> dict[str, Any]:
     return run_prediction_pipeline(game_id)["moneyline"]
 
 
-def predict_yrfi(game_id: str | int) -> dict[str, Any]:
-    """Predict YRFI/NRFI with first-inning model probability."""
-    return run_prediction_pipeline(game_id)["first_inning"]
-
-
 def explain_prediction(game_id: str | int) -> str:
     """Render a full MLB Game Analysis output for the agent."""
     return run_prediction_pipeline(game_id)["explanation"]

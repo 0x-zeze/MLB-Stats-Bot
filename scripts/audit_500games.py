@@ -430,32 +430,6 @@ def analyze_loss_patterns(rows):
     }
 
 
-def analyze_yrfi_nrfi(rows):
-    yrfi_rows = [r for r in rows if r.get("yrfi_pick", "").upper() in ("YES", "YRFI")
-                 and r.get("yrfi_result", "").strip() != ""]
-    nrfi_rows = [r for r in rows if r.get("yrfi_pick", "").upper() in ("NO", "NRFI")
-                 and r.get("yrfi_result", "").strip() != ""]
-
-    def yrfi_wins(group, expected_pick):
-        return sum(1 for r in group if r.get("yrfi_result", "").upper() == expected_pick.upper())
-
-    yrfi_win = yrfi_wins(yrfi_rows, "YES")
-    nrfi_win = yrfi_wins(nrfi_rows, "NO")
-
-    return {
-        "yrfi_picks": len(yrfi_rows),
-        "yrfi_correct": yrfi_win,
-        "yrfi_accuracy": pct(yrfi_win, len(yrfi_rows)),
-        "nrfi_picks": len(nrfi_rows),
-        "nrfi_correct": nrfi_win,
-        "nrfi_accuracy": pct(nrfi_win, len(nrfi_rows)),
-        "data_available": len(yrfi_rows) + len(nrfi_rows) > 0,
-        "note": "Kolom yrfi_pick dan yrfi_result harus ada di CSV untuk analisa ini"
-        if len(yrfi_rows) + len(nrfi_rows) == 0
-        else "",
-    }
-
-
 def generate_priority_recommendations(report):
     """Buat rekomendasi prioritas berdasarkan hasil audit."""
     recs = []
@@ -552,7 +526,6 @@ def main():
     loss_patterns = analyze_loss_patterns(rows)
     home_away = analyze_by_home_away(rows)
     by_month = analyze_by_month(rows)
-    yrfi_nrfi = analyze_yrfi_nrfi(rows)
 
     print("[8/8] Generating recommendations...")
     report = {
@@ -567,7 +540,6 @@ def main():
         "loss_patterns": loss_patterns,
         "home_away": home_away,
         "by_month": by_month,
-        "yrfi_nrfi": yrfi_nrfi,
     }
     report["priority_recommendations"] = generate_priority_recommendations(report)
 
@@ -622,14 +594,6 @@ def main():
     print(f"   Home picks: {ha['home_picks']} games, {ha['home_win_rate']}% WR")
     print(f"   Away picks: {ha['away_picks']} games, {ha['away_win_rate']}% WR")
     print(f"   → {ha['bias_note']}")
-
-    print(f"\n⚾ YRFI / NRFI")
-    yn = yrfi_nrfi
-    if yn["data_available"]:
-        print(f"   YRFI: {yn['yrfi_accuracy']}% ({yn['yrfi_picks']} picks)")
-        print(f"   NRFI: {yn['nrfi_accuracy']}% ({yn['nrfi_picks']} picks)")
-    else:
-        print(f"   → {yn['note']}")
 
     print(f"\n📅 BY MONTH (win rate)")
     for month, m in list(by_month.items())[-6:]:

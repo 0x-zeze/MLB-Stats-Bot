@@ -3,13 +3,10 @@ import json
 
 from evolution_helpers import final_result, isolated_evolution_store, sample_trajectory
 from src.evolution.evolution_engine import (
-    _build_yrfi_trajectory,
-    backfill_flat_outcomes,
     evaluate_completed_prediction,
     ingest_bot_history,
     run_evolution_cycle,
 )
-from src.evolution.prediction_evaluator import _predicted_probability
 from src.evolution.memory_store import (
     append_jsonl,
     append_prediction_outcome,
@@ -25,7 +22,7 @@ from src.evolution.evolution_report import build_evolution_summary
 class EvolutionEngineTests(unittest.TestCase):
     def test_full_chain_logs_auditable_artifacts_without_applying_rules(self):
         with isolated_evolution_store():
-            result = evaluate_completed_prediction(sample_trajectory(), final_result(home_score=3, away_score=3))
+            result = evaluate_completed_prediction(sample_trajectory(), final_result(home_score=5, away_score=3))
             outcomes = read_prediction_outcomes()
             losses = read_jsonl("language_losses")
             lessons = read_jsonl("lessons")
@@ -92,21 +89,6 @@ class EvolutionEngineTests(unittest.TestCase):
 
     def test_totals_probability_derived_from_projection_when_market_odds_missing_old(self):
         pass  # totals market removed
-
-    def test_yrfi_probability_flows_through_and_inverts_for_no(self):
-        prediction = {
-            "gamePk": 777,
-            "dateYmd": "2026-05-01",
-            "away": {"name": "Alpha Aces"},
-            "home": {"name": "Beta Bats"},
-            "firstInning": {"pick": "NO", "probability": 37, "confidence": "medium"},
-        }
-        trajectory = _build_yrfi_trajectory(prediction)
-        self.assertIsNotNone(trajectory)
-        self.assertEqual(trajectory["prediction"]["yrfi_probability"], 37)
-        # YES probability 37% means a NO pick wins ~63% of the time.
-        self.assertAlmostEqual(_predicted_probability(trajectory, "yrfi", "NO"), 0.63, places=2)
-        self.assertAlmostEqual(_predicted_probability(trajectory, "yrfi", "YES"), 0.37, places=2)
 
 
     def test_prediction_outcome_schema_migrates_old_header(self):

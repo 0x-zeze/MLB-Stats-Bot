@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, extname, resolve } from 'node:path';
 
@@ -346,7 +346,9 @@ function compactPrediction(prediction, dateYmd) {
     calibrationArtifact: prediction.calibrationArtifact || null,
     runId: prediction.runId || null,
     snapshotPath: prediction.snapshotPath || null,
-    versions: prediction.versions || null
+    versions: prediction.versions || null,
+    newsContext: prediction.newsContext || null,
+    featureSnapshot: prediction.featureSnapshot || null
   };
 }
 
@@ -571,6 +573,16 @@ export class Storage {
         PRIMARY KEY (game_pk, feature_group)
       );
 
+      CREATE TABLE IF NOT EXISTS news_feed_cache (
+        feed_url TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        fetched_at TEXT,
+        expires_at TEXT,
+        last_error TEXT,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_picks_date ON picks(date_ymd);
       CREATE INDEX IF NOT EXISTS idx_picks_post_game ON picks(post_game_processed);
       CREATE INDEX IF NOT EXISTS idx_yrfi_date ON yrfi_results(date_ymd);
@@ -741,6 +753,8 @@ export class Storage {
     const normalized = normalizeState(state);
     const replace = this.db.transaction(() => {
       this.db.prepare('DELETE FROM yrfi_results').run();
+      this.db.prepare('DELETE FROM bet_ledger').run();
+      this.db.prepare('DELETE FROM pick_processing').run();
       this.db.prepare('DELETE FROM picks').run();
       this.db.prepare('DELETE FROM chat_settings').run();
 
@@ -768,7 +782,19 @@ export class Storage {
     }
 
     const predictions = {};
-    for (const row of this.db.prepare('SELECT * FROM picks ORDER BY date_ymd, game_pk').all()) {
+    const latestRows = this.db
+      .prepare(
+        `SELECT p.*, pp.post_game_processed AS processing_post_game_processed,
+                pp.post_game_processed_at AS processing_post_game_processed_at
+         FROM picks p
+         LEFT JOIN pick_processing pp ON pp.game_pk = p.game_pk
+         WHERE p.prediction_version = (
+           SELECT MAX(p2.prediction_version) FROM picks p2 WHERE p2.game_pk = p.game_pk
+         )
+         ORDER BY p.date_ymd, p.game_pk`
+      )
+      .all();
+    for (const row of latestRows) {
       const prediction = this.predictionFromRow(row);
       predictions[String(prediction.gamePk)] = prediction;
     }
@@ -928,50 +954,65 @@ export class Storage {
       dateYmd: prediction.dateYmd ?? row.date_ymd,
       status: prediction.status ?? row.status,
       matchup: prediction.matchup ?? row.matchup,
-      postGameProcessed: intToBool(row.post_game_processed),
-      postGameProcessedAt: row.post_game_processed_at || null
+      predictionRunId: prediction.predictionRunId ?? row.prediction_run_id ?? null,
+      predictionVersion: prediction.predictionVersion ?? row.prediction_version ?? null,
+      modelVersion: prediction.modelVersion ?? row.model_version ?? null,
+      featureVersion: prediction.featureVersion ?? row.feature_version ?? null,
+      calibrationVersion: prediction.calibrationVersion ?? row.calibration_version ?? null,
+      betPolicyVersion: prediction.betPolicyVersion ?? row.bet_policy_version ?? null,
+      snapshotHash: prediction.snapshotHash ?? row.snapshot_hash ?? null,
+      payloadHash: prediction.payloadHash ?? row.payload_hash ?? null,
+      postGameProcessed: intToBool(
+        row.processing_post_game_processed ?? row.post_game_processed
+      ),
+      postGameProcessedAt:
+        row.processing_post_game_processed_at ?? row.post_game_processed_at ?? null
     };
   }
 
   writePredictionRow(prediction) {
     const gamePk = String(prediction.gamePk);
-    const firstInning = prediction.firstInning || null;
+    const now = new Date().toISOString();
+    const fallback = normalizeFeatureFallbacks(prediction.featureFallbacks);
+    const predictionRunId = String(prediction.predictionRunId || randomUUID());
+    const latestVersion = this.db
+      .prepare('SELECT COALESCE(MAX(prediction_version), 0) AS value FROM picks WHERE game_pk = ?')
+      .get(gamePk)?.value;
+    const predictionVersion = Number(latestVersion || 0) + 1;
     const normalizedPrediction = {
       ...prediction,
-      postGameProcessed: Boolean(prediction.postGameProcessed),
-      postGameProcessedAt: prediction.postGameProcessedAt || null
+      predictionRunId,
+      predictionVersion,
+      postGameProcessed: false,
+      postGameProcessedAt: null
     };
-    const now = new Date().toISOString();
-
-    const fallback = normalizeFeatureFallbacks(normalizedPrediction.featureFallbacks);
+    const hashPayload = toJson(normalizedPrediction);
+    const payloadHash = createHash('sha256').update(hashPayload).digest('hex');
+    normalizedPrediction.payloadHash = payloadHash;
+    const payload = toJson(normalizedPrediction);
 
     this.db
       .prepare(
         `INSERT INTO picks (
-          game_pk, date_ymd, status, matchup, away_team_id, home_team_id,
-          pick_team_id, pick_confidence, pick_source, post_game_processed,
-          post_game_processed_at, saved_at, payload, updated_at,
+          prediction_run_id, game_pk, prediction_version, run_id,
+          model_version, feature_version, calibration_version, bet_policy_version,
+          snapshot_hash, payload_hash, date_ymd, status, matchup,
+          away_team_id, home_team_id, pick_team_id, pick_confidence, pick_source,
+          post_game_processed, post_game_processed_at, saved_at, payload, updated_at,
           feature_fallback_count, fallback_features_used
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(game_pk) DO UPDATE SET
-          date_ymd = excluded.date_ymd,
-          status = excluded.status,
-          matchup = excluded.matchup,
-          away_team_id = excluded.away_team_id,
-          home_team_id = excluded.home_team_id,
-          pick_team_id = excluded.pick_team_id,
-          pick_confidence = excluded.pick_confidence,
-          pick_source = excluded.pick_source,
-          post_game_processed = excluded.post_game_processed,
-          post_game_processed_at = excluded.post_game_processed_at,
-          saved_at = excluded.saved_at,
-          payload = excluded.payload,
-          updated_at = excluded.updated_at,
-          feature_fallback_count = excluded.feature_fallback_count,
-          fallback_features_used = excluded.fallback_features_used`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?)`
       )
       .run(
+        predictionRunId,
         gamePk,
+        predictionVersion,
+        normalizedPrediction.runId || null,
+        normalizedPrediction.modelVersion || normalizedPrediction.versions?.model || null,
+        normalizedPrediction.featureVersion || normalizedPrediction.versions?.feature || null,
+        normalizedPrediction.calibrationVersion || normalizedPrediction.versions?.calibration || null,
+        normalizedPrediction.betPolicyVersion || normalizedPrediction.versions?.betPolicy || null,
+        normalizedPrediction.snapshotHash || null,
+        payloadHash,
         normalizedPrediction.dateYmd || '',
         normalizedPrediction.status || '',
         normalizedPrediction.matchup || '',
@@ -980,39 +1021,30 @@ export class Storage {
         normalizedPrediction.pick?.id !== undefined ? String(normalizedPrediction.pick.id) : null,
         normalizedPrediction.pick?.confidence || '',
         normalizedPrediction.pick?.source || '',
-        boolToInt(normalizedPrediction.postGameProcessed),
-        normalizedPrediction.postGameProcessedAt,
         normalizedPrediction.savedAt || now,
-        toJson(normalizedPrediction),
+        payload,
         now,
         fallback.count,
         fallback.features === null ? null : toJson(fallback.features)
       );
 
-    if (firstInning) {
-      this.db
-        .prepare(
-          `INSERT INTO yrfi_results (
-            game_pk, date_ymd, pick, probability, source, prediction_payload, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(game_pk) DO UPDATE SET
-            date_ymd = excluded.date_ymd,
-            pick = excluded.pick,
-            probability = excluded.probability,
-            source = excluded.source,
-            prediction_payload = excluded.prediction_payload,
-            updated_at = excluded.updated_at`
-        )
-        .run(
-          gamePk,
-          normalizedPrediction.dateYmd || '',
-          firstInning.pick || null,
-          firstInning.probability ?? null,
-          firstInning.source || null,
-          toJson(firstInning),
-          now
-        );
-    }
+    this.db
+      .prepare(
+        `INSERT INTO pick_processing (
+          game_pk, prediction_run_id, post_game_processed, post_game_processed_at, updated_at
+        ) VALUES (?, ?, 0, NULL, ?)
+        ON CONFLICT(game_pk) DO UPDATE SET
+          prediction_run_id = excluded.prediction_run_id,
+          updated_at = excluded.updated_at
+        WHERE pick_processing.post_game_processed = 0`
+      )
+      .run(gamePk, predictionRunId, now);
+
+    // YRFI/NRFI market removed — yrfi_results table retained for historical data but no longer written to or read. See migration note.
+
+    prediction.predictionRunId = predictionRunId;
+    prediction.predictionVersion = predictionVersion;
+    prediction.payloadHash = payloadHash;
   }
 
   getLastUpdateId() {
@@ -1187,6 +1219,7 @@ export class Storage {
           // Reuse the immutable first-write core inputs and artifact on refresh.
           // Never let a later mutable prediction overwrite the replay authority.
           if (stored.coreInputs) prediction.coreInputs = stored.coreInputs;
+          if (stored.features) prediction.featureSnapshot = stored.features;
           if (stored.calibrationArtifact) prediction.calibrationArtifact = stored.calibrationArtifact;
           if (!prediction.versions) prediction.versions = {};
           prediction.versions.calibration = prediction.calibrationVersion;
@@ -1212,6 +1245,7 @@ export class Storage {
           betPolicyVersion: prediction.betPolicyVersion || prediction.versions?.betPolicy || 'value-v1'
         },
         coreInputs: prediction.coreInputs || null,
+        features: prediction.featureSnapshot || null,
         calibrationArtifact: frozenCal
       });
 
@@ -1238,6 +1272,7 @@ export class Storage {
           modelInputs: snapshot.modelInputs,
           quotes: snapshot.quotes,
           coreInputs: snapshot.coreInputs,
+          features: snapshot.features,
           calibration: frozenCal,
           calibrationArtifact: snapshot.calibrationArtifact
         },
@@ -1304,6 +1339,7 @@ export class Storage {
 
         const key = String(prediction.gamePk);
         const existing = this.getPrediction(key) || {};
+        prediction.predictionRunId = randomUUID();
         // Freeze decision inputs before compacting mutable display fields.
         this.capturePredictionSnapshot(prediction, dateYmd);
         const compact = compactPrediction(prediction, dateYmd);
@@ -1312,6 +1348,10 @@ export class Storage {
         compact.calibrationVersion =
           prediction.calibrationVersion || existing.calibrationVersion || null;
         compact.runId = prediction.runId || existing.runId || null;
+        compact.predictionRunId = prediction.predictionRunId;
+        // Keep latest display-only news context while immutable featureSnapshot
+        // remains first-write authority restored by capturePredictionSnapshot.
+        compact.newsContext = prediction.newsContext || existing.newsContext || null;
         if (!compact.openingOdds && existing.openingOdds) {
           compact.openingOdds = existing.openingOdds;
         } else if (!compact.openingOdds && compact.currentOdds) {
@@ -1335,26 +1375,57 @@ export class Storage {
     this.refreshState();
   }
 
+  latestPickRow(gamePk) {
+    return this.db
+      .prepare(
+        `SELECT p.*, pp.post_game_processed AS processing_post_game_processed,
+                pp.post_game_processed_at AS processing_post_game_processed_at
+         FROM picks p
+         LEFT JOIN pick_processing pp ON pp.game_pk = p.game_pk
+         WHERE p.game_pk = ?
+         ORDER BY p.prediction_version DESC, p.saved_at DESC
+         LIMIT 1`
+      )
+      .get(String(gamePk));
+  }
+
   getPrediction(gamePk) {
-    const row = this.db.prepare('SELECT * FROM picks WHERE game_pk = ?').get(String(gamePk));
+    const row = this.latestPickRow(gamePk);
     return row ? this.predictionFromRow(row) : null;
   }
 
   listPredictionsByDate(dateYmd) {
     return this.db
-      .prepare('SELECT * FROM picks WHERE date_ymd = ? ORDER BY game_pk')
+      .prepare(
+        `SELECT p.*, pp.post_game_processed AS processing_post_game_processed,
+                pp.post_game_processed_at AS processing_post_game_processed_at
+         FROM picks p
+         LEFT JOIN pick_processing pp ON pp.game_pk = p.game_pk
+         WHERE p.date_ymd = ?
+           AND p.prediction_version = (
+             SELECT MAX(p2.prediction_version) FROM picks p2 WHERE p2.game_pk = p.game_pk
+           )
+         ORDER BY p.game_pk`
+      )
       .all(String(dateYmd || ''))
       .map((row) => this.predictionFromRow(row));
   }
 
   // Predictions stored on or after a date string. Used by closing-line capture,
-  // which must NOT scope to a single timezone-derived day: a game listed under
-  // date D can start after local midnight (stored date != local "today"), so a
-  // single-day query misses tonight's slate. Querying a small recent range and
-  // letting the start-time filter do the work avoids that rollover gap.
+  // which must NOT scope to a single timezone-derived day.
   listPredictionsSinceDate(dateYmd) {
     return this.db
-      .prepare('SELECT * FROM picks WHERE date_ymd >= ? ORDER BY date_ymd, game_pk')
+      .prepare(
+        `SELECT p.*, pp.post_game_processed AS processing_post_game_processed,
+                pp.post_game_processed_at AS processing_post_game_processed_at
+         FROM picks p
+         LEFT JOIN pick_processing pp ON pp.game_pk = p.game_pk
+         WHERE p.date_ymd >= ?
+           AND p.prediction_version = (
+             SELECT MAX(p2.prediction_version) FROM picks p2 WHERE p2.game_pk = p.game_pk
+           )
+         ORDER BY p.date_ymd, p.game_pk`
+      )
       .all(String(dateYmd || ''))
       .map((row) => this.predictionFromRow(row));
   }
@@ -1457,6 +1528,38 @@ export class Storage {
     return result.changes > 0;
   }
 
+  getNewsFeedCache(feedUrl) {
+    const row = this.db
+      .prepare(
+        `SELECT feed_url AS feedUrl, source, payload, fetched_at AS fetchedAt,
+                expires_at AS expiresAt, last_error AS lastError, updated_at AS updatedAt
+         FROM news_feed_cache WHERE feed_url = ?`
+      )
+      .get(String(feedUrl || ''));
+    if (!row) return null;
+    return { ...row, payload: parseJson(row.payload, []) };
+  }
+
+  setNewsFeedCache(feedUrl, payload, { source = 'unknown', fetchedAt = null, expiresAt = null, lastError = null } = {}) {
+    const url = String(feedUrl || '');
+    if (!url) return false;
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO news_feed_cache (feed_url, source, payload, fetched_at, expires_at, last_error, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(feed_url) DO UPDATE SET
+           source = excluded.source,
+           payload = excluded.payload,
+           fetched_at = excluded.fetched_at,
+           expires_at = excluded.expires_at,
+           last_error = excluded.last_error,
+           updated_at = excluded.updated_at`
+      )
+      .run(url, String(source || 'unknown'), toJson(payload || []), fetchedAt, expiresAt, lastError, now);
+    return true;
+  }
+
   getFeatureSnapshot(gamePk, featureGroup) {
     const row = this.db
       .prepare(
@@ -1542,10 +1645,11 @@ export class Storage {
   listPendingPredictionDates() {
     return this.db
       .prepare(
-        `SELECT DISTINCT date_ymd
-         FROM picks
-         WHERE post_game_processed = 0 AND date_ymd <> ''
-         ORDER BY date_ymd`
+        `SELECT DISTINCT p.date_ymd
+         FROM picks p
+         JOIN pick_processing pp ON pp.prediction_run_id = p.prediction_run_id
+         WHERE pp.post_game_processed = 0 AND p.date_ymd <> ''
+         ORDER BY p.date_ymd`
       )
       .all()
       .map((row) => row.date_ymd);
@@ -1557,26 +1661,19 @@ export class Storage {
   }
 
   markPostGameProcessedRow(gamePk) {
-    const row = this.db.prepare('SELECT * FROM picks WHERE game_pk = ?').get(String(gamePk));
+    const row = this.latestPickRow(gamePk);
     if (!row) return;
 
     const processedAt = new Date().toISOString();
-    const prediction = {
-      ...this.predictionFromRow(row),
-      postGameProcessed: true,
-      postGameProcessedAt: processedAt
-    };
-
     this.db
       .prepare(
-        `UPDATE picks
+        `UPDATE pick_processing
          SET post_game_processed = 1,
              post_game_processed_at = ?,
-             payload = ?,
              updated_at = ?
-         WHERE game_pk = ?`
+         WHERE game_pk = ? AND post_game_processed = 0`
       )
-      .run(processedAt, toJson(prediction), processedAt, String(gamePk));
+      .run(processedAt, processedAt, String(gamePk));
   }
 
   getMemory() {
@@ -1642,34 +1739,11 @@ export class Storage {
       if (correct) memory.byConfidence[confidence].correct += 1;
 
       let firstInningCorrect = null;
-      if (
-        prediction.firstInning &&
-        prediction.firstInning.pick &&
-        String(prediction.firstInning.pick).toUpperCase() !== 'NO BET' &&
-        actualFirstInningRun !== null &&
-        actualFirstInningRun !== undefined
-      ) {
-        const actualPick = actualFirstInningRun ? 'YES' : 'NO';
-        const predictedPick = prediction.firstInning.pick || 'NO';
-        firstInningCorrect = predictedPick === actualPick;
-        memory.firstInning.totalPicks += 1;
-        if (firstInningCorrect) memory.firstInning.correctPicks += 1;
-        if (!firstInningCorrect) memory.firstInning.wrongPicks += 1;
-
-        if (!memory.firstInning.byPick[predictedPick]) {
-          memory.firstInning.byPick[predictedPick] = { total: 0, correct: 0 };
-        }
-        memory.firstInning.byPick[predictedPick].total += 1;
-        if (firstInningCorrect) memory.firstInning.byPick[predictedPick].correct += 1;
-
-        this.writeYrfiOutcome(prediction, result, firstInningCorrect);
-      }
+      // YRFI/NRFI market removed — firstInning grading block never fires
+      // (prediction.firstInning is always undefined). Retained as null for
+      // learningLog/matchup-memory shape compatibility.
 
       if (enabled) {
-        if (!result.winner || !result.winner.id || !result.loser || !result.loser.id) {
-          // Skip bias update for games without clear winner/loser (ties, suspended)
-          return;
-        }
         const winnerKey = String(result.winner.id);
         const loserKey = String(result.loser.id);
         const pickKey = String(prediction.pick.id);
@@ -1739,41 +1813,10 @@ export class Storage {
     this.refreshState();
   }
 
-  writeYrfiOutcome(prediction, result, correct) {
-    const anyRun = result.firstInning?.anyRun;
-    if (anyRun === null || anyRun === undefined) return;
-
-    const actualPick = anyRun ? 'YES' : 'NO';
-    const processedAt = new Date().toISOString();
-    const firstInning = prediction.firstInning || null;
-
-    this.db
-      .prepare(
-        `INSERT INTO yrfi_results (
-          game_pk, date_ymd, pick, probability, source, prediction_payload,
-          actual_any_run, actual_pick, correct, processed_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(game_pk) DO UPDATE SET
-          actual_any_run = excluded.actual_any_run,
-          actual_pick = excluded.actual_pick,
-          correct = excluded.correct,
-          processed_at = excluded.processed_at,
-          updated_at = excluded.updated_at`
-      )
-      .run(
-        String(prediction.gamePk),
-        prediction.dateYmd || '',
-        firstInning?.pick || null,
-        firstInning?.probability ?? null,
-        firstInning?.source || null,
-        toJson(firstInning),
-        boolToInt(anyRun),
-        actualPick,
-        boolToInt(correct),
-        processedAt,
-        processedAt
-      );
-  }
+  // YRFI/NRFI market removed (scope reduction: no per-game edge, was advisory-only).
+  // writeYrfiOutcome deleted — stop writing/reading yrfi_results going forward.
+  // Table CREATE TABLE IF NOT EXISTS yrfi_results retained so existing DBs keep
+  // historical rows; do not DROP TABLE in production. Migration note: archive-only.
 
   // Record a VALUE bet at decision time. Idempotent on (game_pk, market): a
   // re-run of /picks for the same game never creates a duplicate ledger row.
@@ -2149,29 +2192,9 @@ export class Storage {
       memory.byConfidence[confidence].total += 1;
       if (correct) memory.byConfidence[confidence].correct += 1;
 
+      // YRFI/NRFI market removed — firstInning grading and yrfi_results writes stopped.
+      // yrfi_results table retained for historical data only (do not drop).
       let firstInningCorrect = null;
-      if (
-        prediction.firstInning &&
-        prediction.firstInning.pick &&
-        String(prediction.firstInning.pick).toUpperCase() !== 'NO BET' &&
-        actualFirstInningRun !== null &&
-        actualFirstInningRun !== undefined
-      ) {
-        const actualPick = actualFirstInningRun ? 'YES' : 'NO';
-        const predictedPick = prediction.firstInning.pick || 'NO';
-        firstInningCorrect = predictedPick === actualPick;
-        memory.firstInning.totalPicks += 1;
-        if (firstInningCorrect) memory.firstInning.correctPicks += 1;
-        if (!firstInningCorrect) memory.firstInning.wrongPicks += 1;
-
-        if (!memory.firstInning.byPick[predictedPick]) {
-          memory.firstInning.byPick[predictedPick] = { total: 0, correct: 0 };
-        }
-        memory.firstInning.byPick[predictedPick].total += 1;
-        if (firstInningCorrect) memory.firstInning.byPick[predictedPick].correct += 1;
-
-        this.writeYrfiOutcome(prediction, result, firstInningCorrect);
-      }
 
       if (enabled) {
         if (!result.winner || !result.winner.id || !result.loser || !result.loser.id) {

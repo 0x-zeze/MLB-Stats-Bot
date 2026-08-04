@@ -22,7 +22,6 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertIn(payload["games"][0]["decision"], {"BET", "LEAN", "NO BET"})
         self.assertIn("data_quality", payload["games"][0])
         self.assertIn("moneyline", payload["games"][0])
-        self.assertIn("yrfi", payload["games"][0])
 
     def test_history_and_performance_available(self):
         history = get_prediction_history()
@@ -47,30 +46,12 @@ class DashboardServiceTests(unittest.TestCase):
             "data_quality": {"score": 90},
             "probable_pitchers": {"status": "Confirmed"},
             "moneyline": {"edge": 3.0, "confidence": "Medium"},
-            "yrfi": {"edge": 0.0, "difference": 1.0},
         }
 
         decision, reason = _decision_from_game(game, settings)
 
         self.assertEqual("NO BET", decision)
         self.assertEqual("Moneyline edge below minimum threshold", reason)
-
-    def test_yrfi_edge_does_not_override_moneyline_decision(self):
-        settings = {
-            **DEFAULT_DASHBOARD_SETTINGS,
-            "minimum_moneyline_edge": 0.05,
-        }
-        game = {
-            "data_quality": {"score": 90},
-            "probable_pitchers": {"status": "Confirmed"},
-            "moneyline": {"edge": 6.0, "confidence": "Medium"},
-            "yrfi": {"edge": 5.0, "difference": 1.0},
-        }
-
-        decision, reason = _decision_from_game(game, settings)
-
-        self.assertEqual("LEAN", decision)
-        self.assertEqual("", reason)
 
     def test_mock_today_includes_predicted_winner(self):
         payload = get_today_dashboard(source="mock")
@@ -141,7 +122,6 @@ class DashboardServiceTests(unittest.TestCase):
                             "correctPicks": 3,
                             "wrongPicks": 1,
                             "byConfidence": {"high": {"total": 4, "correct": 3}},
-                            "firstInning": {"totalPicks": 2, "correctPicks": 1},
                             "learningLog": [],
                         },
                     }
@@ -170,7 +150,6 @@ class DashboardServiceTests(unittest.TestCase):
                 "correctPicks": 1,
                 "wrongPicks": 1,
                 "byConfidence": {"high": {"total": 2, "correct": 1}},
-                "firstInning": {"totalPicks": 1, "correctPicks": 1},
                 "learningLog": [],
             },
         }
@@ -206,16 +185,6 @@ class DashboardServiceTests(unittest.TestCase):
                     "edge": 10,
                     "clv": 0.10,
                 },
-                {
-                    "status": "settled",
-                    "market": "yrfi",
-                    "result": "win",
-                    "units_staked": 1,
-                    "units_pl": 0.8,
-                    "model_prob": 57,
-                    "edge": 3,
-                    "clv": 0.03,
-                },
             ]
         }
 
@@ -223,14 +192,13 @@ class DashboardServiceTests(unittest.TestCase):
             with patch("src.dashboard_service.get_bet_ledger", return_value=ledger):
                 performance = dashboard_service.get_telegram_model_performance()
 
-        self.assertEqual(32.9, performance["overall"]["roi"])
-        self.assertEqual(5.75, performance["overall"]["average_edge"])
-        self.assertEqual(0.035, performance["overall"]["average_clv"])
-        self.assertEqual(75.0, performance["overall"]["clv_hit_rate"])
-        self.assertAlmostEqual(0.2158, performance["overall"]["brier_score"])
-        self.assertAlmostEqual(0.6238, performance["overall"]["log_loss"])
+        self.assertEqual(25.0, performance["overall"]["roi"])
+        self.assertEqual(6.667, performance["overall"]["average_edge"])
+        self.assertEqual(0.037, performance["overall"]["average_clv"])
+        self.assertEqual(66.7, performance["overall"]["clv_hit_rate"])
+        self.assertAlmostEqual(0.2313, performance["overall"]["brier_score"])
+        self.assertAlmostEqual(0.6547, performance["overall"]["log_loss"])
         self.assertEqual(25.0, performance["by_market"][0]["roi"])
-        self.assertEqual(80.0, performance["by_market"][1]["roi"])
 
     def test_run_dashboard_backtest_replays_history_filtered_by_date(self):
         import json as _json
@@ -253,7 +221,6 @@ class DashboardServiceTests(unittest.TestCase):
 
         history = [
             outcome("2026-05-04", "moneyline", "Home", "win", 5.0, 1.0, "Home"),
-            outcome("2026-05-04", "yrfi", "YES", "loss", 2.0, -1.0, None),
             # Outside the requested window — must be filtered out.
             outcome("2026-05-30", "moneyline", "Away", "win", 4.0, 1.0, "Away"),
         ]
@@ -263,12 +230,12 @@ class DashboardServiceTests(unittest.TestCase):
                 {"market": "all", "start_date": "2026-05-04", "end_date": "2026-05-25"}
             )
 
-        # Only the two 2026-05-04 rows fall in the window; 2026-05-30 is excluded.
-        self.assertEqual(2, payload["summary"]["totalBets"])
-        self.assertEqual(["Moneyline", "Yrfi"], [row["market"] for row in payload["byMarket"]])
+        # Only the 2026-05-04 moneyline row falls in the window; 2026-05-30 is excluded.
+        self.assertEqual(1, payload["summary"]["totalBets"])
+        self.assertEqual(["Moneyline"], [row["market"] for row in payload["byMarket"]])
         self.assertIn("winRate", payload["byMarket"][0])
         self.assertIn("predicted", payload["calibration"][0])
-        self.assertEqual({"moneyline", "yrfi"}, {row["market"] for row in payload["rows"]})
+        self.assertEqual({"moneyline"}, {row["market"] for row in payload["rows"]})
 
     def test_run_dashboard_backtest_different_windows_differ(self):
         import json as _json

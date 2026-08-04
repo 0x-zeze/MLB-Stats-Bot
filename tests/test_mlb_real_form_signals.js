@@ -11,8 +11,6 @@ const {
   blendedTeamPreventionEdge,
   rollingFormWindow,
   getRollingTeamStatMap,
-  buildFirstInningProjection,
-  MARKET_BLEND_WEIGHT,
   ROLLING_FORM_DAYS
 } = __mlbTestInternals;
 
@@ -99,33 +97,6 @@ test('starterEdge blends season with recent gameLog form', () => {
   assert.ok(recentOnly > seasonOnly);
   assert.ok(blended > seasonOnly);
   assert.ok(Math.abs(blended - expected) < 1e-9);
-});
-
-test('YRFI mid-band lean is PASS not forced YES', () => {
-  const teamProfile = {
-    scoredBlend: 0.33,
-    allowedBlend: 0.33,
-    anyRunBlend: 0.55,
-    season: { scored: 4, allowed: 4, games: 12 },
-    recent: { anyRun: 5, games: 10 },
-    team: { name: 'Team', abbreviation: 'TST' }
-  };
-
-  const projection = buildFirstInningProjection({
-    away: { name: 'Away', abbreviation: 'AWY' },
-    home: { name: 'Home', abbreviation: 'HME' },
-    awayProfile: { ...teamProfile, team: { name: 'Away', abbreviation: 'AWY' } },
-    homeProfile: { ...teamProfile, team: { name: 'Home', abbreviation: 'HME' } },
-    awayPitcherStats: null,
-    homePitcherStats: null,
-    awayPitcherFirstInningProfile: null,
-    homePitcherFirstInningProfile: null,
-    headToHead: null
-  });
-
-  assert.equal(projection.baselineLean, 'PASS');
-  assert.equal(projection.baselinePick, 'NO BET');
-  assert.ok(MARKET_BLEND_WEIGHT >= 0.2);
 });
 
 test('blended prevention uses rolling staff ERA/WHIP when available', () => {

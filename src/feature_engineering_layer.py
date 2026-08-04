@@ -581,61 +581,6 @@ def _lineup_leadoff_obp(
     return 0.330
 
 
-def _first_inning_rate(
-    team: Any,
-    attr: str,
-    feature: str,
-    tracker: FallbackTracker,
-    default: float = 0.33,
-) -> float:
-    """Read a first-inning rate; record a fallback if it's missing/invalid."""
-    raw = getattr(team, attr, None)
-    if raw in (None, ""):
-        tracker.record(
-            "build_first_inning_features", feature, default, reason=f"{attr}_missing"
-        )
-        return default
-    value = safe_float(raw, None)
-    if value is None:
-        tracker.record(
-            "build_first_inning_features", feature, default, reason=f"{attr}_invalid"
-        )
-        return default
-    return value
-
-
-def build_first_inning_features(
-    collected: dict[str, Any],
-    tracker: FallbackTracker | None = None,
-) -> dict[str, Any]:
-    """Create clean YRFI/NRFI model features from raw game data."""
-    tracker = _tracker(tracker, _game_pk(collected.get("game")))
-    home_team = collected["home_team"]
-    away_team = collected["away_team"]
-    home_lineup = collected.get("home_lineup")
-    away_lineup = collected.get("away_lineup")
-
-    try:
-        away_scoring = _first_inning_rate(away_team, "first_inning_scoring_rate", "away_first_inning_scoring_rate", tracker)
-        home_scoring = _first_inning_rate(home_team, "first_inning_scoring_rate", "home_first_inning_scoring_rate", tracker)
-        away_allowed = _first_inning_rate(away_team, "first_inning_allowed_rate", "away_first_inning_allowed_rate", tracker)
-        home_allowed = _first_inning_rate(home_team, "first_inning_allowed_rate", "home_first_inning_allowed_rate", tracker)
-    except Exception as exc:
-        tracker.record(
-            "build_first_inning_features", "first_inning_rates", 0.33, exception=exc
-        )
-        away_scoring = home_scoring = away_allowed = home_allowed = 0.33
-
-    return {
-        "away_first_inning_scoring_rate": away_scoring,
-        "home_first_inning_scoring_rate": home_scoring,
-        "away_first_inning_allowed_rate": away_allowed,
-        "home_first_inning_allowed_rate": home_allowed,
-        "away_leadoff_obp": _lineup_leadoff_obp(away_lineup, tracker, "away"),
-        "home_leadoff_obp": _lineup_leadoff_obp(home_lineup, tracker, "home"),
-    }
-
-
 def build_total_features(collected: dict[str, Any]) -> dict[str, Any]:
     """Create clean total-runs model features from raw game data."""
     context = collected["total_context"]
@@ -690,7 +635,6 @@ def build_game_features(
     tracker = _tracker(tracker, _game_pk(collected.get("game")))
     return {
         "moneyline": build_moneyline_features(collected, tracker),
-        "first_inning": build_first_inning_features(collected, tracker),
         "signal_priority": SIGNAL_PRIORITY,
         "fallbacks": tracker.summary(),
     }

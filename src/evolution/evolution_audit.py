@@ -19,7 +19,7 @@ RECOMMENDATION_MAP = {
     "weak_edge": "Raise the required edge or return NO BET when model edge is marginal.",
     "overconfidence": "Tighten confidence caps; do not allow Medium/High confidence without multiple independent Tier 1 signals.",
     "lineup_misread": "Downgrade confidence when lineup is projected, missing, or key lineup slots are unclear.",
-    "weather_misread": "Require fresh weather context before confident YRFI decisions.",
+    "weather_misread": "Require fresh weather context before confident moneyline decisions.",
     "bad_data_quality": "Lower confidence or return NO BET when data quality falls below the safe threshold.",
     "market_misread": "Compare model probability against implied odds and closing line before treating a lean as value.",
     "pitcher_misread": "Increase review of starter K-BB%, WHIP, HR/9, handedness split, and opener/bulk risk.",
@@ -61,7 +61,7 @@ SAFE_APPLY_MAX_WEIGHT_DELTA = 0.05
 SAFE_APPLY_MIN_LOSS_RATE = 55.0
 CALIBRATION_RELEASE_ERROR_THRESHOLD = 5.0
 CALIBRATION_RELEASE_MIN_SAMPLE = 10
-ACTIVE_MARKETS = {"moneyline", "yrfi"}
+ACTIVE_MARKETS = {"moneyline"}
 
 MEMORY_CAUTION_BY_PATTERN = {
     "weak_edge": "Prefer NO BET or LEAN ONLY when edge is marginal and no Tier 1 signal confirms the side.",
@@ -1314,8 +1314,8 @@ def build_evolution_audit(
     }
 
     # Backward-compatible top-level diagnostics intentionally use MONEYLINE only.
-    # Safe production guardrails/weight updates are moneyline controls; YRFI remains
-    # separate advisory diagnostics and cannot poison moneyline updates.
+    # YRFI market was removed (the bot is moneyline-only now); safe production
+    # guardrails and weight updates remain moneyline-only controls.
     moneyline = markets.get("moneyline") or _market_diagnostics("moneyline", [], [], min_segment_sample, candidate_limit)
 
     wins = sum(1 for row in rows if row.get("result") == "win")
@@ -1361,7 +1361,7 @@ def build_evolution_audit(
         "applied_updates": None,
         "memory_update": None,
         "evolution_data_dir": str(evolution_data_dir()),
-        "safety": "Audit safe updates use moneyline-only diagnostics. YRFI diagnostics are market-scoped and advisory unless a YRFI-specific control is added.",
+        "safety": "Audit safe updates use moneyline-only diagnostics. YRFI market was removed; all diagnostics and controls are moneyline-only.",
     }
     if apply_safe or update_memory:
         moneyline_rows = rows_by_market.get("moneyline", [])

@@ -15,7 +15,7 @@ class SymbolicOptimizerTests(unittest.TestCase):
                         "gradient_id": "grad-1",
                         "source_loss_id": "loss-1",
                         "target": "confidence_rules",
-                        "gradient": "Cap confidence on low-edge yrfi.",
+                        "gradient": "Cap confidence on low-edge moneyline.",
                         "reason": "Repeated low-edge losses.",
                     }
                 ]

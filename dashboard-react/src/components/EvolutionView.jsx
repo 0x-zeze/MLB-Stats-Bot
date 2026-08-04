@@ -89,14 +89,12 @@ function TrajectoryDetails({ row }) {
   const dataQuality = input.data_quality || row.data_quality || {};
   const moneyline = prediction.moneyline || row.moneyline || {};
   const totals = prediction.totals || row.totals || {};
-  const yrfi = prediction.yrfi || prediction.first_inning || row.first_inning || {};
   const modelBreakdown = row.model_breakdown || prediction.model_breakdown;
   const betDecision = row.bet_decision || prediction.bet_decision;
   const valuePick = row.value_pick || prediction.value_pick;
   const marketRows = [
     ...compactObjectRows(moneyline, [['ML Model Prob', 'model_probability'], ['Home Prob', 'home_probability'], ['Away Prob', 'away_probability'], ['Edge', 'edge'], ['Odds', 'current_odds']]),
     ...compactObjectRows(totals, [['Projected Total', 'projected_total'], ['Market Total', 'market_total'], ['Lean', 'lean'], ['Over Prob', 'over_probability'], ['Under Prob', 'under_probability'], ['Edge', 'edge']]),
-    ...compactObjectRows(yrfi, [['Pick', 'pick'], ['Probability', 'probability'], ['YRFI Prob', 'yrfi_probability'], ['Edge', 'edge']]),
   ];
   const qualityRows = typeof dataQuality === 'object'
     ? compactObjectRows(dataQuality, [['Score', 'score'], ['Tier', 'tier'], ['Pitchers', 'probable_pitchers'], ['Lineup', 'lineup'], ['Weather', 'weather'], ['Odds', 'odds'], ['Bullpen', 'bullpen_usage'], ['Park', 'park_factor']])

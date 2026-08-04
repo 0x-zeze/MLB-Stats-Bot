@@ -49,11 +49,11 @@ def _nested(source: dict[str, Any], *keys: str, default: Any = None) -> Any:
 
 
 def _infer_market(context: dict[str, Any], prediction: dict[str, Any]) -> str:
+    # YRFI market removed; the bot is moneyline-only now.
     explicit = context.get("market") or prediction.get("market")
     if explicit:
         return str(explicit).lower()
-    lean = str(prediction.get("final_lean") or prediction.get("lean") or "")
-    return "yrfi" if lean.upper() in {"YES", "NO", "YRFI", "NRFI"} else "moneyline"
+    return "moneyline"
 
 
 def _infer_tools(context: dict[str, Any]) -> list[str]:
@@ -78,9 +78,8 @@ def build_prediction_trajectory(game_context: dict[str, Any], prediction_output:
 
     data_quality = context.get("data_quality") or {}
     moneyline = prediction_source.get("moneyline") or context.get("moneyline") or {}
-    yrfi = prediction_source.get("yrfi") or context.get("yrfi") or {}
     market = _infer_market(context, prediction_source)
-    final_lean = prediction_source.get("final_lean") or yrfi.get("pick") or prediction_source.get("lean") or "NO BET"
+    final_lean = prediction_source.get("final_lean") or prediction_source.get("lean") or "NO BET"
     confidence = (
         prediction_source.get("confidence")
         or moneyline.get("confidence")
@@ -114,9 +113,8 @@ def build_prediction_trajectory(game_context: dict[str, Any], prediction_output:
         "model_features_used": context.get("model_features_used") or [],
         "prediction": {
             "moneyline_probability": moneyline.get("model_probability") or moneyline.get("home_probability"),
-                                "yrfi_probability": yrfi.get("probability"),
-            "market_odds": moneyline.get("current_odds") or yrfi.get("odds") or {},
-            "model_edge": moneyline.get("edge") if market == "moneyline" else yrfi.get("edge"),
+            "market_odds": moneyline.get("current_odds") or {},
+            "model_edge": moneyline.get("edge"),
             "lean": final_lean,
             "final_lean": final_lean,
             "confidence": confidence,

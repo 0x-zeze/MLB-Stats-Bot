@@ -44,15 +44,6 @@ test('advanced Telegram output separates prediction lean value quality confidenc
       modelReferenceLines: ['Reference'],
       injuryDetailLines: ['No major injuries'],
       headToHead: { games: 0, awayWins: 0, homeWins: 0, awayProbability: 50, homeProbability: 50 },
-      firstInning: {
-        baselinePick: 'NO',
-        baselineProbability: 51,
-        topRate: 20,
-        bottomRate: 24,
-        awayProfileLine: 'Away low YRFI',
-        homeProfileLine: 'Home low YRFI',
-        reasons: ['Small edge.'],
-      },
       totalRuns: {
         projectedTotal: 8.4,
         awayExpectedRuns: 4.0,

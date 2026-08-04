@@ -229,7 +229,7 @@ def write_json(file_key: str, payload: dict[str, Any]) -> dict[str, Any]:
 def append_prediction_outcome(evaluation: dict[str, Any]) -> dict[str, Any]:
     ensure_evolution_storage()
     market = str(evaluation.get("market") or "").lower()
-    if market not in {"moneyline", "yrfi"}:
+    if market != "moneyline":
         raise ValueError(f"inactive or missing market for prediction outcome: {market or 'missing'}")
     row = {field: "" for field in PREDICTION_OUTCOME_FIELDS}
     for field in PREDICTION_OUTCOME_FIELDS:
@@ -358,10 +358,10 @@ def _recency_weight(created_at: str | None, half_life_days: float = 14.0) -> flo
 
 
 def _market_regimen(context: dict[str, Any]) -> str:
-    """Classify the market regime for matching."""
-    market = str(context.get("market") or "moneyline").lower()
-    if market == "yrfi":
-        return "yrfi"
+    """Classify the market regime for matching.
+
+    YRFI market was removed; the bot is moneyline-only now.
+    """
     return "moneyline"
 
 

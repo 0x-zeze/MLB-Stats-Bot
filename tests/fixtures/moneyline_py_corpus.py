@@ -8,7 +8,7 @@ middle block to src.rule_engine.evaluate_moneyline().
 
 The cases exercise every py rule branch and its boundaries in source order:
 probable-pitcher missing (NO_BET), opener consideration (adjust-only), the
-edge if/elif chain (unavailable / yrfi<6% / edge<threshold), the data-quality
+edge if/elif chain (unavailable / edge<threshold), the data-quality
 floor (score<60), the sharp downgrade x2/x1, odds-stale + weather-stale
 downgrades, the lineup / pitcher-projected Medium caps, and the score-band cap
 elif chain (60-74 -> Low, 75-84 -> Medium, 85+ High-without-calibration ->
@@ -100,14 +100,6 @@ CORPUS: dict[str, Callable[[], tuple[dict[str, Any], dict[str, Any]]]] = {
     # --- edge if/elif chain (orders 20/21/22) -------------------------------
     "edge_unavailable": lambda: (
         _prediction(model_edge=None),
-        _report(),
-    ),
-    "yrfi_edge_below_6pct": lambda: (
-        _prediction(market_type="yrfi", model_edge=0.05),
-        _report(),
-    ),
-    "yrfi_edge_at_6pct_ok": lambda: (
-        _prediction(market_type="yrfi", model_edge=0.06),
         _report(),
     ),
     "edge_below_threshold": lambda: (

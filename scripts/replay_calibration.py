@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.probability_calibrator import _normalize_market, _normalize_probability, calibrate
 from src.utils import data_path
 
-MIN_EDGE = {"moneyline": 0.04, "yrfi": 0.06}
+MIN_EDGE = {"moneyline": 0.04}
 
 
 def implied_prob_from_odds(odds: float) -> float | None:
@@ -40,7 +40,6 @@ def main() -> None:
 
     results: dict[str, dict] = {
         "moneyline": {"taken": 0, "would_skip": 0, "wins": 0, "losses": 0, "pl": 0.0, "staked": 0.0},
-        "yrfi": {"taken": 0, "would_skip": 0, "wins": 0, "losses": 0, "pl": 0.0, "staked": 0.0},
     }
 
     try:

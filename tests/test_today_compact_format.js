@@ -35,7 +35,6 @@ function game(gamePk, awayName, homeName, awayProb, homeProb) {
     modelReferenceLines: ['Reference should be hidden'],
     injuryDetailLines: ['Injury should be hidden'],
     headToHead: { games: 0, awayProbability: 50, homeProbability: 50 },
-    firstInning: { baselinePick: 'NO', baselineProbability: 50, topRate: 0, bottomRate: 0, reasons: [] },
     totalRuns: null,
     reasons: ['Reason should be hidden.']
   };

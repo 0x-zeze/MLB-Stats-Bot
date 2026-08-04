@@ -14,7 +14,7 @@ from ..evaluate import load_prediction_log
 from ..probability_calibrator import retrain as retrain_calibration
 from ..utils import DATA_DIR, safe_float
 
-ACTIVE_MARKETS = {"moneyline", "yrfi"}
+ACTIVE_MARKETS = {"moneyline"}
 from .calibration_auto_adjust import find_miscalibrated_buckets
 from .language_gradient import generate_language_gradient
 from .language_loss import calculate_language_loss
@@ -28,13 +28,12 @@ from .memory_store import (
     read_jsonl,
     read_prediction_outcomes,
     record_evolution_event,
-    rewrite_prediction_outcomes,
     write_json,
 )
 from .evolution_report import build_evolution_summary
 from .time_decay import apply_time_decay_to_lessons
 from .trajectory_logger import build_prediction_trajectory
-from .prediction_evaluator import _predicted_probability, evaluate_prediction
+from .prediction_evaluator import evaluate_prediction
 from .promotion_gate import run_promotion_gate
 from .rule_candidate_generator import generate_rule_candidates
 from .symbolic_optimizer import propose_symbolic_updates
@@ -303,67 +302,9 @@ def _prediction_to_trajectory(prediction: dict[str, Any]) -> dict[str, Any]:
     return build_prediction_trajectory(context, output)
 
 
-def _build_yrfi_trajectory(prediction: dict[str, Any]) -> dict[str, Any] | None:
-    first_inning = prediction.get("firstInning") or {}
-    pick = first_inning.get("pick") or first_inning.get("baselinePick")
-    if not pick:
-        return None
-    # Advisory-only YRFI calls are surfaced as context but are not actionable
-    # bets, so they must not be ingested as graded outcomes.
-    if str(pick).strip().upper() in ("NO BET", "NO_BET"):
-        return None
-
-    away = prediction.get("away") or {}
-    home = prediction.get("home") or {}
-    probability = safe_float(first_inning.get("probability") or first_inning.get("baselineProbability"), 50.0)
-    confidence_label = str(first_inning.get("confidence") or ("medium" if abs(probability - 50) >= 5 else "low"))
-    if confidence_label.lower() not in ("low", "medium", "high"):
-        confidence_label = "Low"
-
-    context = {
-        "game_id": prediction.get("gamePk"),
-        "date": prediction.get("dateYmd"),
-        "market": "yrfi",
-        "matchup": prediction.get("matchup") or f"{away.get('name')} @ {home.get('name')}",
-        "away_team": away.get("name"),
-        "home_team": home.get("name"),
-        "game_time": prediction.get("start"),
-        "venue": prediction.get("venue"),
-        "data_quality_score": 60,
-        "probable_pitcher_status": "stored",
-        "lineup_status": "stored",
-        "weather_status": "unknown",
-        "odds_status": "unknown",
-        "bullpen_status": "n/a",
-        "tool_usage": ["get_mlb_predictions", "first_inning_projection"],
-        "yrfi": {
-            "pick": pick,
-            "probability": probability,
-            "confidence": confidence_label,
-            "edge": round(abs(probability - 50.0), 3),
-        },
-        "main_factors": first_inning.get("reasons") or [],
-        "risk_factors": [],
-    }
-    output = {
-        "final_lean": pick,
-        "confidence": confidence_label,
-        "yrfi": context["yrfi"],
-        "main_factors": context["main_factors"],
-        "risk_factors": [],
-    }
-    return build_prediction_trajectory(context, output)
-
-
 def _prediction_to_trajectories(prediction: dict[str, Any]) -> list[dict[str, Any]]:
-    """Build active market trajectories (moneyline, yrfi) from a stored prediction."""
-    trajectories = [_prediction_to_trajectory(prediction)]
-
-    yrfi = _build_yrfi_trajectory(prediction)
-    if yrfi:
-        trajectories.append(yrfi)
-
-    return trajectories
+    """Build the moneyline trajectory from a stored prediction."""
+    return [_prediction_to_trajectory(prediction)]
 
 
 def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
@@ -396,8 +337,6 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
             continue
 
         away_score, home_score = score
-        first_inning_actual = entry.get("firstInningActual")
-        first_inning_run = first_inning_actual == "YES" if first_inning_actual in ("YES", "NO") else None
 
         trajectories = _prediction_to_trajectories(prediction)
         for trajectory in trajectories:
@@ -408,10 +347,6 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
 
             final_result = {"away_score": away_score, "home_score": home_score}
             final_result.update(_closing_odds_from_snapshots(line_snapshots.get(game_pk, {})))
-            if market == "yrfi":
-                if first_inning_run is None:
-                    continue
-                final_result["first_inning_run"] = first_inning_run
 
             result = evaluate_completed_prediction(trajectory, final_result)
             if result.get("skipped_duplicate"):
@@ -448,9 +383,6 @@ def ingest_bot_history(state_path: str | Path | None = None) -> dict[str, Any]:
 
 
 def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
-    # Repair legacy flat-50% YRFI rows before anything reads outcomes,
-    # so calibration and metrics train on real signal instead of coinflip noise.
-    backfill = backfill_flat_outcomes(state_path)
     ingest = ingest_bot_history(state_path)
     symbolic_candidates = propose_symbolic_updates(read_jsonl("language_gradients"))
 
@@ -475,7 +407,6 @@ def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
     record_evolution_event(
         "evolution_cycle_completed",
         {
-            "backfill": backfill,
             "ingest": ingest,
             "symbolic_candidates": len(symbolic_candidates),
             "rule_candidates": len(rule_candidates),
@@ -487,7 +418,6 @@ def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
         },
     )
     return {
-        "backfill": backfill,
         "ingest": ingest,
         "symbolic_candidates": len(symbolic_candidates),
         "rule_candidates": len(rule_candidates),
@@ -500,65 +430,6 @@ def run_evolution_cycle(state_path: str | Path | None = None) -> dict[str, Any]:
         "lessons_decayed": len(raw_lessons) - len(decayed_lessons),
         "evolution_data_dir": str(evolution_data_dir()),
         "safety": "Candidates are pending only. Production rules, prompts, and weights were not auto-promoted.",
-    }
-
-
-def backfill_flat_outcomes(state_path: str | Path | None = None) -> dict[str, Any]:
-    """Recompute real probability + Brier for legacy flat-50% YRFI rows.
-
-    Totals is archived/inactive. This only touches active YRFI rows and leaves
-    historical totals rows intact for audit trail.
-    """
-    predictions, _learning_log, source = _read_bot_history(state_path)
-    rows = read_prediction_outcomes()
-    updated = 0
-    skipped_no_source = 0
-    skipped_still_flat = 0
-
-    for row in rows:
-        market = str(row.get("market") or "").lower()
-        if market != "yrfi" or row.get("result") not in ("win", "loss"):
-            continue
-        brier = safe_float(row.get("brier_score"), None)
-        if brier is None or abs(brier - 0.25) > 1e-9:
-            continue
-
-        prediction = predictions.get(str(row.get("game_id")))
-        if not prediction:
-            skipped_no_source += 1
-            continue
-        trajectory = _build_yrfi_trajectory(prediction)
-        if not trajectory:
-            skipped_no_source += 1
-            continue
-
-        prob = _predicted_probability(trajectory, market, str(row.get("prediction") or ""))
-        if abs(prob - 0.5) < 1e-9:
-            skipped_still_flat += 1
-            continue
-
-        outcome = 1.0 if row.get("result") == "win" else 0.0
-        new_brier = round((prob - outcome) ** 2, 6)
-        evaluation = _safe_json(row.get("evaluation_json"), {})
-        evaluation["predicted_probability"] = round(prob * 100.0, 3)
-        evaluation["brier_score"] = new_brier
-        row["brier_score"] = new_brier
-        row["evaluation_json"] = json.dumps(evaluation, sort_keys=True, default=str)
-        updated += 1
-
-    if updated:
-        rewrite_prediction_outcomes(rows)
-        record_evolution_event(
-            "flat_outcomes_backfilled",
-            {"source": source, "updated": updated, "by_market": {"yrfi": updated}},
-        )
-
-    return {
-        "source": source or "not_found",
-        "updated": updated,
-        "yrfi_fixed": updated,
-        "skipped_no_source": skipped_no_source,
-        "skipped_still_flat": skipped_still_flat,
     }
 
 
@@ -812,7 +683,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="MLB Agent Evolution Engine.")
     parser.add_argument("--run-cycle", action="store_true")
     parser.add_argument("--ingest-bot-history", action="store_true")
-    parser.add_argument("--backfill-flat", action="store_true")
     parser.add_argument("--state-path", default="")
     parser.add_argument("--evaluate-yesterday", action="store_true")
     parser.add_argument("--generate-lessons", action="store_true")
@@ -829,8 +699,6 @@ def main() -> None:
         print(json.dumps(run_evolution_cycle(state_path), indent=2))
     elif args.ingest_bot_history:
         print(json.dumps(ingest_bot_history(state_path), indent=2))
-    elif args.backfill_flat:
-        print(json.dumps(backfill_flat_outcomes(state_path), indent=2))
     elif args.evaluate_yesterday:
         print(json.dumps(evaluate_yesterday(), indent=2))
     elif args.generate_lessons:

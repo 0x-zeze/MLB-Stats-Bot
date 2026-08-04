@@ -24,11 +24,10 @@ class PredictionPipelineTests(unittest.TestCase):
         output = run_prediction_pipeline(0)["explanation"]
         self.assertIn("1. Prediction Summary", output)
         self.assertIn("2. Moneyline Probability", output)
-        self.assertIn("3. YRFI/NRFI Projection", output)
-        self.assertIn("4. Market Comparison", output)
-        self.assertIn("5. Data Quality Report", output)
-        self.assertIn("8. Final Decision:", output)
-        self.assertIn("9. Confidence:", output)
+        self.assertIn("3. Market Comparison", output)
+        self.assertIn("4. Data Quality Report", output)
+        self.assertIn("7. Final Decision:", output)
+        self.assertIn("8. Confidence:", output)
 
     def test_numeric_predictions_are_deterministic_payloads(self) -> None:
         result = run_prediction_pipeline(0)

@@ -110,20 +110,11 @@ def _edge_unavailable(state, ctx, params, rule) -> None:
         state["reasons"].append(rule["message"])
 
 
-def _yrfi_edge_floor(state, ctx, params, rule) -> None:
-    edge_value = ctx.get("edge_value")
-    threshold = params.get("threshold", 0.06)
-    if edge_value is not None and ctx.get("market_type") == "yrfi" and abs(edge_value) < threshold:
-        state["no_bet"] = True
-        state["reasons"].append(rule["message"])
-
-
 def _edge_floor(state, ctx, params, rule) -> None:
     edge_value = ctx.get("edge_value")
     threshold = ctx.get("edge_threshold")
     if (
         edge_value is not None
-        and ctx.get("market_type") != "yrfi"
         and abs(edge_value) < threshold
     ):
         state["no_bet"] = True
@@ -203,7 +194,6 @@ PY_HANDLERS: dict[str, Callable[..., None]] = {
     "probablePitcherMissing": _probable_pitcher_missing,
     "openerConsideration": _opener_consideration,
     "edgeUnavailable": _edge_unavailable,
-    "yrfiEdgeFloor": _yrfi_edge_floor,
     "edgeFloor": _edge_floor,
     "dataQualityFloor": _data_quality_floor,
     "sharpDowngrade": _sharp_downgrade,

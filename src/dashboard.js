@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { applyMoneylineValueMarket, confidenceBand, getMlbPredictions } from './mlb.js';
 import { attachCurrentOdds } from './lineMovement.js';
+import { attachNewsContext, persistNewsFeatureSnapshots } from './news.js';
 import { Storage } from './storage.js';
 import { dateInTimezone, toNumber } from './utils.js';
 
@@ -155,12 +156,11 @@ async function sampleAnalysis(gameId) {
   return runPythonJson(
     [
       'import json, sys',
-      'from src.agent_tools import get_game_context, predict_moneyline, predict_yrfi, explain_prediction',
+      'from src.agent_tools import get_game_context, predict_moneyline, explain_prediction',
       'gid = sys.argv[1]',
       'payload = {',
       '  "context": get_game_context(gid),',
       '  "moneyline": predict_moneyline(gid),',
-      '  "yrfi": predict_yrfi(gid),',
       '  "full_text": explain_prediction(gid),',
       '}',
       'print(json.dumps(payload, default=str))',
@@ -200,7 +200,7 @@ async function evaluationReport() {
 }
 
 async function runBacktest(body) {
-  const market = ['moneyline', 'yrfi'].includes(body.market) ? body.market : 'moneyline';
+  const market = body.market === 'moneyline' ? body.market : 'moneyline';
   const season = Number.isFinite(Number(body.season)) ? String(Number(body.season)) : '2025';
   const output = await runPython(['-m', 'src.backtest', '--season', season, '--market', market], {
     timeoutMs: 60000,
@@ -211,14 +211,14 @@ async function runBacktest(body) {
 
 function liveDisplayProbabilities(prediction) {
   return {
-    away: Math.round(prediction.agentAnalysis?.awayProbability ?? prediction.away?.winProbability ?? 50),
-    home: Math.round(prediction.agentAnalysis?.homeProbability ?? prediction.home?.winProbability ?? 50),
+    away: Math.round(prediction.away?.winProbability ?? 50),
+    home: Math.round(prediction.home?.winProbability ?? 50),
   };
 }
 
 function livePick(prediction, probabilities) {
-  if (prediction.agentAnalysis?.pickTeamId === prediction.away?.id) return prediction.away;
-  if (prediction.agentAnalysis?.pickTeamId === prediction.home?.id) return prediction.home;
+  if (prediction.winner?.id === prediction.away?.id) return prediction.away;
+  if (prediction.winner?.id === prediction.home?.id) return prediction.home;
   return probabilities.home >= probabilities.away ? prediction.home : prediction.away;
 }
 
@@ -385,9 +385,6 @@ function summarizeLivePrediction(prediction, meta = {}) {
   const pick = livePick(prediction, probabilities);
   const pickProbability = pick?.id === prediction.away?.id ? probabilities.away : probabilities.home;
   const agentActive = Boolean(prediction.agentAnalysis);
-  const firstInningPick = prediction.firstInning?.agent?.pick || prediction.firstInning?.baselinePick;
-  const firstInningProbability =
-    prediction.firstInning?.agent?.probability ?? prediction.firstInning?.baselineProbability;
 
   return {
     game_id: String(prediction.gamePk),
@@ -421,19 +418,6 @@ function summarizeLivePrediction(prediction, meta = {}) {
       awayEra: prediction.away?.starterEra ?? null,
       homeEra: prediction.home?.starterEra ?? null,
     },
-    firstInning: prediction.firstInning
-      ? {
-          pick: firstInningPick === 'YES' ? 'YES / YRFI' : 'NO / NRFI',
-          probability: Math.round(firstInningProbability ?? 0),
-          baselinePick: prediction.firstInning.baselinePick,
-          baselineProbability: Math.round(prediction.firstInning.baselineProbability ?? 0),
-          topRate: Math.round(prediction.firstInning.topRate ?? 0),
-          bottomRate: Math.round(prediction.firstInning.bottomRate ?? 0),
-          awayProfileLine: prediction.firstInning.awayProfileLine,
-          homeProfileLine: prediction.firstInning.homeProfileLine,
-          reasons: prediction.firstInning.agent?.reasons || prediction.firstInning.reasons || [],
-        }
-      : null,
     quality: liveQualityReport(prediction, meta.fetchedAt),
     context: {
       standings: splitDashboardLine(prediction.contextLine),
@@ -444,6 +428,7 @@ function summarizeLivePrediction(prediction, meta = {}) {
       injuries: prediction.injuryDetailLines || splitDashboardLine(prediction.injuryLine),
       lineup: splitDashboardLine(prediction.lineupLine),
       modelReference: prediction.modelReferenceLines || splitDashboardLine(prediction.modelReferenceLine),
+      news: prediction.newsContext || null,
     },
     reasons: prediction.agentAnalysis?.reasons || prediction.reasons || [],
     risk: prediction.agentAnalysis?.risk || '',
@@ -471,6 +456,12 @@ export async function livePredictions(dateYmd) {
     } catch (error) {
       console.warn(`Value engine failed for game ${prediction.gamePk}:`, error.message);
     }
+  }
+  try {
+    await attachNewsContext(config, predictions, storage);
+    persistNewsFeatureSnapshots(predictions, storage, dateYmd);
+  } catch (error) {
+    console.warn('Dashboard news context unavailable:', error.message);
   }
 
   const fetchedAt = new Date().toISOString();
@@ -504,6 +495,7 @@ function statusPayload() {
       openaiModel: config.openai.model,
       analystAgentEnabled: config.analystAgent.enabled,
       analystAgentMode: config.analystAgent.mode,
+      newsEnabled: config.news.enabled,
       autoAlerts: config.autoAlerts,
       dailyAlertTime: config.dailyAlertTime,
       postGameAlerts: config.postGameAlerts,

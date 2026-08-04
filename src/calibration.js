@@ -15,7 +15,6 @@ function dataDir() {
 
 const MIN_ISOTONIC_SAMPLES_FOR_TRUST = {
   moneyline: 150,
-  yrfi: 40,
 };
 
 const SHRINKAGE_FACTOR = {

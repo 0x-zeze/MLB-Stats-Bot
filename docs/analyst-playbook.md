@@ -10,7 +10,7 @@ Pipeline wajib:
 
 1. Data Collection Layer: schedule, probable pitchers, team stats, bullpen, weather, park, lineups, odds, historical data.
 2. Feature Engineering Layer: pitcher_score, offense_score, bullpen_score, park/weather/lineup adjustment, recent_form_score, market implied probability.
-3. Prediction Layer: moneyline probability dan YRFI/NRFI probability. Totals/over-under bukan market aktif.
+3. Prediction Layer: moneyline probability. Totals/over-under bukan market aktif. YRFI/NRFI dihapus (no edge).
 4. Market Comparison Layer: edge, implied probability, line movement.
 5. Quality Control Layer: missing/stale data, confidence downgrade, NO BET.
 6. Explanation Layer: penjelasan final yang simpel.
@@ -27,11 +27,6 @@ Data utama:
 - splits vs pitcher handedness / platoon advantage
 - home/road, L10, run differential, xW-L, streak
 - H2H
-- first-inning scored/allowed profile
-- SP first-inning ERA, first-pitch strike%, average first-inning pitches
-- leadoff hitter OBP
-- ballpark historical YRFI rate
-- YRFI weather context
 - post-game memory
 
 ## Rules
@@ -43,7 +38,6 @@ Data utama:
 - Jika sinyal konflik, percaya sinyal tier lebih tinggi dulu.
 - Jangan overfit H2H kecil. H2H di bawah 3 game hanya tie-breaker ringan.
 - Jangan overfit memory. Memory adalah kalibrasi kecil dari kesalahan sebelumnya.
-- Analisa first inning harus terpisah dari full-game pick. Gunakan scored/allowed 1st inning, recent any-run, H2H 1st inning, starter 1st-inning profile, leadoff OBP, park YRFI rate, dan weather first inning.
 - Bullpen fatigue 3 hari terakhir memakai numeric 0-100 score dan dapat mengubah confidence, terutama jika starter berisiko pendek.
 - Injury report harus dipakai sebagai availability risk. Cedera hitter inti, probable starter, catcher utama, dan late-inning reliever lebih penting daripada cedera depth player.
 - Split vs LHP/RHP adalah supporting signal untuk melihat matchup offense terhadap starter lawan.
@@ -124,14 +118,7 @@ Prinsip praktis untuk agent:
 
 ## Opener/Bulk Pitcher Situations
 
-Jika probable pitcher terdeteksi sebagai opener atau ada rencana bulk/piggyback, jangan memperlakukan stat pitcher tersebut seperti starter utama. Model harus menetralkan sinyal SP dan quality control harus menandai situasi ini sebagai risiko no-bet.
-
-Untuk YRFI/NRFI:
-
-- Opener biasanya menaikkan risiko YRFI karena peran pitcher utama belum jelas, matchup pertama bisa lebih taktis, dan bulk pitcher dapat masuk lebih awal dari ekspektasi.
-- Jika opener adalah reliever elite, jangan otomatis overreact; tetap cek offense top/bottom 1st, lineup confirmed, bullpen fatigue, dan park/weather.
-- Jika bulk pitcher TBD, confidence YRFI harus konservatif. Lean YES boleh naik hanya jika offense 1st-inning profile, lineup, park/weather, dan bullpen context mendukung.
-- Hindari menjual pick sebagai starter-vs-starter tradisional saat opener flag aktif. Jelaskan bahwa primary pitcher uncertainty adalah risk utama.
+Jika probable pitcher terdeteksi sebagai opener atau ada rencana bulk/piggyback, jangan memperlakukan stat pitcher tersebut seperti starter utama. Model harus menetralkan sinyal SP dan quality control harus menandai situasi ini sebagai risiko no-bet. Hindari menjual pick sebagai starter-vs-starter tradisional saat opener flag aktif.
 
 ## Moneyline Accuracy Signals
 
@@ -141,13 +128,10 @@ Untuk YRFI/NRFI:
 - Bullpen availability dibaca sebagai 0-100 fatigue score, bukan binary lelah/tidak.
 - Jangan menaikkan confidence jika edge terutama dari record/H2H/recent form, bukan matchup hari ini.
 
-## YRFI/NRFI Accuracy Signals
+## YRFI/NRFI (removed)
 
-- YRFI/NRFI tetap market terpisah dari moneyline dan tidak boleh memakai alasan full-game sebagai proxy.
-- Sinyal utama: team first-inning scored/allowed, starter first-inning allowed history/ERA, first-pitch strike%, average first-inning pitches, leadoff OBP, ballpark YRFI rate, weather first inning.
-- Weather first inning: panas dan wind out menaikkan YRFI; cold/wind in menurunkan; dome/closed roof netral.
-- Ballpark historical YRFI rate hanya adjustment kecil, bukan alasan tunggal untuk bet.
-- Jika YRFI masih advisory-only di runtime, jelaskan sebagai konteks dan jangan framing sebagai graded bet.
+YRFI/NRFI prediction was removed after historical analysis showed no per-game edge.
+Do not produce first-inning-run leans. Focus on moneyline model pick only.
 
 ## Sources
 

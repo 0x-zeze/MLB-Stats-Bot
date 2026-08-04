@@ -4,7 +4,6 @@ const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'games', label: 'Games' },
   { id: 'moneyline', label: 'Moneyline' },
-  { id: 'yrfi', label: 'YRFI / NRFI' },
   { id: 'ledger', label: 'Ledger' },
   { id: 'backtest', label: 'Backtest' },
   { id: 'history', label: 'History' },

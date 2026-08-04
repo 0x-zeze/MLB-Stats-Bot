@@ -68,14 +68,12 @@ def main() -> None:
 
     ledger_counts = _count_ledger(sqlite_path)
     settled = settled_rows(rows)
-    yrfi_rows = [row for row in rows if str(row.get("market_type") or "").lower() == "yrfi"]
-    moneyline_rows = [row for row in rows if str(row.get("market_type") or "").lower() != "yrfi"]
+    moneyline_rows = [row for row in rows if str(row.get("market_type") or "").lower() == "moneyline"]
 
     print(f"SQLite source: {sqlite_path}")
     print(f"CSV output: {output_path}")
     print(f"Rows exported: {len(rows)}")
     print(f"Moneyline rows: {len(moneyline_rows)}")
-    print(f"YRFI rows: {len(yrfi_rows)}")
     print(f"Settled rows exported: {len(settled)}")
     print(f"Open ledger bets: {ledger_counts['open']}")
     print(f"Settled ledger bets: {ledger_counts['settled']}")

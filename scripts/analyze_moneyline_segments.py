@@ -8,7 +8,6 @@ Reads data/evolution/prediction_outcomes.csv (the settled prediction memory,
     edge band, predicted-probability band, and starter tier.
   * A CALIBRATION table (predicted probability bucket vs. actual win rate) that
     surfaces overconfidence.
-  * A First-Inning (YRFI/NRFI) YES-vs-NO directional accuracy split.
 
 This is READ-ONLY: it never writes stored data or changes any production output.
 Use it to decide which rule candidates / recalibration are worth proposing
@@ -155,29 +154,6 @@ def analyze(rows: list[dict]) -> dict:
             "overconfident": lo >= 55 and a < lo,
         }
     report["calibration"] = cal
-
-    # First inning YRFI/NRFI directional split.
-    yr = [
-        r
-        for r in rows
-        if r.get("market") == "yrfi" and r.get("yrfi_nrfi_correct") is not None
-    ]
-
-    def yrfi_dir(r: dict) -> str:
-        p = str(r.get("prediction", "")).upper()
-        if "YES" in p or "YRFI" in p:
-            return "YES"
-        if "NO" in p or "NRFI" in p:
-            return "NO"
-        return "OTHER"
-
-    yg: dict[str, list[dict]] = defaultdict(list)
-    for r in yr:
-        yg[yrfi_dir(r)].append(r)
-    report["yrfi_total"] = _acc(yr, "yrfi_nrfi_correct")
-    report["yrfi_by_direction"] = {
-        k: _acc(v, "yrfi_nrfi_correct") for k, v in yg.items()
-    }
     return report
 
 
@@ -234,10 +210,6 @@ def main() -> int:
     for bucket, info in report["calibration"].items():
         flag = "  <-- OVERCONFIDENT" if info["overconfident"] else ""
         print(f"  pred {bucket}%: actual {info['actual_win_pct']:.0f}% (n={info['n']}){flag}")
-
-    yn, yw, ya = report["yrfi_total"]
-    print(f"\nFIRST INNING (YRFI) overall: {yw}/{yn} = {ya:.1f}%")
-    _print_group("  By direction:", report["yrfi_by_direction"], order=["YES", "NO", "OTHER"])
     print()
     return 0
 

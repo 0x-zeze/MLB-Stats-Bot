@@ -22,10 +22,6 @@ function prediction(gamePk, dateYmd, away, home, pick) {
       ...pick,
       winProbability: 58,
       confidence: 'medium'
-    },
-    firstInning: {
-      pick: 'NO',
-      probability: 54
     }
   };
 }
@@ -40,10 +36,7 @@ function result(gamePk, dateYmd, away, home, awayScore, homeScore) {
     away: { ...away, score: awayScore },
     home: { ...home, score: homeScore },
     winner,
-    loser,
-    firstInning: {
-      anyRun: false
-    }
+    loser
   };
 }
 

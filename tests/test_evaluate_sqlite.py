@@ -41,20 +41,12 @@ def _create_live_schema(path):
             recommended_at TEXT,
             settled_at TEXT
         );
-        CREATE TABLE yrfi_results (
-            game_pk TEXT PRIMARY KEY,
-            date_ymd TEXT,
-            pick TEXT,
-            probability REAL,
-            correct INTEGER,
-            processed_at TEXT
-        );
         """
     )
     return conn
 
 
-def test_build_prediction_log_rows_from_sqlite_maps_ledger_and_yrfi(tmp_path):
+def test_build_prediction_log_rows_from_sqlite_maps_ledger(tmp_path):
     db_path = tmp_path / "state.sqlite"
     conn = _create_live_schema(db_path)
     conn.execute(
@@ -96,20 +88,12 @@ def test_build_prediction_log_rows_from_sqlite_maps_ledger_and_yrfi(tmp_path):
         """,
         ("d3", "1003", "2026-06-01", "moneyline", "Away C", "away", None, 105, 51, 0.57, 0.06, 1, "settled", "loss", -1, None, "rec", "set"),
     )
-    conn.execute(
-        "INSERT INTO yrfi_results VALUES (?, ?, ?, ?, ?, ?)",
-        ("1001", "2026-06-01", "YES", 61.5, 1, "processed"),
-    )
-    conn.execute(
-        "INSERT INTO yrfi_results VALUES (?, ?, ?, ?, ?, ?)",
-        ("1002", "2026-06-01", "NO", 44, 0, "processed"),
-    )
     conn.commit()
     conn.close()
 
     rows = build_prediction_log_rows_from_sqlite(db_path)
 
-    assert len(rows) == 4
+    assert len(rows) == 2
     ledger_rows = [row for row in rows if row["market_type"] == "moneyline"]
     assert len(ledger_rows) == 2
     assert ledger_rows[0]["final_lean"] == "Home A"
@@ -118,17 +102,9 @@ def test_build_prediction_log_rows_from_sqlite_maps_ledger_and_yrfi(tmp_path):
     assert ledger_rows[0]["market_total"] == 8.5
     assert ledger_rows[1]["final_lean"] == "Away C"
 
-    yrfi_rows = [row for row in rows if row["market_type"] == "yrfi"]
-    assert [row["final_lean"] for row in yrfi_rows] == ["YES", "NO"]
-    assert yrfi_rows[0]["result"] == "win"
-    assert yrfi_rows[0]["profit_loss"] == 1.0
-    assert yrfi_rows[0]["home_win_probability"] == 0.615
-    assert yrfi_rows[1]["result"] == "loss"
-    assert yrfi_rows[1]["profit_loss"] == -1.0
-
-    assert len(settled_rows(rows)) == 4
+    assert len(settled_rows(rows)) == 2
     metrics = calculate_metrics(rows)
-    assert metrics["bets"] == 4
+    assert metrics["bets"] == 2
 
 
 def test_load_prediction_log_prefers_sqlite_then_csv(tmp_path):
@@ -163,15 +139,13 @@ def test_load_prediction_log_prefers_sqlite_then_csv(tmp_path):
     assert load_prediction_log(tmp_path / "missing.csv", sqlite_path=tmp_path / "missing.sqlite") == []
 
 
-def test_filter_rows_by_market_uses_market_type_and_yes_no():
+def test_filter_rows_by_market_returns_all_rows():
     rows = [
         {"market_type": "moneyline", "final_lean": "Home"},
-        {"market_type": "yrfi", "final_lean": "YES"},
-        {"market_type": "", "final_lean": "NO"},
+        {"market_type": "moneyline", "final_lean": "Away"},
     ]
 
-    assert [row["final_lean"] for row in filter_rows_by_market(rows, "moneyline")] == ["Home"]
-    assert [row["final_lean"] for row in filter_rows_by_market(rows, "yrfi")] == ["YES", "NO"]
+    assert [row["final_lean"] for row in filter_rows_by_market(rows, "moneyline")] == ["Home", "Away"]
 
 
 def test_calculate_metrics_uses_stake_weighted_roi_and_separate_units_per_bet():
@@ -202,7 +176,6 @@ def test_market_baselines_compare_same_period_fair_and_model_probabilities():
     rows = [
         {"market_type": "moneyline", "result": "win", "fair_prob": 0.60, "model_prob": 0.55},
         {"market_type": "moneyline", "result": "loss", "fair_prob": 0.70, "model_prob": 0.65},
-        {"market_type": "yrfi", "result": "win", "fair_prob": 0.90, "model_prob": 0.90},
     ]
     baseline = market_baselines(rows)
     assert baseline["comparable_moneyline_rows"] == 2

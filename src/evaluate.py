@@ -259,40 +259,6 @@ def _ledger_row_to_prediction_log(row: dict[str, Any]) -> dict[str, Any] | None:
     return row_out
 
 
-def _yrfi_row_to_prediction_log(row: dict[str, Any]) -> dict[str, Any]:
-    payload = _safe_json(row.get("pick_payload"))
-    matchup = _first_value(row.get("matchup"), payload.get("matchup"))
-    away_team, home_team = _parse_matchup(matchup)
-    away_team = str(_first_value(away_team, _team_name(payload, "away")))
-    home_team = str(_first_value(home_team, _team_name(payload, "home")))
-    correct = _truthy_sqlite(row.get("correct"))
-    result = "" if correct is None else ("win" if correct else "loss")
-    probability = _decimal_probability(row.get("probability"))
-    row_out = _empty_prediction_row()
-    row_out.update(
-        {
-            "game_id": row.get("game_pk") or "",
-            "game_pk": row.get("game_pk") or "",
-            "date": _first_value(row.get("yrfi_date_ymd"), row.get("pick_date_ymd")),
-            "home_team": home_team,
-            "away_team": away_team,
-            "matchup": matchup,
-            "predicted_winner": row.get("pick") or "",
-            "final_lean": row.get("pick") or "",
-            "market_type": "yrfi",
-            "home_win_probability": probability,
-            "model_prob": probability,
-            "confidence": _first_value(row.get("pick_confidence"), _get_nested(payload, "firstInning", "confidence")),
-            "projected_total_runs": _market_total(payload),
-            "market_total": _market_total(payload),
-            "result": result,
-            "profit_loss": "" if result == "" else (1.0 if result == "win" else -1.0),
-            "settled_at": row.get("processed_at") or "",
-        }
-    )
-    return row_out
-
-
 def build_prediction_log_rows_from_sqlite(sqlite_path: str | Path) -> list[dict[str, Any]]:
     """Build evaluator-compatible rows from live SQLite state."""
     source = Path(sqlite_path)
@@ -331,35 +297,10 @@ def build_prediction_log_rows_from_sqlite(sqlite_path: str | Path) -> list[dict[
                     p.date_ymd AS pick_date_ymd,
                     p.matchup,
                     p.pick_confidence,
-                    p.payload AS pick_payload,
-                    y.pick AS yrfi_pick,
-                    y.probability AS yrfi_probability,
-                    y.correct AS yrfi_correct
+                    p.payload AS pick_payload
                 FROM bet_ledger b
                 JOIN picks p ON p.game_pk = b.game_pk
-                LEFT JOIN yrfi_results y ON y.game_pk = b.game_pk
                 ORDER BY COALESCE(b.date_ymd, p.date_ymd), b.decision_id
-                """
-            )
-        ]
-        yrfi_rows = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT
-                    y.game_pk,
-                    y.date_ymd AS yrfi_date_ymd,
-                    y.pick,
-                    y.probability,
-                    y.correct,
-                    y.processed_at,
-                    p.date_ymd AS pick_date_ymd,
-                    p.matchup,
-                    p.pick_confidence,
-                    p.payload AS pick_payload
-                FROM yrfi_results y
-                LEFT JOIN picks p ON p.game_pk = y.game_pk
-                ORDER BY COALESCE(y.date_ymd, p.date_ymd), y.game_pk
                 """
             )
         ]
@@ -373,29 +314,13 @@ def build_prediction_log_rows_from_sqlite(sqlite_path: str | Path) -> list[dict[
         prediction_row = _ledger_row_to_prediction_log(ledger_row)
         if prediction_row is not None:
             rows.append(prediction_row)
-    rows.extend(_yrfi_row_to_prediction_log(row) for row in yrfi_rows)
     return rows
-
-
-def is_yrfi_row(row: dict[str, Any]) -> bool:
-    """Return true when row represents a YRFI/NRFI market."""
-    market = str(row.get("market_type") or row.get("market") or "").strip().lower()
-    if market in {"yrfi", "nrfi", "first inning", "first_inning", "first-inning"}:
-        return True
-    if any(token in market for token in ("yrfi", "nrfi", "first inning", "first_inning")):
-        return True
-    lean = str(row.get("final_lean") or row.get("prediction") or "").strip().upper()
-    return lean in {"YES", "NO"}
 
 
 def filter_rows_by_market(rows: list[dict[str, Any]], market: str) -> list[dict[str, Any]]:
     """Filter evaluator rows by market name."""
     if market == "all":
         return rows
-    if market == "yrfi":
-        return [row for row in rows if is_yrfi_row(row)]
-    if market == "moneyline":
-        return [row for row in rows if not is_yrfi_row(row)]
     return rows
 
 
@@ -680,7 +605,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate MLB prediction logs.")
     parser.add_argument("--log", default=str(data_path("predictions_log.csv")), help="Predictions log CSV fallback")
     parser.add_argument("--sqlite", default=str(data_path("state.sqlite")), help="Live SQLite state database")
-    parser.add_argument("--market", choices=["moneyline", "yrfi", "all"], default="all")
+    parser.add_argument("--market", choices=["moneyline", "all"], default="all")
     parser.add_argument("--report", action="store_true", help="Print evaluation report")
     parser.add_argument("--json", default=None, help="Write metrics+baselines+metadata JSON to this path")
     return parser.parse_args()

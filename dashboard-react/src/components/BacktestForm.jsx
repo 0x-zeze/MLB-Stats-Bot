@@ -8,7 +8,7 @@ export default function BacktestForm({ form, onChange, onRun, running, onExport 
     <Card>
       <CardHeader>
         <CardTitle>Run Backtest</CardTitle>
-        <CardDescription>Select a season or date window, then test moneyline or YRFI logic.</CardDescription>
+        <CardDescription>Select a season or date window, then test moneyline logic.</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex flex-wrap items-end gap-3">
@@ -24,7 +24,6 @@ export default function BacktestForm({ form, onChange, onRun, running, onExport 
           <Field label="Market">
             <Select value={form.market_type} onChange={(event) => onChange({ ...form, market_type: event.target.value })}>
               <option value="moneyline">Moneyline</option>
-                            <option value="yrfi">YRFI</option>
               <option value="all">All Markets</option>
             </Select>
           </Field>

@@ -19,6 +19,7 @@ import {
   moneylineDecisionLines
 } from './mlb.js';
 import { Storage } from './storage.js';
+import { attachNewsContext, persistNewsFeatureSnapshots } from './news.js';
 import { setupWebhook, TelegramBot } from './telegram.js';
 import { UI_LINE, UI_THIN_LINE, uiBullet, uiCommand, uiKV, uiSection, uiTitle } from './telegramFormat.js';
 import { dateInTimezone, isValidDateYmd, percent, timeInTimezone, weekdayInTimezone } from './utils.js';
@@ -70,7 +71,7 @@ function helpText() {
     uiCommand('/ledger', 'rekap bet ledger: open, record, units P/L, ROI'),
     uiCommand('/analyze', 'analisa edge, risk, value, dan no-bet slate hari ini'),
     uiCommand('/analyze TEAM', 'analisa tim/game tertentu dari data bot'),
-    uiCommand('/news', 'ringkas injury, lineup, market, weather, dan data-quality risk'),
+    uiCommand('/news', 'ringkas external MLB/ESPN/Yahoo context plus risk data bot'),
     '',
     uiSection('📊', 'Data & kontrol'),
     uiCommand('/today', 'list ringkas semua game hari ini'),
@@ -91,7 +92,7 @@ function botCommandList() {
     { command: 'deep', description: 'Semua game dengan statistik lengkap' },
     { command: 'picks', description: 'Top model picks' },
     { command: 'analyze', description: 'Analisa slate atau tim' },
-    { command: 'news', description: 'Risk/news context dari data bot' },
+    { command: 'news', description: 'External news + risk context' },
     { command: 'game', description: 'Cek tim tertentu hari ini' },
     { command: 'ask', description: 'Tanya Analyst Agent' },
     { command: 'evolve', description: 'Belajar dari hasil final + tingkatkan edge' },
@@ -125,8 +126,16 @@ function buildNewsQuestion(args) {
   const scope = target ? `untuk ${target}` : 'untuk slate MLB hari ini';
   return {
     dateYmd,
-    question: `Ringkas risk/news context ${scope} dari data yang tersedia saja: lineup, injury, probable pitcher, weather/park, market movement, dan data-quality warning. Jangan mengarang headline atau berita live yang tidak ada di data.`
+    question: `Ringkas risk/news context ${scope} dari external news yang disediakan MLB/ESPN/Yahoo dan data bot. Pisahkan fakta terlapor dari opini, sebutkan source dan waktu publikasi, lalu gabungkan lineup, injury, probable pitcher, weather/park, market movement, dan data-quality warning. Jangan mengarang headline, expert opinion, atau berita live yang tidak ada di data. Probabilitas, pick, edge, status, dan stake tetap milik model deterministik.`
   };
+}
+
+function persistNewsFeatures(dateYmd, predictions) {
+  try {
+    persistNewsFeatureSnapshots(predictions, storage, dateYmd);
+  } catch (error) {
+    console.warn('News feature snapshot failed:', error.message);
+  }
 }
 
 function isAllowed(chatId) {
@@ -144,14 +153,17 @@ async function buildAlertPayload(dateYmd, options = {}) {
 
   await attachOddsContext(predictions);
   await attachMarketContext(predictions);
+  await attachNewsContext(config, predictions, storage);
   await attachAgentAnalyses(predictions);
+  persistNewsFeatures(dateYmd, predictions);
   storage.savePredictions(dateYmd, predictions);
 
   return {
     text: formatPredictions(dateYmd, predictions, {
       maxGames: options.maxGames ?? (includeAdvanced ? config.maxGamesPerMessage : predictions.length),
       teamFilter: options.teamFilter || '',
-      includeAdvanced
+      includeAdvanced,
+      includeNews: config.news.includeAlerts
     }),
     predictions
   };
@@ -175,7 +187,9 @@ async function sendBothLineupsPregameAlert(bot, chatId, game, awayLineup, homeLi
   const predictions = await getMlbPredictions(dateYmd, modelMemory);
   await attachOddsContext(predictions);
   await attachMarketContext(predictions);
+  await attachNewsContext(config, predictions, storage);
   await attachAgentAnalyses(predictions);
+  persistNewsFeatures(dateYmd, predictions);
   storage.savePredictions(dateYmd, predictions);
 
   const prediction = predictions.find((item) => String(item.gamePk || item.game_id || item.id || '') === gamePk);
@@ -382,9 +396,6 @@ async function attachAgentAnalyses(predictions) {
   for (const prediction of predictions) {
     const analysis = analysesByGame.get(prediction.gamePk) || null;
     prediction.agentAnalysis = analysis;
-    if (analysis?.firstInning && prediction.firstInning) {
-      prediction.firstInning.agent = analysis.firstInning;
-    }
   }
 
   return predictions;
@@ -706,7 +717,6 @@ function formatEvolveResult(payload) {
     '',
     uiSection('🩹', 'Backfill data flat'),
     uiKV('🔧', 'Baris diperbaiki', backfill.updated ?? 0),
-    uiKV('📈', 'YRFI', backfill.yrfi_fixed ?? 0),
     '',
     uiSection('📥', 'Ingest'),
     uiKV('📊', 'Evaluasi baru/run ini', ingestedNew),
@@ -796,15 +806,12 @@ async function sendKnowledgeAnswer(bot, chatId, query) {
 
 function displayedPredictionProbabilities(prediction) {
   return {
-    away: prediction.agentAnalysis?.awayProbability ?? Math.round(prediction.away.winProbability),
-    home: prediction.agentAnalysis?.homeProbability ?? Math.round(prediction.home.winProbability)
+    away: Math.round(prediction.away.winProbability),
+    home: Math.round(prediction.home.winProbability)
   };
 }
 
 function predictionPick(prediction) {
-  const agent = prediction.agentAnalysis;
-  if (agent?.pickTeamId === prediction.away.id) return prediction.away;
-  if (agent?.pickTeamId === prediction.home.id) return prediction.home;
   return prediction.winner;
 }
 
@@ -827,16 +834,6 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
   const opponent = pick.id === prediction.away.id ? prediction.home : prediction.away;
   const opponentProbability =
     pick.id === prediction.away.id ? probabilities.home : probabilities.away;
-  const firstInning = prediction.firstInning;
-  const firstPick = firstInning?.agent?.pick || firstInning?.baselinePick || 'NO';
-  const firstProbability = firstInning?.agent?.probability ?? firstInning?.baselineProbability ?? 50;
-  const firstLean = firstInning?.baselineLean || (firstProbability >= 52 ? 'YES' : 'NO');
-  const firstLabel =
-    String(firstPick).toUpperCase() === 'NO BET'
-      ? `NO BET (advisory: lean ${firstLean})`
-      : firstPick === 'YES'
-        ? 'YES / YRFI'
-        : 'NO / NRFI';
   const injuryLines = prediction.injuryDetailLines?.length
     ? prediction.injuryDetailLines.map((line) => `• ${line}`)
     : [`• ${prediction.injuryLine || 'Data injury tidak tersedia.'}`];
@@ -878,9 +875,6 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
     '',
     uiSection('🧠', 'ML Reference'),
     ...modelReferenceLines,
-    '',
-    uiSection('🏁', 'First Inning'),
-    uiKV('🏁', 'Run in 1st', `${firstLabel} | ${percent(firstProbability)}`),
     '',
     uiSection('💡', 'Alasan'),
     ...reasons.slice(0, 3).map((reason) => `• ${reason}`),
@@ -927,7 +921,9 @@ async function handlePredictCallback(bot, callbackQuery) {
 
   await attachOddsContext([prediction]);
   await attachMarketContext([prediction]);
+  await attachNewsContext(config, [prediction], storage);
   await attachAgentAnalyses([prediction]);
+  persistNewsFeatures(dateYmd, [prediction]);
   storage.savePredictions(dateYmd, [prediction]);
   await bot.sendMessage(chatId, formatLivePrediction(dateYmd, prediction));
   console.log(
@@ -1047,14 +1043,6 @@ function formatMemorySummary() {
     uiSection('🎚️', 'Confidence'),
     confidenceLines || 'Belum ada data confidence.',
     '',
-    uiSection('🏁', 'First Inning'),
-    uiKV('📊', 'Total', summary.firstInning.totalPicks),
-    uiKV('✅', 'Benar', summary.firstInning.correctPicks),
-    uiKV('❌', 'Salah', summary.firstInning.wrongPicks),
-    uiKV('📈', 'Akurasi', `${summary.firstInning.accuracy}%`),
-    uiKV('YES', 'Record', `${summary.firstInning.byPick.YES.correct}/${summary.firstInning.byPick.YES.total}`),
-    uiKV('NO', 'Record', `${summary.firstInning.byPick.NO.correct}/${summary.firstInning.byPick.NO.total}`),
-    '',
     uiSection('🧩', 'Matchup memory'),
     uiKV('📌', 'Tracked matchups', matchupMemory.totalMatchups),
     matchupLines || 'Belum ada matchup berulang yang tersimpan.',
@@ -1084,8 +1072,8 @@ function formatAgentStatus() {
     uiKV('📊', 'Memory sample', `${summary.totalPicks} pick | akurasi ${summary.accuracy}%`),
     '',
     config.analystAgent.enabled
-      ? uiBullet('✅', 'Agent membuat pick final dari stats, H2H, baseline model, dan memory.')
-      : uiBullet('⚠️', 'Agent mati, bot memakai baseline model statistik.')
+      ? uiBullet('✅', 'Model deterministik membuat pick final; Agent menambah explanation dan risk context.')
+      : uiBullet('⚠️', 'Agent mati, bot memakai model statistik deterministik.')
   ].join('\n');
 }
 
@@ -1323,6 +1311,8 @@ async function handlePicksCommand(bot, chatId, question, dateYmd = dateInTimezon
   // Re-run market context on cached predictions too. Cached odds can age past the
   // freshness window; stale prices must refresh or get downgraded before ledger.
   await attachMarketContext(predictions);
+  await attachNewsContext(config, predictions, storage);
+  persistNewsFeatures(dateYmd, predictions);
   storage.savePredictions(dateYmd, predictions);
   setCachedPredictions(chatId, dateYmd, predictions);
 
@@ -1393,9 +1383,15 @@ async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.t
       predictions = await getMlbPredictions(dateYmd, config.modelMemory ? storage.getMemory() : {});
       predictions = predictions || [];
       await attachMarketContext(predictions);
-      storage.savePredictions(dateYmd, predictions);
       setCachedPredictions(chatId, dateYmd, predictions);
     }
+  }
+
+  if (!knowledgeOnly) {
+    await attachNewsContext(config, predictions, storage);
+    persistNewsFeatures(dateYmd, predictions);
+    storage.savePredictions(dateYmd, predictions);
+    setCachedPredictions(chatId, dateYmd, predictions);
   }
 
   const [knowledgeContext] = await Promise.all([
@@ -1434,7 +1430,7 @@ function maybeQueueCalibrationRetrain(alreadyQueued = false) {
   // run chronological OOF fit and explicit promotion separately.
   let settledCount = 0;
   try {
-    settledCount = storage.readLedger({ status: 'settled' }).length;
+    settledCount = storage.readLedger({ status: 'settled', includeArchived: true }).length;
   } catch (error) {
     console.error('Calibration retrain check failed:', error.message);
     return false;
@@ -1579,7 +1575,6 @@ function formatPostGameRecap(dateYmd, evaluations) {
   const correctCount = evaluations.filter((item) => item.correct).length;
   const slateRate = Math.round((correctCount / evaluations.length) * 100);
   const memory = storage.getMemorySummary();
-  const firstInning = memory.firstInning || {};
   const rolling = rollingWinRate(3);
   const separator = UI_LINE;
 
@@ -1602,9 +1597,6 @@ function formatPostGameRecap(dateYmd, evaluations) {
       ? uiKV('🔥', '3 hari terakhir', `${rolling.rate}% (${rolling.correct}/${rolling.total})${trend}`)
       : null,
     uiKV('📈', 'Keseluruhan', `${memory.accuracy}% (${memory.correctPicks}/${memory.totalPicks} pick)`),
-    firstInning.totalPicks
-      ? uiKV('🥇', '1st inning', `${firstInning.accuracy}% (${firstInning.correctPicks}/${firstInning.totalPicks})`)
-      : null,
     '',
     separator
   ].filter(Boolean);
@@ -1612,14 +1604,6 @@ function formatPostGameRecap(dateYmd, evaluations) {
   for (const item of evaluations) {
     const { prediction, result, correct, learned } = item;
     const scoreLine = `${result.away.abbreviation || result.away.name} ${result.away.score} - ${result.home.score} ${result.home.abbreviation || result.home.name}`;
-    const firstInningActual =
-      result.firstInning?.anyRun === null || result.firstInning?.anyRun === undefined
-        ? 'unavailable'
-        : result.firstInning.anyRun ? 'YES' : 'NO';
-    const firstInningCorrect =
-      prediction.firstInning && result.firstInning?.anyRun !== null && result.firstInning?.anyRun !== undefined
-        ? prediction.firstInning.pick === firstInningActual
-        : null;
     const memoryLine = learned
       ? correct
         ? 'Memory: pick benar; matchup pattern disimpan sebagai sinyal kecil.'
@@ -1633,9 +1617,6 @@ function formatPostGameRecap(dateYmd, evaluations) {
         uiKV('🏆', 'Winner', result.winner.name),
         uiKV('🎯', 'Pick', `${prediction.pick.name} | ${prediction.pick.winProbability}%`),
         uiBullet(correct ? '✅' : '❌', correct ? 'Benar' : 'Salah'),
-        prediction.firstInning
-          ? uiKV('🏁', '1st inning', `pick ${prediction.firstInning.pick} | ${prediction.firstInning.probability}% | actual ${firstInningActual}${firstInningCorrect === null ? '' : firstInningCorrect ? ' ✅' : ' ❌'}`)
-          : null,
         uiBullet('🧠', memoryLine)
       ].filter(Boolean).join('\n')
     );
@@ -1791,7 +1772,7 @@ async function handleMessage(bot, message) {
   if (command === '/ledger') {
     if (!acquireCommandLock(chatId, 'ledger')) return;
     try {
-      const rows = storage.readLedger();
+      const rows = storage.readLedger({ includeArchived: true });
       await bot.sendMessage(chatId, formatLedgerReport(rows));
     } finally {
       releaseCommandLock(chatId, 'ledger');

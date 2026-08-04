@@ -28,7 +28,7 @@ def sample_trajectory(**overrides: Any) -> dict[str, Any]:
     trajectory = {
         "game_id": "2026-04-30-TB-CLE",
         "date": "2026-04-30",
-        "market": "yrfi",
+        "market": "moneyline",
         "matchup": "Tampa Bay Rays @ Cleveland Guardians",
         "home_team": "Cleveland Guardians",
         "away_team": "Tampa Bay Rays",
@@ -41,11 +41,11 @@ def sample_trajectory(**overrides: Any) -> dict[str, Any]:
             "park_factor_status": "available",
             "data_quality": 72,
         },
-        "tool_usage": ["get_today_games", "get_probable_pitchers", "predict_yrfi", "generate_quality_report"],
+        "tool_usage": ["get_today_games", "get_probable_pitchers", "predict_moneyline", "generate_quality_report"],
         "prediction": {
-            "final_lean": "YES",
+            "final_lean": "Tampa Bay Rays",
             "confidence": "Medium",
-            "yrfi_probability": 55,
+            "moneyline_probability": 55,
             "model_edge": 2.1,
             "market_odds": {"awayMoneyline": "+120", "homeMoneyline": "-140"},
         },
@@ -59,4 +59,4 @@ def sample_trajectory(**overrides: Any) -> dict[str, Any]:
 
 
 def final_result(home_score: int = 3, away_score: int = 3) -> dict[str, Any]:
-    return {"home_score": home_score, "away_score": away_score, "closing_line": 8.0, "first_inning_run": 0}
+    return {"home_score": home_score, "away_score": away_score, "closing_line": 8.0}

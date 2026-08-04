@@ -97,26 +97,6 @@ const PARK_FACTOR_BASELINES = new Map([
   [147, { runFactor: 1.01, homeRunFactor: 1.08, label: 'Yankee Stadium' }],
   [158, { runFactor: 0.99, homeRunFactor: 1.02, label: 'American Family Field' }]
 ]);
-const BALLPARK_YRFI_RATES = new Map([
-  ['Coors Field', 0.72],
-  ['Great American Ball Park', 0.65],
-  ['Globe Life Field', 0.63],
-  ['Fenway Park', 0.62],
-  ['Wrigley Field', 0.61],
-  ['Yankee Stadium', 0.60],
-  ['Chase Field', 0.60],
-  ['Minute Maid Park', 0.59],
-  ['Daikin Park', 0.59],
-  ['Citizens Bank Park', 0.59],
-  ['American Family Field', 0.58],
-  ['Oracle Park', 0.55],
-  ['Petco Park', 0.54],
-  ['Dodger Stadium', 0.54],
-  ['T-Mobile Park', 0.53],
-  ['Tropicana Field', 0.53]
-]);
-const DEFAULT_YRFI_RATE = 0.57;
-
 const DEFAULTS = {
   rpg: 4.4,
   ops: 0.72,
@@ -127,13 +107,7 @@ const DEFAULTS = {
   kRate: 0.22,
   bbRate: 0.085,
   kMinusBb: 0.12,
-  hr9: 1.1,
-  // Per-half-inning scoring prior. Empirically a run scores in the 1st in
-  // ~55% of games (anyRun), which implies a per-half rate near 0.33 via
-  // 1-(1-r)^2 = 0.55. The old 0.26 centered the model at ~45% and made it pick
-  // NO ~73% of the time on games that actually scored. See gameFirstInningRunRate.
-  firstInningRunRate: 0.33,
-  gameFirstInningRunRate: 0.55
+  hr9: 1.1
 };
 
 // --- Situational Weight Adjustment ---
@@ -363,14 +337,12 @@ function winProbText(team) {
 
 function displayedProbabilities(item) {
   return {
-    away: item.agentAnalysis?.awayProbability ?? item.away.winProbability,
-    home: item.agentAnalysis?.homeProbability ?? item.home.winProbability
+    away: item.away.winProbability,
+    home: item.home.winProbability
   };
 }
 
 function agentPick(item) {
-  if (item.agentAnalysis?.pickTeamId === item.away.id) return item.away;
-  if (item.agentAnalysis?.pickTeamId === item.home.id) return item.home;
   return item.winner;
 }
 
@@ -380,26 +352,6 @@ function displayedWinProbText(team, value) {
 
 function h2hProbText(team, probability) {
   return `${team.abbreviation || team.name} ${percent(probability)}`;
-}
-
-function firstInningPickText(firstInning) {
-  const pick = firstInning?.agent?.pick || firstInning?.baselinePick || 'NO BET';
-  const probability = firstInning?.agent?.probability ?? firstInning?.baselineProbability ?? 50;
-  const lean =
-    firstInning?.baselineLean ||
-    (probability >= 58 ? 'YES' : probability <= 47 ? 'NO' : 'PASS');
-  if (String(pick).toUpperCase() === 'NO BET') {
-    // Advisory-only: show directional lean only when the model clears a real
-    // band; mid-band is PASS (no fake YES/NO).
-    return lean === 'PASS'
-      ? `no lean ${percent(probability)} (advisory)`
-      : `lean ${lean} ${percent(probability)} (advisory)`;
-  }
-  if (String(pick).toUpperCase() === 'PASS') {
-    return `no lean ${percent(probability)}`;
-  }
-  const label = pick === 'YES' ? 'YES / YRFI' : 'NO / NRFI';
-  return `${label} ${percent(probability)}`;
 }
 
 function openerAlertLines(item) {
@@ -827,7 +779,6 @@ function bettingSafetyLines(item, pick) {
       : `model condong ${model.team?.name || pick?.name || 'TBD'}`;
   return [
     uiKV('🧭', 'Prediction', pick?.name || 'unavailable'),
-    uiKV('🏁', 'YRFI/NRFI', firstInningPickText(item?.firstInning)),
     uiKV('💰', 'Value', valueText),
     uiKV('🎯', 'Prediksi', `${model.team?.name || 'TBD'} ${confidence}`),
     uiKV('🧪', 'Data Quality', dataQualityText(item)),
@@ -987,10 +938,6 @@ function ymdOffset(dateYmd, offsetDays) {
   const date = new Date(`${dateYmd}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + offsetDays);
   return date.toISOString().slice(0, 10);
-}
-
-function firstInningHistoryEndDate(dateYmd) {
-  return ymdOffset(dateYmd, -1);
 }
 
 function ymdDiff(laterYmd, earlierYmd) {
@@ -1177,11 +1124,11 @@ function getTeamStatMap(statsData) {
       }
 
       const profile = teams.get(teamId);
-      const type = block.type?.displayName;
-      if (group === 'hitting' && type === 'season') profile.hitting = split.stat;
-      if (group === 'hitting' && type === 'seasonAdvanced') profile.hittingAdvanced = split.stat;
-      if (group === 'pitching' && type === 'season') profile.pitching = split.stat;
-      if (group === 'pitching' && type === 'seasonAdvanced') profile.pitchingAdvanced = split.stat;
+      const type = String(block.type?.displayName || '').toLowerCase();
+      if (group === 'hitting' && type.includes('season') && !type.includes('advanced')) profile.hitting = split.stat;
+      if (group === 'hitting' && type.includes('advanced')) profile.hittingAdvanced = split.stat;
+      if (group === 'pitching' && type.includes('season') && !type.includes('advanced')) profile.pitching = split.stat;
+      if (group === 'pitching' && type.includes('advanced')) profile.pitchingAdvanced = split.stat;
     }
   }
 
@@ -1812,75 +1759,6 @@ async function fetchStandings(season, dateYmd) {
   return getStandingMap(await fetchJson(`${MLB_BASE_URL}/standings?${params}`));
 }
 
-const firstInningProfileCache = new Map();
-
-async function fetchFirstInningProfiles(season, dateYmd) {
-  // Cutoff is always dateYmd-1 and only Final games are included, so the result
-  // is immutable per (season, date) — memoize to avoid refetching ~2 boxscore +
-  // live-feed calls per league game (~2000 MLB API calls) on every prediction.
-  const cacheKey = `${season}:${dateYmd}`;
-  const cached = firstInningProfileCache.get(cacheKey);
-  if (cached) return cached;
-
-  const result = await buildFirstInningProfiles(season, dateYmd);
-  firstInningProfileCache.set(cacheKey, result);
-  return result;
-}
-
-async function buildFirstInningProfiles(season, dateYmd) {
-  const params = new URLSearchParams({
-    sportId: '1',
-    season: String(season),
-    gameTypes: 'R',
-    startDate: seasonStartDate(season),
-    endDate: firstInningHistoryEndDate(dateYmd),
-    hydrate: 'linescore,team'
-  });
-
-  const data = await fetchJson(`${MLB_BASE_URL}/schedule?${params}`);
-  const profiles = new Map();
-  const pitcherProfiles = new Map();
-  const games = (data.dates || [])
-    .flatMap((date) => date.games || [])
-    .filter((game) => game.status?.abstractGameState === 'Final')
-    .filter((game) => game.linescore?.innings?.[0]);
-
-  for (const game of games) {
-    addFirstInningGame(profiles, game, game.teams.away.team, 'away');
-    addFirstInningGame(profiles, game, game.teams.home.team, 'home');
-  }
-
-  const MAX_CONCURRENT = 5;
-  const queue = [...games];
-  async function runNext() {
-    while (queue.length) {
-      const game = queue.shift();
-      let boxscore;
-      let liveFeed;
-      try {
-        [boxscore, liveFeed] = await Promise.all([fetchBoxscore(game.gamePk), fetchLiveFeed(game.gamePk)]);
-      } catch {
-        continue;
-      }
-
-      addPitcherFirstInningGame(pitcherProfiles, game, boxscore, liveFeed, 'home');
-      addPitcherFirstInningGame(pitcherProfiles, game, boxscore, liveFeed, 'away');
-    }
-  }
-  const workers = Array.from({ length: Math.min(MAX_CONCURRENT, games.length) }, () => runNext());
-  await Promise.all(workers);
-
-  for (const [teamId, profile] of profiles.entries()) {
-    profiles.set(teamId, finalizeFirstInningProfile(profile));
-  }
-  for (const [pitcherId, profile] of pitcherProfiles.entries()) {
-    pitcherProfiles.set(pitcherId, finalizePitcherFirstInningProfile(profile));
-  }
-
-  profiles.pitchers = pitcherProfiles;
-  return profiles;
-}
-
 async function fetchPitcherStats(personId, season, asOfDateYmd = null) {
   if (!personId) return null;
 
@@ -1971,40 +1849,6 @@ function summarizePitcherStarts(starts) {
   };
 }
 
-function emptyFirstInningProfile(team) {
-  return {
-    team: {
-      id: team.id,
-      name: team.name,
-      abbreviation: team.abbreviation
-    },
-    games: []
-  };
-}
-
-function addFirstInningGame(profiles, game, team, side) {
-  if (!profiles.has(team.id)) {
-    profiles.set(team.id, emptyFirstInningProfile(team));
-  }
-
-  const first = game.linescore?.innings?.[0];
-  if (!first) return;
-
-  const defenseSide = side === 'away' ? 'home' : 'away';
-  const offenseRuns = toNumber(first[side]?.runs, 0);
-  const allowedRuns = toNumber(first[defenseSide]?.runs, 0);
-
-  profiles.get(team.id).games.push({
-    gamePk: game.gamePk,
-    date: game.officialDate || game.gameDate,
-    scored: offenseRuns > 0,
-    allowed: allowedRuns > 0,
-    anyRun: offenseRuns + allowedRuns > 0,
-    offenseRuns,
-    allowedRuns
-  });
-}
-
 function boxscorePlayer(boxscore, side, personId) {
   return boxscore?.teams?.[side]?.players?.[`ID${personId}`] || null;
 }
@@ -2029,330 +1873,6 @@ function baseKey(base) {
 
 function scoreKey(runner) {
   return `${runner?.details?.event || ''}:${runner?.movement?.start || ''}:score`;
-}
-
-function firstInningRunsChargedToPitcher(liveFeed, pitcherSide, starterId) {
-  if (!starterId) return null;
-  const battingSide = pitcherSide === 'home' ? 'away' : 'home';
-  const halfInning = battingSide === 'away' ? 'top' : 'bottom';
-  const plays = (liveFeed?.liveData?.plays?.allPlays || [])
-    .filter((play) => toNumber(play?.about?.inning, 0) === 1)
-    .filter((play) => String(play?.about?.halfInning || '').toLowerCase() === halfInning);
-  if (!plays.length) return null;
-
-  let chargedRuns = 0;
-  const responsiblePitcherByBase = new Map();
-
-  for (const play of plays) {
-    const pitcherId = play?.matchup?.pitcher?.id || null;
-    const batterId = play?.matchup?.batter?.id || null;
-    const nextResponsible = new Map();
-    const runners = Array.isArray(play.runners) ? play.runners : [];
-    const scoredThisPlay = new Set();
-
-    for (const runner of runners) {
-      if (runner?.movement?.isOut) continue;
-      const start = runner?.movement?.start || '';
-      const end = runner?.movement?.end || '';
-      const runnerId = runner?.details?.runner?.id || null;
-      const existingResponsible = start ? responsiblePitcherByBase.get(start) : null;
-      const responsiblePitcher = existingResponsible || (runnerId && runnerId === batterId ? pitcherId : null);
-
-      if (end === 'score') {
-        const key = scoreKey(runner);
-        if (!scoredThisPlay.has(key) && responsiblePitcher === starterId) {
-          chargedRuns += 1;
-          scoredThisPlay.add(key);
-        }
-      } else if (end) {
-        nextResponsible.set(end, responsiblePitcher || pitcherId || null);
-      }
-    }
-
-    if (pitcherId === starterId && batterId) {
-      const batterRunner = runners.find((runner) => runner?.details?.runner?.id === batterId);
-      const end = batterRunner?.movement?.end || '';
-      if (end && end !== 'score' && !batterRunner?.movement?.isOut) {
-        nextResponsible.set(end, starterId);
-      }
-    }
-
-    for (const runner of runners) {
-      const key = baseKey(runner?.movement);
-      if (key && runner?.movement?.start) responsiblePitcherByBase.delete(runner.movement.start);
-    }
-    for (const [base, responsiblePitcher] of nextResponsible.entries()) {
-      responsiblePitcherByBase.set(base, responsiblePitcher);
-    }
-  }
-
-  return chargedRuns;
-}
-
-// Record the real 1st-inning runs charged to an actual starting pitcher. The
-// home starter pitches the TOP of the 1st, the away starter the BOTTOM.
-function addPitcherFirstInningGame(pitcherProfiles, game, boxscore, liveFeed, pitcherSide) {
-  const starter = actualStarterForSide(boxscore, pitcherSide);
-  if (!starter?.id) return;
-  const allowedRuns = firstInningRunsChargedToPitcher(liveFeed, pitcherSide, starter.id);
-  if (allowedRuns === null) return;
-
-  if (!pitcherProfiles.has(starter.id)) {
-    pitcherProfiles.set(starter.id, { pitcherId: starter.id, name: starter.fullName, games: [] });
-  }
-  pitcherProfiles.get(starter.id).games.push({
-    gamePk: game.gamePk,
-    date: game.officialDate || game.gameDate,
-    allowed: allowedRuns > 0,
-    allowedRuns,
-    source: 'play_by_play'
-  });
-}
-
-function finalizePitcherFirstInningProfile(profile) {
-  const games = [...profile.games].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  const recentGames = games.slice(-10);
-  const allowed = games.filter((g) => g.allowed).length;
-  const recentAllowed = recentGames.filter((g) => g.allowed).length;
-  // Per-half allowed-run rate against this starter in the 1st, season + recent
-  // blended and smoothed toward the league per-half prior so thin samples don't
-  // dominate.
-  const seasonRate = smoothedRate(allowed, games.length, DEFAULTS.firstInningRunRate);
-  const recentRate = smoothedRate(recentAllowed, recentGames.length, DEFAULTS.firstInningRunRate);
-  return {
-    ...profile,
-    games,
-    starts: games.length,
-    allowed,
-    allowedRateBlend: seasonRate * 0.65 + recentRate * 0.35
-  };
-}
-
-function smoothedRate(count, total, prior, weight = 8) {
-  return (count + prior * weight) / (Math.max(0, total) + weight);
-}
-
-function summarizeFirstInningGames(games) {
-  const total = games.length;
-  const scored = games.filter((game) => game.scored).length;
-  const allowed = games.filter((game) => game.allowed).length;
-  const anyRun = games.filter((game) => game.anyRun).length;
-
-  return {
-    games: total,
-    scored,
-    allowed,
-    anyRun,
-    scoredRate: smoothedRate(scored, total, DEFAULTS.firstInningRunRate),
-    allowedRate: smoothedRate(allowed, total, DEFAULTS.firstInningRunRate),
-    anyRunRate: smoothedRate(anyRun, total, DEFAULTS.gameFirstInningRunRate)
-  };
-}
-
-function finalizeFirstInningProfile(profile) {
-  const games = [...profile.games].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  const recentGames = games.slice(-10);
-  const season = summarizeFirstInningGames(games);
-  const recent = summarizeFirstInningGames(recentGames);
-
-  return {
-    ...profile,
-    games,
-    season,
-    recent,
-    scoredBlend: season.scoredRate * 0.65 + recent.scoredRate * 0.35,
-    allowedBlend: season.allowedRate * 0.65 + recent.allowedRate * 0.35,
-    anyRunBlend: season.anyRunRate * 0.65 + recent.anyRunRate * 0.35
-  };
-}
-
-function defaultFirstInningProfile(team) {
-  return finalizeFirstInningProfile(emptyFirstInningProfile(team));
-}
-
-function pitcherFirstInningRisk(stats, pitcherFirstInningProfile = null) {
-  const eraRisk = stats ? (statEra(stats) - DEFAULTS.era) / 18 : 0;
-  const whipRisk = stats ? (statWhip(stats) - DEFAULTS.whip) / 6 : 0;
-  const kbbRisk = stats ? (2.2 - kToBb(stats)) / 18 : 0;
-  const seasonRisk = clamp(eraRisk + whipRisk + kbbRisk, -0.1, 0.1);
-
-  if (!pitcherFirstInningProfile?.starts) return seasonRisk;
-
-  // Actual 1st-inning allowed history is useful context, but it is noisy and has
-  // small samples. Treat it as a bounded additive adjustment so a neutral/thin
-  // profile does not make a bad season-risk pitcher look safer by existing.
-  const sampleWeight = clamp(pitcherFirstInningProfile.starts / 12, 0, 1);
-  const observedAdjustment =
-    clamp(
-      (pitcherFirstInningProfile.allowedRateBlend - DEFAULTS.firstInningRunRate) * 0.5,
-      -0.08,
-      0.08
-    ) * sampleWeight;
-  return clamp(seasonRisk + observedAdjustment, -0.12, 0.12);
-}
-
-function firstInningProfileLine(profile) {
-  const team = profile.team.abbreviation || profile.team.name;
-  return `${team} scored 1st ${profile.season.scored}/${profile.season.games}, allowed ${profile.season.allowed}/${profile.season.games}, recent any ${profile.recent.anyRun}/${profile.recent.games}`;
-}
-
-function pitcherFirstInningProfileLine(profile) {
-  if (!profile?.starts) return null;
-  const allowed = profile.allowed ?? profile.games.filter((game) => game.allowed).length;
-  return `${profile.name} allowed 1st ${allowed}/${profile.starts}`;
-}
-
-function buildFirstInningProjection({
-  away,
-  home,
-  awayProfile,
-  homeProfile,
-  awayPitcherStats,
-  homePitcherStats,
-  awayPitcherFirstInningProfile,
-  homePitcherFirstInningProfile,
-  headToHead,
-  venue,
-  weather,
-  awayLineup,
-  homeLineup
-}) {
-  const awayLeadoffObp = leadoffObp(awayLineup);
-  const homeLeadoffObp = leadoffObp(homeLineup);
-  const awayLeadoffAdj = Number.isFinite(awayLeadoffObp)
-    ? clamp((awayLeadoffObp - 0.330) * 0.8, -0.04, 0.04)
-    : 0;
-  const homeLeadoffAdj = Number.isFinite(homeLeadoffObp)
-    ? clamp((homeLeadoffObp - 0.330) * 0.8, -0.04, 0.04)
-    : 0;
-  const topRate = clamp(
-    awayProfile.scoredBlend * 0.55 +
-      homeProfile.allowedBlend * 0.45 +
-      pitcherFirstInningRisk(homePitcherStats, homePitcherFirstInningProfile) +
-      awayLeadoffAdj,
-    0.08,
-    0.62
-  );
-  const bottomRate = clamp(
-    homeProfile.scoredBlend * 0.55 +
-      awayProfile.allowedBlend * 0.45 +
-      pitcherFirstInningRisk(awayPitcherStats, awayPitcherFirstInningProfile) +
-      homeLeadoffAdj,
-    0.08,
-    0.62
-  );
-  // Two independent estimates of "a run scores in the 1st":
-  //  (a) OR-combination of each half-inning's scoring rate, and
-  //  (b) the teams' directly-observed any-run rate (anyRunBlend), which the old
-  //      model computed but never used. Average them for a less biased center.
-  const orProbability = 1 - (1 - topRate) * (1 - bottomRate);
-  const directAnyRun =
-    ((awayProfile.anyRunBlend ?? DEFAULTS.gameFirstInningRunRate) +
-      (homeProfile.anyRunBlend ?? DEFAULTS.gameFirstInningRunRate)) /
-    2;
-  const modelProbability = orProbability * 0.5 + directAnyRun * 0.5;
-  const h2hGames = headToHead?.firstInning?.games || 0;
-  const h2hProbability = (headToHead?.firstInning?.probability || DEFAULTS.gameFirstInningRunRate * 100) / 100;
-  const blendedProbability =
-    h2hGames >= 3 ? modelProbability * 0.85 + h2hProbability * 0.15 : modelProbability;
-  const venueRate = venueYrfiRate(venue?.name || venue);
-  const venueAdjustment = clamp((venueRate - DEFAULTS.gameFirstInningRunRate) * 0.5, -0.08, 0.08);
-  const weatherAdjustment = yrfiWeatherAdjustment(weather);
-  const contextualProbability = clamp(blendedProbability + venueAdjustment + weatherAdjustment, 0.20, 0.80);
-  // Per-game YRFI signal has historically shown ~zero correlation with outcomes
-  // (the matchup features barely move the needle), so shrink hard toward the
-  // league base rate. This keeps the probability honest instead of emitting
-  // overconfident leans the data does not support.
-  const baseRate = DEFAULTS.gameFirstInningRunRate;
-  const shrunkProbability = contextualProbability * 0.4 + baseRate * 0.6;
-  let probability = clamp(shrunkProbability * 100, 35, 70);
-  // Calibrate at the source, mirroring moneyline/totals. The Python pipeline
-  // trains a 'yrfi' isotonic map the live path never applied. Analysis of 192
-  // graded YRFI outcomes found severe overconfidence at the high end (65-70%
-  // bucket won only 47%). `probability` is P(YES, a run scores); calibrate the
-  // favored side (YES vs NO) and derive YES back so the surfaced number reflects
-  // observed frequency instead of the raw, overconfident projection.
-  if (hasCalibrationMap('yrfi')) {
-    const yesProb = probability;
-    const noProb = 100 - probability;
-    if (yesProb >= noProb) {
-      probability = clamp(calibratePercent(yesProb, 'yrfi'), 35, 70);
-    } else {
-      probability = 100 - clamp(calibratePercent(noProb, 'yrfi'), 35, 70);
-    }
-  }
-  // Break-even for a YRFI bet at typical -110/-120 juice is ~52-55%. Only lean
-  // YES when the projection clears the base rate by a real margin, and NO only
-  // when it falls well below it; otherwise lean PASS (no fake directional lean).
-  // Bugfix: the mid-band previously defaulted to 'YES', which forced ~73% NO
-  // grading history into a YES lean and crushed NRFI accuracy (~45%).
-  const lean = probability >= 58 ? 'YES' : probability <= 47 ? 'NO' : 'PASS';
-  // YRFI carried no per-game edge historically (corr ~ -0.02 with outcomes) and
-  // the market already prices the >50% base rate, so it stays advisory-only by
-  // default: the lean/probability are surfaced as context but `pick` is NO BET
-  // so it is not graded as a bet. Re-enable with YRFI_ACTIVE=1 only if a future
-  // feature set demonstrates a real, calibrated edge. When active, PASS still
-  // maps to NO BET (no forced side).
-  const yrfiActive = String(process.env.YRFI_ACTIVE || '').trim() === '1';
-  const pick = yrfiActive && lean !== 'PASS' ? lean : 'NO BET';
-
-  const reasons = [
-    `Top 1: ${away.abbreviation || away.name} offense/allowed profile projects ${percent(topRate * 100)} run chance.`,
-    `Bottom 1: ${home.abbreviation || home.name} offense/allowed profile projects ${percent(bottomRate * 100)} run chance.`
-  ];
-
-  const pitcherLines = [
-    pitcherFirstInningProfileLine(homePitcherFirstInningProfile),
-    pitcherFirstInningProfileLine(awayPitcherFirstInningProfile)
-  ].filter(Boolean);
-  if (pitcherLines.length) {
-    reasons.push(`Starter 1st-inning history: ${pitcherLines.join(' | ')}.`);
-  }
-  if (h2hGames > 0) {
-    reasons.push(`H2H first-inning run: ${headToHead.firstInning.runGames}/${h2hGames}.`);
-  }
-  const contextParts = [];
-  contextParts.push(`venue YRFI ${percent(venueRate * 100)}`);
-  if (Math.abs(weatherAdjustment) >= 0.005) {
-    contextParts.push(`weather ${weatherAdjustment >= 0 ? '+' : ''}${percent(weatherAdjustment * 100)}`);
-  }
-  if (Number.isFinite(awayLeadoffObp) || Number.isFinite(homeLeadoffObp)) {
-    contextParts.push(`leadoff OBP ${Number.isFinite(awayLeadoffObp) ? safeFixed(awayLeadoffObp, 3) : '-'} | ${Number.isFinite(homeLeadoffObp) ? safeFixed(homeLeadoffObp, 3) : '-'}`);
-  }
-  if (contextParts.length) {
-    reasons.push(`YRFI context: ${contextParts.join(' | ')}.`);
-  }
-  if (!yrfiActive) {
-    reasons.push('YRFI advisory-only: market historically unprofitable, not graded as a bet.');
-  }
-
-  // Confidence reflects how far the projection sits from the ~55% league base
-  // rate (the shrunk scale rarely leaves the 45-65% band), not raw probability.
-  const baseDistance = Math.abs(probability - DEFAULTS.gameFirstInningRunRate * 100);
-  return {
-    baselinePick: pick,
-    baselineProbability: probability,
-    baselineLean: lean,
-    advisoryOnly: !yrfiActive,
-    confidence: baseDistance >= 8 ? 'high' : baseDistance >= 4 ? 'medium' : 'low',
-    topRate: topRate * 100,
-    bottomRate: bottomRate * 100,
-    h2h: {
-      games: h2hGames,
-      runGames: headToHead?.firstInning?.runGames || 0,
-      probability: h2hProbability * 100
-    },
-    awayProfileLine: firstInningProfileLine(awayProfile),
-    homeProfileLine: firstInningProfileLine(homeProfile),
-    awayPitcherFirstInningLine: pitcherFirstInningProfileLine(awayPitcherFirstInningProfile),
-    homePitcherFirstInningLine: pitcherFirstInningProfileLine(homePitcherFirstInningProfile),
-    venueYrfiRate: venueRate,
-    venueAdjustment,
-    weatherAdjustment,
-    awayLeadoffObp: Number.isFinite(awayLeadoffObp) ? awayLeadoffObp : null,
-    homeLeadoffObp: Number.isFinite(homeLeadoffObp) ? homeLeadoffObp : null,
-    reasons
-  };
 }
 
 function matchupSplitLine(team, standing, opponentStarter, venueSplitType) {
@@ -2400,8 +1920,6 @@ async function fetchHeadToHead(game, season, dateYmd) {
 
   let awayWins = 0;
   let homeWins = 0;
-  let firstInningGames = 0;
-  let firstInningRunGames = 0;
 
   for (const item of games) {
     const winnerId =
@@ -2411,33 +1929,18 @@ async function fetchHeadToHead(game, season, dateYmd) {
 
     if (winnerId === awayTeamId) awayWins += 1;
     if (winnerId === homeTeamId) homeWins += 1;
-
-    const first = item.linescore?.innings?.[0];
-    if (first) {
-      firstInningGames += 1;
-      if (toNumber(first.away?.runs, 0) + toNumber(first.home?.runs, 0) > 0) {
-        firstInningRunGames += 1;
-      }
-    }
   }
 
   const total = awayWins + homeWins;
   const awayProbability = ((awayWins + 1) / (total + 2)) * 100;
   const homeProbability = 100 - awayProbability;
-  const firstInningProbability =
-    ((firstInningRunGames + DEFAULTS.gameFirstInningRunRate * 4) / (firstInningGames + 4)) * 100;
 
   return {
     games: total,
     awayWins,
     homeWins,
     awayProbability,
-    homeProbability,
-    firstInning: {
-      games: firstInningGames,
-      runGames: firstInningRunGames,
-      probability: firstInningProbability
-    }
+    homeProbability
   };
 }
 
@@ -2454,9 +1957,6 @@ function finalGameResult(game, dateYmd) {
   const decided = Number.isFinite(awayScore) && Number.isFinite(homeScore) && awayScore !== homeScore;
   const winnerTeam = decided ? (awayScore > homeScore ? awayTeam : homeTeam) : null;
   const loserTeam = decided ? (awayScore > homeScore ? homeTeam : awayTeam) : null;
-  const first = game.linescore?.innings?.[0];
-  const firstInningAwayRuns = toNumber(first?.away?.runs, 0);
-  const firstInningHomeRuns = toNumber(first?.home?.runs, 0);
 
   return {
     gamePk: game.gamePk,
@@ -2483,11 +1983,6 @@ function finalGameResult(game, dateYmd) {
       id: loserTeam?.id ?? null,
       name: loserTeam?.name ?? null,
       abbreviation: loserTeam?.abbreviation ?? null
-    },
-    firstInning: {
-      awayRuns: firstInningAwayRuns,
-      homeRuns: firstInningHomeRuns,
-      anyRun: first ? firstInningAwayRuns + firstInningHomeRuns > 0 : null
     }
   };
 }
@@ -2879,47 +2374,6 @@ function weatherRunAdjustment(weather) {
   return clamp((tempAdj + windAdj) * roofMultiplier, -0.55, 0.55);
 }
 
-function yrfiWeatherAdjustment(weather) {
-  if (!weather) return 0;
-  const weatherText = JSON.stringify(weather).toLowerCase();
-  if (weatherText.includes('roof closed') || weatherText.includes('closed roof') || weatherText.includes('dome')) return 0;
-  const temp = parseWeatherNumber(weather.temp || weather.temperature);
-  const windText = String(weather.wind || weather.windDirection || '').toLowerCase();
-  const windSpeed = parseWeatherNumber(windText) || 0;
-  const humidity = parseWeatherNumber(weather.humidity) ?? 50;
-  const tempAdj = temp === null ? 0 : clamp((temp - 70) * 0.006, -0.03, 0.03);
-  const windAdj = windText.includes('out')
-    ? clamp(windSpeed * 0.004, 0, 0.03)
-    : windText.includes('in')
-      ? -clamp(windSpeed * 0.004, 0, 0.03)
-      : 0;
-  const humidityAdj = clamp((humidity - 50) * 0.001, -0.01, 0.01);
-  return clamp(tempAdj + windAdj + humidityAdj, -0.05, 0.05);
-}
-
-function venueYrfiRate(venueName) {
-  return BALLPARK_YRFI_RATES.get(String(venueName || '').trim()) || DEFAULT_YRFI_RATE;
-}
-
-function leadoffObp(lineup) {
-  return toNumber(lineup?.leadoffObp, Number.NaN);
-}
-
-function firstInningSignalLine(firstInning) {
-  if (!firstInning) return '';
-  const parts = [];
-  if (Number.isFinite(Number(firstInning.venueYrfiRate))) {
-    parts.push(`park YRFI ${percent(firstInning.venueYrfiRate * 100)}`);
-  }
-  if (Number.isFinite(Number(firstInning.weatherAdjustment)) && Math.abs(Number(firstInning.weatherAdjustment)) >= 0.005) {
-    parts.push(`weather ${Number(firstInning.weatherAdjustment) >= 0 ? '+' : ''}${percent(Number(firstInning.weatherAdjustment) * 100)}`);
-  }
-  if (Number.isFinite(Number(firstInning.awayLeadoffObp)) || Number.isFinite(Number(firstInning.homeLeadoffObp))) {
-    parts.push(`leadoff OBP ${Number.isFinite(Number(firstInning.awayLeadoffObp)) ? safeFixed(firstInning.awayLeadoffObp, 3) : '-'} | ${Number.isFinite(Number(firstInning.homeLeadoffObp)) ? safeFixed(firstInning.homeLeadoffObp, 3) : '-'}`);
-  }
-  return parts.join(' | ');
-}
-
 function parkFactorContext(homeTeam) {
   const baseline = PARK_FACTOR_BASELINES.get(homeTeam?.id) || {
     runFactor: 1,
@@ -3029,7 +2483,6 @@ function predictGame(
   bullpenProfiles,
   scheduleFatigueProfiles,
   headToHead,
-  firstInningProfiles,
   injuryProfiles,
   lineupProfiles,
   modelMemory,
@@ -3125,16 +2578,6 @@ function predictGame(
   const rawHomeProbability = core.raw.homeProbability;
   const rawAwayProbability = core.raw.awayProbability;
   const gameDateYmd = core.gameDateYmd;
-  const awayFirstInningProfile =
-    firstInningProfiles.get(awayTeam.id) || defaultFirstInningProfile(awayTeam);
-  const homeFirstInningProfile =
-    firstInningProfiles.get(homeTeam.id) || defaultFirstInningProfile(homeTeam);
-  const awayPitcherFirstInningProfile = awayStarter && !awayOpenerSituation.isOpener
-    ? firstInningProfiles.pitchers?.get(awayStarter.id) || null
-    : null;
-  const homePitcherFirstInningProfile = homeStarter && !homeOpenerSituation.isOpener
-    ? firstInningProfiles.pitchers?.get(homeStarter.id) || null
-    : null;
 
   modelBreakdown.sharpMoney = detectSharpMoneySignal(
     homeProbability >= awayProbability ? homeTeam.name : awayTeam.name,
@@ -3203,21 +2646,6 @@ function predictGame(
     homePythagoreanLog5,
     homeRecentLog5,
     homeReferenceBlend
-  });
-  const firstInning = buildFirstInningProjection({
-    away,
-    home,
-    awayProfile: awayFirstInningProfile,
-    homeProfile: homeFirstInningProfile,
-    awayPitcherStats: effectiveAwayPitcherStats,
-    homePitcherStats: effectiveHomePitcherStats,
-    awayPitcherFirstInningProfile,
-    homePitcherFirstInningProfile,
-    headToHead,
-    venue: game.venue,
-    weather: game.weather,
-    awayLineup,
-    homeLineup
   });
   const awayPitcherRecentLine = awayOpenerSituation.isOpener
     ? 'Bulk pitcher TBD'
@@ -3317,7 +2745,6 @@ function predictGame(
     },
     matchupMemory,
     headToHead,
-    firstInning,
     winner: homeProbability >= awayProbability ? home : away,
     reasons
   };
@@ -3325,11 +2752,6 @@ function predictGame(
 
 export const __mlbTestInternals = {
   actualStarterForSide,
-  addPitcherFirstInningGame,
-  buildFirstInningProjection,
-  firstInningHistoryEndDate,
-  firstInningRunsChargedToPitcher,
-  pitcherFirstInningRisk,
   starterEdge,
   starterRecentEdge,
   starterSeasonEdge,
@@ -3364,11 +2786,10 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
     console.warn(`getMlbPredictions: ${label} fetch failed, using empty data:`, error.message);
     return new Map();
   };
-  const [teamStats, rollingTeamStats, standings, firstInningProfiles, bullpenProfiles, scheduleFatigueProfiles, injuryProfiles] = await Promise.all([
+  const [teamStats, rollingTeamStats, standings, bullpenProfiles, scheduleFatigueProfiles, injuryProfiles] = await Promise.all([
     fetchTeamStats(season, dateYmd).catch(warnFetch('teamStats')),
     fetchRollingTeamStats(season, dateYmd).catch(warnFetch('rollingTeamStats')),
     fetchStandings(season, dateYmd).catch(warnFetch('standings')),
-    fetchFirstInningProfiles(season, dateYmd).catch(warnFetch('firstInningProfiles')),
     fetchBullpenProfiles(teamIds, dateYmd).catch(warnFetch('bullpenProfiles')),
     fetchScheduleFatigueProfiles(teamIds, dateYmd).catch(warnFetch('scheduleFatigueProfiles')),
     fetchInjuryProfiles(teamIds, dateYmd, season).catch(warnFetch('injuryProfiles'))
@@ -3423,12 +2844,7 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
           awayWins: 0,
           homeWins: 0,
           awayProbability: 50,
-          homeProbability: 50,
-          firstInning: {
-            games: 0,
-            runGames: 0,
-            probability: DEFAULTS.gameFirstInningRunRate * 100
-          }
+          homeProbability: 50
         });
       }
     })
@@ -3457,7 +2873,6 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       bullpenProfiles,
       scheduleFatigueProfiles,
       headToHeadStats.get(game.gamePk),
-      firstInningProfiles,
       injuryProfiles,
       lineupProfiles.get(game.gamePk),
       modelMemory,
@@ -3530,7 +2945,7 @@ export async function getFinalGameResults(dateYmd = dateInTimezone('Asia/Jakarta
 export function formatPredictions(
   dateYmd,
   predictions,
-  { maxGames = 8, teamFilter = '', includeAdvanced = true } = {}
+  { maxGames = 8, teamFilter = '', includeAdvanced = true, includeNews = false } = {}
 ) {
   const normalizedFilter = teamFilter.toLowerCase();
   const filtered = normalizedFilter
@@ -3586,9 +3001,14 @@ export function formatPredictions(
     const injuryLines = item.injuryDetailLines?.length
       ? item.injuryDetailLines.map((line) => uiBullet('•', line))
       : splitInfoLine(item.injuryLine);
-    const firstInningReasonLines = item.firstInning.agent?.reasons?.length
-      ? item.firstInning.agent.reasons.map((reason) => uiBullet('•', reason))
-      : item.firstInning.reasons.map((reason) => uiBullet('•', reason));
+    const newsLines = includeNews
+      ? (item.newsContext?.articles || []).slice(0, 2).map((article) => {
+          const published = article.publishedAt
+            ? new Date(article.publishedAt).toISOString().slice(0, 16).replace('T', ' ')
+            : 'waktu tidak tersedia';
+          return uiBullet('•', `[${article.sourceName}] ${article.title} | ${published} UTC`);
+        })
+      : [];
     const h2hSummary =
       item.headToHead?.games > 0
         ? `${item.away.abbreviation || item.away.name} ${item.headToHead.awayWins}-${item.headToHead.homeWins} ${item.home.abbreviation || item.home.name}`
@@ -3631,6 +3051,15 @@ export function formatPredictions(
         uiSection('🏥', 'Injury Report'),
         ...injuryLines,
         '',
+        ...(includeNews
+          ? [
+              uiSection('📰', 'External News'),
+              ...(newsLines.length
+                ? newsLines
+                : [uiBullet('•', `Tidak ada artikel cocok (${item.newsContext?.status || 'unavailable'}).`)]),
+              ''
+            ]
+          : []),
         ...(playerImpactLines(item).length
           ? [uiSection('🧩', 'Player Impact'), ...playerImpactLines(item), '']
           : []),
@@ -3655,15 +3084,6 @@ export function formatPredictions(
         agentActive ? uiKV('🧠', 'Memory', item.agentAnalysis.memoryNote) : null,
         '',
         SECTION_SEPARATOR,
-        uiSection('🏁', 'First Inning'),
-        uiKV('🏁', 'Run in 1st', firstInningPickText(item.firstInning)),
-        uiKV('📐', 'Baseline', `${item.firstInning.baselinePick} | ${percent(item.firstInning.baselineProbability)}`),
-        uiKV('📊', 'Top/Bottom 1', `${percent(item.firstInning.topRate)} | ${percent(item.firstInning.bottomRate)}`),
-        firstInningSignalLine(item.firstInning) ? uiKV('🌤️', 'YRFI signals', firstInningSignalLine(item.firstInning)) : null,
-        '',
-        ...splitInfoLine(`${item.firstInning.awayProfileLine} | ${item.firstInning.homeProfileLine}`),
-        '',
-        ...firstInningReasonLines,
       ]
         .filter((line) => line !== null)
         .join('\n')
