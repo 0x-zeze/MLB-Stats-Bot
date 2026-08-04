@@ -23,7 +23,7 @@
     "evaluate:artifacts": "node scripts/run_python.js scripts/build_evaluation_artifacts.py",
     "evaluate": "node scripts/run_python.js -m src.evaluate --sqlite data/state.sqlite --json reports/latest_metrics.json --report",
     "holdout:value-profile": "node scripts/run_python.js scripts/holdout_validate_rule.py",
-    "model": "node scripts/run_python.js scripts/model_edge_validation.py",
+    "model": "node scripts/run_python.js scripts/model_edge_validation.py && node scripts/run_python.js scripts/team_edge_analysis.py --write data/team_advantages.json",
     "model:validate": "npm run model",
     "replay": "node scripts/replay_prediction.js",
     "migrate-ledger": "node scripts/run_migrations.js --apply",

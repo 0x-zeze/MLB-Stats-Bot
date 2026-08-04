@@ -31,6 +31,11 @@ The output is for analysis and education. It is not guaranteed betting advice.
   and applies a **1.5x Kelly sizing boost** when model picks away but market
   favors home — the validated asymmetric edge (WR 89%, ROI 90%, n=183). Only
   this direction is promoted; the reverse is not (train WR 44%).
+- **Team advantage:** `npm run model` now also generates
+  `data/team_advantages.json` — per-team S/A/B/C/D tiers from WR, ROI,
+  disagreement performance, and side breakdown. Use it to filter picks: only
+  bet teams with tier B or higher, and prefer teams with strong away-disagreement
+  records.
 - **Promotion bar for any new filter or weight:** pre-registered holdout, n
   large enough, WR above odds break-even, non-negative ROI — not in-sample
   mining alone.
