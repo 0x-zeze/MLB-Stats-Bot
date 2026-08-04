@@ -28,8 +28,8 @@ data wall, and evaluator market baselines.
 | YRFI/NRFI market | **Closed** — removed; no per-game edge, was advisory-only |
 | `js.value_profile` empirical gate | **Disabled** (`enabled:false`) — claimed 127@64.6% not reproducible; holdout n=12 |
 | Market-anchored residual weight | **Default 0** — raise only after `npm run model:validate` walk-forward supports it |
-| Model-vs-market disagreement gate (model-away vs market-home) | **Live** (`js.disagreement_away`) — bypasses edge/conviction floors for this validated asymmetric edge (train 81% + test 97% WR, n=183). Re-check periodically with `npm run model:validate`. |
-| Model-vs-market disagreement gate (model-home vs market-away) | **Not promoted** — n small, train WR 44%. No bypass applied. |
+| Model-vs-market disagreement gate (model-away vs market-home) | **Live** (`js.disagreement_away`) — bypasses edge/conviction floors + 1.5x Kelly sizing boost for this validated asymmetric edge (WR 89%, ROI 90%, n=183). Re-check periodically with `npm run model:validate`. |
+| Model-vs-market disagreement gate (model-home vs market-away) | **Not promoted** — train WR 44%, test WR 52%, n=54. No bypass or boost applied. |
 
 ## P2
 

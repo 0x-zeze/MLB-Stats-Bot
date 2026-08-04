@@ -205,6 +205,72 @@ def disagreement_gate(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Sizing boost validation
+# ---------------------------------------------------------------------------
+
+
+def sizing_boost_validation(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Validate 1.5x stake boost on model-away vs market-home disagreement."""
+    conf = [r for r in rows if (r["model_home"] >= 0.5) != (r["market_home"] >= 0.5)]
+    disagreement = [r for r in conf if r["model_home"] < 0.5 and r["market_home"] >= 0.5]
+    if not disagreement:
+        return {"boost": 1.0, "validated": False, "reason": "no disagreement samples"}
+    m = metrics(disagreement)
+    if m["n"] < 40:
+        return {"boost": 1.0, "validated": False, "reason": f"n={m['n']} < 40", "n": m["n"], "wr": m.get("accuracy"), "roi": m.get("roi")}
+    # boost validated if WR > 55% and ROI > 0
+    wr = m.get("accuracy") or 0
+    roi = m.get("roi") or 0
+    validated = wr >= 0.55 and roi >= 0
+    return {
+        "boost": 1.5 if validated else 1.0,
+        "validated": validated,
+        "n": m["n"],
+        "wr": wr,
+        "roi": roi,
+        "reason": f"validated: WR {wr:.1%}, ROI {roi:.1%}, n={m['n']}" if validated else f"not validated: WR {wr:.1%} or ROI {roi:.1%}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Reverse direction validation (model-home vs market-away)
+# ---------------------------------------------------------------------------
+
+
+def reverse_direction_validation(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Validate whether model-home vs market-away should also bypass."""
+    conf = [r for r in rows if (r["model_home"] >= 0.5) != (r["market_home"] >= 0.5)]
+    reverse = [r for r in conf if r["model_home"] >= 0.5 and r["market_home"] < 0.5]
+    if not reverse:
+        return {"promoted": False, "reason": "no reverse samples"}
+    cut = max(1, len(reverse) // 2)
+    train, test = reverse[:cut], reverse[cut:]
+    train_m = metrics(train)
+    test_m = metrics(test)
+    promoted = (
+        train_m["n"] >= 20
+        and test_m["n"] >= 20
+        and train_m.get("accuracy") is not None
+        and test_m.get("accuracy") is not None
+        and train_m["accuracy"] >= 0.55
+        and test_m["accuracy"] >= 0.55
+        and (train_m.get("roi") or 0) >= 0
+        and (test_m.get("roi") or 0) >= 0
+    )
+    return {
+        "promoted": promoted,
+        "n": len(reverse),
+        "train": train_m,
+        "test": test_m,
+        "reason": (
+            f"promoted: train {train_m['accuracy']:.1%} + test {test_m['accuracy']:.1%}, n={train_m['n']}+{test_m['n']}"
+            if promoted
+            else f"not promoted: train {train_m['accuracy']:.1%} + test {test_m['accuracy']:.1%}, n={train_m['n']}+{test_m['n']}"
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Per-band evaluation
 # ---------------------------------------------------------------------------
 
@@ -412,6 +478,8 @@ def analyze(*, sqlite_path: Path, outcomes_csv: Path, n_splits: int) -> dict[str
     gates = disagreement_gate(rows)
     bands = per_band_metrics(rows)
     shrink = fit_banded_shrink(rows, n_splits)
+    sizing = sizing_boost_validation(rows)
+    reverse = reverse_direction_validation(rows)
 
     return {
         "inputs": {
@@ -436,6 +504,8 @@ def analyze(*, sqlite_path: Path, outcomes_csv: Path, n_splits: int) -> dict[str
         "disagreement_gates": gates,
         "per_band": bands,
         "banded_shrink": shrink,
+        "sizing_boost": sizing,
+        "reverse_direction": reverse,
     }
 
 
@@ -488,6 +558,18 @@ def print_report(report: dict[str, Any]) -> None:
         for band, k in sorted(bs["factors"].items()):
             print(f"  {band}: factor={k}")
     print(f"  reason: {bs.get('reason')}")
+
+    sb = report.get("sizing_boost", {})
+    print("\nSizing boost (disagreement):")
+    print(f"  boost={sb.get('boost')} validated={sb.get('validated')} n={sb.get('n')} WR={_fmt(sb.get('wr'))} ROI={_fmt(sb.get('roi'))}")
+    print(f"  reason: {sb.get('reason')}")
+
+    rd = report.get("reverse_direction", {})
+    print("\nReverse direction (model-home vs market-away):")
+    print(f"  promoted={rd.get('promoted')} n={rd.get('n')}")
+    print(f"  train n={rd.get('train', {}).get('n')} acc={_fmt(rd.get('train', {}).get('accuracy'))} roi={_fmt(rd.get('train', {}).get('roi'))}")
+    print(f"  test  n={rd.get('test', {}).get('n')} acc={_fmt(rd.get('test', {}).get('accuracy'))} roi={_fmt(rd.get('test', {}).get('roi'))}")
+    print(f"  reason: {rd.get('reason')}")
 
 
 def main(argv: list[str] | None = None) -> int:

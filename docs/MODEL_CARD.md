@@ -28,9 +28,9 @@ The output is for analysis and education. It is not guaranteed betting advice.
   no-vig market probability via `MONEYLINE_MARKET_RESIDUAL_WEIGHT`. Default is
   **0**; only raise it when `npm run model:validate` shows walk-forward gains.
 - **Disagreement bypass:** `js.disagreement_away` relaxes edge/conviction floors
-  when model picks away but market favors home — the validated asymmetric edge
-  (81–97% WR walk-forward, n=183). Only this direction is promoted; the reverse
-  is not.
+  and applies a **1.5x Kelly sizing boost** when model picks away but market
+  favors home — the validated asymmetric edge (WR 89%, ROI 90%, n=183). Only
+  this direction is promoted; the reverse is not (train WR 44%).
 - **Promotion bar for any new filter or weight:** pre-registered holdout, n
   large enough, WR above odds break-even, non-negative ROI — not in-sample
   mining alone.
