@@ -69,6 +69,8 @@ function helpText() {
     uiSection('📋', 'Shortcut analyst'),
     uiCommand('/picks', 'top 5 pick model hari ini'),
     uiCommand('/picks YYYY-MM-DD', 'top pick untuk tanggal tertentu'),
+    uiCommand('/predict', 'prediksi semua game MLB hari ini'),
+    uiCommand('/predict YYYY-MM-DD', 'prediksi semua game pada tanggal tertentu'),
     uiCommand('/ledger', 'rekap bet ledger: open, record, units P/L, ROI'),
     uiCommand('/analyze', 'analisa edge, risk, value, dan no-bet slate hari ini'),
     uiCommand('/analyze TEAM', 'analisa tim/game tertentu dari data bot'),
@@ -92,6 +94,7 @@ function botCommandList() {
     { command: 'today', description: 'List ringkas semua game' },
     { command: 'deep', description: 'Semua game dengan statistik lengkap' },
     { command: 'picks', description: 'Top model picks' },
+    { command: 'predict', description: 'Prediksi semua game MLB' },
     { command: 'analyze', description: 'Analisa slate atau tim' },
     { command: 'news', description: 'External news + risk context' },
     { command: 'game', description: 'Cek tim tertentu hari ini' },
@@ -497,17 +500,12 @@ function predictionHelpText() {
   return [
     uiTitle('📊', 'MLB Prediction | help'),
     '',
-    uiKV('🧭', 'Menu', '/predict'),
-    uiKV('⌨️', 'Manual', '/predict HOME | AWAY | odds_opsional'),
+     uiKV('🧭', 'Mode', '/predict mengirim semua game langsung'),
+     uiKV('⌨️', 'Tanggal', '/predict YYYY-MM-DD'),
     '',
     uiSection('💡', 'Contoh'),
-    uiCommand('/predict', 'pilih game dari tombol'),
-    uiCommand('/predict 2026-04-27', 'pilih game tanggal tertentu'),
-    uiCommand('/predict Los Angeles Dodgers | New York Yankees', 'manual matchup'),
-    uiCommand('/predict Los Angeles Dodgers | New York Yankees | -120', 'manual + American odds'),
-    uiCommand('/predict Los Angeles Dodgers | New York Yankees | decimal 1.91', 'manual + decimal odds'),
-    '',
-    uiBullet('⚠️', '/predict tanpa matchup memakai schedule MLB live. Tombol memilih game dari schedule MLB.')
+     '',
+     uiBullet('⚠️', 'Untuk ringkasan singkat gunakan /today; /predict menampilkan detail seluruh slate.')
   ].join('\n');
 }
 
@@ -942,11 +940,23 @@ function formatLivePrediction(dateYmd, prediction, options = {}) {
 
 async function sendPythonPrediction(bot, chatId, text) {
   const request = parsePredictCommand(text);
+  const dateYmd = request.dateYmd || dateInTimezone(config.timezone);
   await bot.sendMessage(
     chatId,
-    uiKV('⏳', 'Mengambil semua game MLB', request.dateYmd || dateInTimezone(config.timezone))
+    uiKV('⏳', 'Menganalisa semua game MLB', dateYmd)
   );
-  await sendPredictionGameMenu(bot, chatId, request.dateYmd);
+  const { predictions } = await buildAlertPayload(dateYmd);
+  if (predictions.length === 0) {
+    await bot.sendMessage(chatId, uiBullet('⚠️', `Tidak ada game MLB pada ${dateYmd}.`));
+    return;
+  }
+
+  const output = predictions
+    .map((prediction) => formatLivePrediction(dateYmd, prediction))
+    .join(`\n\n${UI_LINE}\n\n`);
+  await bot.sendMessage(chatId, output);
+  maybeStartLineMonitor(predictions, chatId, dateYmd);
+  console.log(`All-game prediction ${dateYmd} sent to ${chatId}: ${predictions.length} game(s).`);
 }
 
 async function handlePredictCallback(bot, callbackQuery) {
