@@ -811,6 +811,17 @@ export function moneylineDecisionLines(item) {
     ];
   }
 
+  // News veto: show why VALUE was blocked (never a probability change).
+  if (decision.status === 'NO BET' && decision.newsVeto) {
+    const newsReasons = (decision.reasons || []).filter((r) => String(r).startsWith('news:'));
+    if (newsReasons.length) {
+      return [
+        uiKV('🛑', 'NO BET', newsReasons[0]),
+        ...(newsReasons.slice(1, 3).map((r) => uiBullet('•', r)))
+      ];
+    }
+  }
+
   // Below the floor or no odds: show the MODEL's favored side as an advisory
   // lean with its confidence — never dressed up as a recommended bet.
   const model = modelPickSide(item);

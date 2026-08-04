@@ -146,6 +146,36 @@ function isAllowed(chatId) {
   return config.allowedChatIds.includes(String(chatId));
 }
 
+function applyNewsRiskVeto(predictions) {
+  // News may only veto VALUE → NO BET. Never changes model probability or edge.
+  for (const prediction of predictions || []) {
+    const risk = prediction?.newsContext?.newsRisk;
+    if (!risk?.veto || !Array.isArray(risk.vetoReasons) || risk.vetoReasons.length === 0) continue;
+    // Re-run value market with existing odds, then force NO BET if still VALUE.
+    applyMoneylineValueMarket(prediction);
+    const decision = prediction.betDecision;
+    if (!decision) continue;
+    const extra = risk.vetoReasons;
+    const reasons = [...new Set([...(decision.reasons || []), ...extra])];
+    if (decision.status === 'VALUE' || decision.status === 'LEAN ONLY') {
+      prediction.betDecision = {
+        ...decision,
+        status: 'NO BET',
+        reason: reasons[0] || extra[0],
+        reasons,
+        newsVeto: true
+      };
+    } else if (decision.status === 'NO BET') {
+      prediction.betDecision = {
+        ...decision,
+        reasons,
+        newsVeto: true
+      };
+    }
+  }
+  return predictions;
+}
+
 async function buildAlertPayload(dateYmd, options = {}) {
   const modelMemory = config.modelMemory ? storage.getMemory() : {};
   const predictions = await getMlbPredictions(dateYmd, modelMemory);
@@ -154,6 +184,7 @@ async function buildAlertPayload(dateYmd, options = {}) {
   await attachOddsContext(predictions);
   await attachMarketContext(predictions);
   await attachNewsContext(config, predictions, storage);
+  applyNewsRiskVeto(predictions);
   await attachAgentAnalyses(predictions);
   persistNewsFeatures(dateYmd, predictions);
   storage.savePredictions(dateYmd, predictions);
@@ -188,6 +219,7 @@ async function sendBothLineupsPregameAlert(bot, chatId, game, awayLineup, homeLi
   await attachOddsContext(predictions);
   await attachMarketContext(predictions);
   await attachNewsContext(config, predictions, storage);
+  applyNewsRiskVeto(predictions);
   await attachAgentAnalyses(predictions);
   persistNewsFeatures(dateYmd, predictions);
   storage.savePredictions(dateYmd, predictions);
@@ -922,6 +954,7 @@ async function handlePredictCallback(bot, callbackQuery) {
   await attachOddsContext([prediction]);
   await attachMarketContext([prediction]);
   await attachNewsContext(config, [prediction], storage);
+  applyNewsRiskVeto([prediction]);
   await attachAgentAnalyses([prediction]);
   persistNewsFeatures(dateYmd, [prediction]);
   storage.savePredictions(dateYmd, [prediction]);
@@ -1312,6 +1345,7 @@ async function handlePicksCommand(bot, chatId, question, dateYmd = dateInTimezon
   // freshness window; stale prices must refresh or get downgraded before ledger.
   await attachMarketContext(predictions);
   await attachNewsContext(config, predictions, storage);
+  applyNewsRiskVeto(predictions);
   persistNewsFeatures(dateYmd, predictions);
   storage.savePredictions(dateYmd, predictions);
   setCachedPredictions(chatId, dateYmd, predictions);
@@ -1389,6 +1423,7 @@ async function askAgent(bot, chatId, question, dateYmd = dateInTimezone(config.t
 
   if (!knowledgeOnly) {
     await attachNewsContext(config, predictions, storage);
+    applyNewsRiskVeto(predictions);
     persistNewsFeatures(dateYmd, predictions);
     storage.savePredictions(dateYmd, predictions);
     setCachedPredictions(chatId, dateYmd, predictions);

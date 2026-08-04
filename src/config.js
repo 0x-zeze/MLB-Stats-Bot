@@ -103,7 +103,10 @@ export function loadConfig() {
       maxSummaryChars: positiveIntFromEnv(process.env.NEWS_MAX_SUMMARY_CHARS, 600),
       maxAgeHours: positiveIntFromEnv(process.env.NEWS_MAX_AGE_HOURS, 48),
       includePicks: boolFromEnv(process.env.NEWS_INCLUDE_PICKS, false),
-      includeAlerts: boolFromEnv(process.env.NEWS_INCLUDE_ALERTS, false)
+      includeAlerts: boolFromEnv(process.env.NEWS_INCLUDE_ALERTS, false),
+      // When true (default), keyword risk flags may force VALUE → NO BET only.
+      // News never changes model probability, edge math, or stake sizing.
+      riskVeto: boolFromEnv(process.env.NEWS_RISK_VETO, true)
     },
     interactiveAgent: boolFromEnv(process.env.INTERACTIVE_AGENT, true),
     printAlertToTerminal: boolFromEnv(process.env.PRINT_ALERT_TO_TERMINAL, false),
