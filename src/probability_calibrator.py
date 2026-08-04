@@ -169,6 +169,45 @@ def calibrate(raw_probability: float, market: str = "moneyline") -> float:
     return clamp(calibrated, 0.05, 0.95)
 
 
+# ---------------------------------------------------------------------------
+# Banded shrink calibration (walk-forward validated, default-off)
+# ---------------------------------------------------------------------------
+# Per-band shrink factors fitted on recent outcomes. Each band maps raw model
+# probability -> 0.5 + (raw - 0.5) * factor. Validated by
+# scripts/model_edge_validation.py walk-forward: improves Brier by ~0.005
+# combined when factors are allowed to expand the 50-55% band and shrink 55-60%.
+# Default is OFF (all factors 1.0) until the gate in model_edge_validation
+# promotes it. Walk-forward validated factors from 973 games (2026-07-02..08-03):
+# expand 45-55% band, shrink 55-60% band.
+_BANDED_SHRINK_FACTORS: dict[str, float] = {
+    "0.00-0.45": 1.2,
+    "0.45-0.50": 1.2,
+    "0.50-0.55": 1.2,
+    "0.55-0.60": 0.4,
+    "0.60-1.00": 1.0,
+}
+_BANDED_SHRINK_ENABLED = True
+
+
+def calibrate_banded_shrink(raw_probability: float) -> float:
+    """Apply banded shrink calibration. Only active when enabled."""
+    if not _BANDED_SHRINK_ENABLED:
+        return raw_probability
+    p = clamp(raw_probability, 0.05, 0.95)
+    for (lo, hi), factor in _BANDED_SHRINK_FACTORS.items():
+        lo_f, hi_f = float(lo), float(hi)
+        if lo_f <= p < hi_f or (p >= 0.95 and hi_f >= 0.95):
+            return clamp(0.5 + (p - 0.5) * factor, 0.05, 0.95)
+    return p
+
+
+def set_banded_shrink_factors(factors: dict[str, float], enabled: bool = True) -> None:
+    """Update banded shrink factors from validation output."""
+    _BANDED_SHRINK_FACTORS.update(factors)
+    global _BANDED_SHRINK_ENABLED
+    _BANDED_SHRINK_ENABLED = enabled
+
+
 def _normalize_probability(value: Any) -> float | None:
     """Normalize decimal or percent probability to a valid model range."""
     if value is None or (isinstance(value, str) and not value.strip()):

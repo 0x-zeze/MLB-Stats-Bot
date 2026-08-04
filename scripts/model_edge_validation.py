@@ -204,6 +204,135 @@ def disagreement_gate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Per-band evaluation
+# ---------------------------------------------------------------------------
+
+_PROB_BANDS = [(0.0, 0.45), (0.45, 0.50), (0.50, 0.55), (0.55, 0.60), (0.60, 0.65), (0.65, 1.0)]
+_ODDS_BANDS = [(-999, -200), (-200, -150), (-150, -110), (-110, 100), (100, 150), (150, 999)]
+
+
+def per_band_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Metrics per probability band and per odds band."""
+    prob_bands: list[dict[str, Any]] = []
+    for lo, hi in _PROB_BANDS:
+        group = [r for r in rows if lo <= r["model_home"] < hi]
+        if len(group) < 10:
+            continue
+        m = metrics(group)
+        mean_pred = sum(r["model_home"] for r in group) / len(group)
+        actual = sum(r["home_won"] for r in group) / len(group)
+        market_acc = metrics(group, [r["market_home"] for r in group]).get("accuracy")
+        prob_bands.append(
+            {
+                "band": f"[{lo:.2f},{hi:.2f})",
+                "n": len(group),
+                "mean_pred": mean_pred,
+                "actual_win_rate": actual,
+                "gap": actual - mean_pred,
+                "model_accuracy": m.get("accuracy"),
+                "market_accuracy": market_acc,
+                "model_roi": m.get("roi"),
+                "brier": m.get("brier"),
+            }
+        )
+
+    odds_bands: list[dict[str, Any]] = []
+    for lo, hi in _ODDS_BANDS:
+        group = []
+        for r in rows:
+            odds = r["home_odds"] if r["model_home"] >= 0.5 else r["away_odds"]
+            if lo <= odds < hi:
+                group.append(r)
+        if len(group) < 10:
+            continue
+        m = metrics(group)
+        market_acc = metrics(group, [r["market_home"] for r in group]).get("accuracy")
+        odds_bands.append(
+            {
+                "band": f"[{lo},{hi})",
+                "n": len(group),
+                "model_accuracy": m.get("accuracy"),
+                "market_accuracy": market_acc,
+                "model_roi": m.get("roi"),
+                "brier": m.get("brier"),
+            }
+        )
+
+    return {
+        "probability_bands": prob_bands,
+        "odds_bands": odds_bands,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Banded shrink calibration fit (walk-forward)
+# ---------------------------------------------------------------------------
+
+
+def _fit_shrink_factor(part: list[dict[str, Any]]) -> float:
+    if not part:
+        return 1.0
+    best_k, best_b = 1.0, float("inf")
+    for k in [i / 100 for i in range(40, 121, 5)]:
+        ps = [0.5 + (r["model_home"] - 0.5) * k for r in part]
+        b = sum((p - r["home_won"]) ** 2 for p, r in zip(ps, part)) / len(part)
+        if b < best_b:
+            best_b, best_k = b, k
+    return best_k
+
+
+def fit_banded_shrink(rows: list[dict[str, Any]], n_splits: int = 4) -> dict[str, Any]:
+    """Walk-forward banded shrink fit. Returns factors + combined test metrics."""
+    n = len(rows)
+    if n < 80:
+        return {"factors": {}, "enabled": False, "reason": "not enough rows"}
+    size = max(1, n // n_splits)
+    combined_raw_b = combined_shrunk_b = 0.0
+    tot = 0
+    all_factors: dict[str, float] = {}
+    for i in range(n_splits):
+        start = i * size
+        end = n if i == n_splits - 1 else (i + 1) * size
+        train = rows[:start] if i > 0 else rows[:size]
+        test = rows[start:end]
+        if not train or not test:
+            continue
+        # fit per-band on train
+        factors: dict[str, float] = {}
+        for lo, hi in _PROB_BANDS:
+            part = [r for r in train if lo <= r["model_home"] < hi]
+            if len(part) >= 20:
+                factors[f"{lo:.2f}-{hi:.2f}"] = _fit_shrink_factor(part)
+        # apply to test
+        def shrink(p: float) -> float:
+            for (lo, hi), factor in [(b, factors.get(f"{b[0]:.2f}-{b[1]:.2f}", 1.0)) for b in _PROB_BANDS]:
+                if lo <= p < hi:
+                    return 0.5 + (p - 0.5) * factor
+            return p
+        ys = [r["home_won"] for r in test]
+        raw_b = sum((r["model_home"] - y) ** 2 for r, y in zip(test, ys)) / len(test)
+        shrunk_b = sum((shrink(r["model_home"]) - y) ** 2 for r, y in zip(test, ys)) / len(test)
+        combined_raw_b += raw_b * len(test)
+        combined_shrunk_b += shrunk_b * len(test)
+        tot += len(test)
+        all_factors.update(factors)
+    if tot == 0:
+        return {"factors": {}, "enabled": False, "reason": "no test rows"}
+    raw_b = combined_raw_b / tot
+    shrunk_b = combined_shrunk_b / tot
+    # enable only if walk-forward improvement is real and meaningful
+    enabled = shrunk_b < raw_b - 0.001
+    return {
+        "factors": all_factors,
+        "enabled": enabled,
+        "raw_brier": round(raw_b, 6),
+        "shrunk_brier": round(shrunk_b, 6),
+        "improvement": round(raw_b - shrunk_b, 6),
+        "reason": "walk-forward improvement" if enabled else "insufficient walk-forward improvement",
+    }
+
+
 def _gate_slice(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return {"n": 0, "promoted": False, "reason": "no samples"}
@@ -281,6 +410,8 @@ def analyze(*, sqlite_path: Path, outcomes_csv: Path, n_splits: int) -> dict[str
     )
 
     gates = disagreement_gate(rows)
+    bands = per_band_metrics(rows)
+    shrink = fit_banded_shrink(rows, n_splits)
 
     return {
         "inputs": {
@@ -303,6 +434,8 @@ def analyze(*, sqlite_path: Path, outcomes_csv: Path, n_splits: int) -> dict[str
             },
         },
         "disagreement_gates": gates,
+        "per_band": bands,
+        "banded_shrink": shrink,
     }
 
 
@@ -331,6 +464,30 @@ def print_report(report: dict[str, Any]) -> None:
         print(f"    train n={g['train']['n']} acc={_fmt(g['train']['accuracy'])} roi={_fmt(g['train']['roi'])}")
         print(f"    test  n={g['test']['n']} acc={_fmt(g['test']['accuracy'])} roi={_fmt(g['test']['roi'])}")
         print(f"    reason: {g['reason']}")
+
+    pb = report.get("per_band", {})
+    if pb.get("probability_bands"):
+        print("\nPer-probability-band:")
+        for b in pb["probability_bands"]:
+            print(
+                f"  {b['band']} n={b['n']} pred={b['mean_pred']:.3f} actual={b['actual_win_rate']:.3f} "
+                f"model_acc={_fmt(b['model_accuracy'])} market_acc={_fmt(b['market_accuracy'])} roi={_fmt(b['model_roi'])}"
+            )
+    if pb.get("odds_bands"):
+        print("\nPer-odds-band:")
+        for b in pb["odds_bands"]:
+            print(
+                f"  {b['band']} n={b['n']} model_acc={_fmt(b['model_accuracy'])} "
+                f"market_acc={_fmt(b['market_accuracy'])} roi={_fmt(b['model_roi'])}"
+            )
+
+    bs = report.get("banded_shrink", {})
+    print("\nBanded shrink calibration:")
+    print(f"  enabled={bs.get('enabled')} raw_brier={_fmt(bs.get('raw_brier'))} shrunk_brier={_fmt(bs.get('shrunk_brier'))} improvement={_fmt(bs.get('improvement'))}")
+    if bs.get("factors"):
+        for band, k in sorted(bs["factors"].items()):
+            print(f"  {band}: factor={k}")
+    print(f"  reason: {bs.get('reason')}")
 
 
 def main(argv: list[str] | None = None) -> int:
