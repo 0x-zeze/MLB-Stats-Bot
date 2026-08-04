@@ -26,7 +26,7 @@ The output is for analysis and education. It is not guaranteed betting advice.
   stay; empirical “value profile” gates stay **off** until holdout proves them.
 - **Market-anchored residual:** VALUE grading can borrow a small amount of
   no-vig market probability via `MONEYLINE_MARKET_RESIDUAL_WEIGHT`. Default is
-  **0**; only raise it when `npm run model:validate` shows walk-forward gains.
+  **0**; only raise it when `npm run model` shows walk-forward gains.
 - **Disagreement bypass:** `js.disagreement_away` relaxes edge/conviction floors
   and applies a **1.5x Kelly sizing boost** when model picks away but market
   favors home — the validated asymmetric edge (WR 89%, ROI 90%, n=183). Only
