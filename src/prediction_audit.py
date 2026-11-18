@@ -370,10 +370,9 @@ def list_audit_predictions(
                    mp.model_id, mp.model_impl_version, mp.status, mp.pick_side,
                    mp.pick_team_id, mp.pick_probability, mp.as_of_utc,
                    mp.information_state, mp.promotion_eligible, mp.created_at
-                   {', p.matchup AS matchup' if has_picks else ", NULL AS matchup"}
+                   {', (SELECT p.matchup FROM picks p WHERE p.run_id = mp.run_id ORDER BY p.saved_at DESC LIMIT 1) AS matchup' if has_picks else ", NULL AS matchup"}
                    {', o.game_pk IS NOT NULL AS has_result' if has_outcomes else ", 0 AS has_result"}
             FROM model_predictions mp
-            {'LEFT JOIN picks p ON p.run_id = mp.run_id' if has_picks else ''}
             {'LEFT JOIN game_outcomes o ON o.game_pk = mp.game_pk' if has_outcomes else ''}
             WHERE (? IS NULL OR mp.date_ymd = ?)
             ORDER BY mp.date_ymd DESC, mp.created_at DESC

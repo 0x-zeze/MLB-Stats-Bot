@@ -271,10 +271,52 @@ def build_prediction_log_rows_from_sqlite(sqlite_path: str | Path) -> list[dict[
     except sqlite3.Error:
         return []
     try:
+        pick_cols = {row["name"] for row in conn.execute("PRAGMA table_info(picks)")}
+        ledger_cols = {row["name"] for row in conn.execute("PRAGMA table_info(bet_ledger)")}
+        has_pick_version = "prediction_version" in pick_cols
+        has_run_fk = "prediction_run_id" in pick_cols and "prediction_run_id" in ledger_cols
+
+        if has_pick_version:
+            join_clause = (
+                """
+                JOIN picks p ON p.rowid = COALESCE(
+                    CASE WHEN b.prediction_run_id IS NOT NULL THEN (
+                        SELECT p_exact.rowid FROM picks p_exact
+                        WHERE p_exact.prediction_run_id = b.prediction_run_id
+                        LIMIT 1
+                    ) END,
+                    (
+                        SELECT p_latest.rowid FROM picks p_latest
+                        WHERE p_latest.game_pk = b.game_pk
+                        ORDER BY p_latest.prediction_version DESC, p_latest.rowid DESC
+                        LIMIT 1
+                    )
+                )
+                """
+                if has_run_fk
+                else """
+                JOIN picks p ON p.rowid = (
+                    SELECT p_latest.rowid FROM picks p_latest
+                    WHERE p_latest.game_pk = b.game_pk
+                    ORDER BY p_latest.prediction_version DESC, p_latest.rowid DESC
+                    LIMIT 1
+                )
+                """
+            )
+        else:
+            join_clause = """
+                JOIN picks p ON p.rowid = (
+                    SELECT p_latest.rowid FROM picks p_latest
+                    WHERE p_latest.game_pk = b.game_pk
+                    ORDER BY p_latest.rowid DESC
+                    LIMIT 1
+                )
+            """
+
         ledger_rows = [
             dict(row)
             for row in conn.execute(
-                """
+                f"""
                 SELECT
                     b.decision_id,
                     b.game_pk,
@@ -299,7 +341,7 @@ def build_prediction_log_rows_from_sqlite(sqlite_path: str | Path) -> list[dict[
                     p.pick_confidence,
                     p.payload AS pick_payload
                 FROM bet_ledger b
-                JOIN picks p ON p.game_pk = b.game_pk
+                {join_clause}
                 ORDER BY COALESCE(b.date_ymd, p.date_ymd), b.decision_id
                 """
             )
@@ -319,9 +361,14 @@ def build_prediction_log_rows_from_sqlite(sqlite_path: str | Path) -> list[dict[
 
 def filter_rows_by_market(rows: list[dict[str, Any]], market: str) -> list[dict[str, Any]]:
     """Filter evaluator rows by market name."""
-    if market == "all":
+    target = (market or "all").strip().lower()
+    if target in ("", "all"):
         return rows
-    return rows
+    return [
+        row
+        for row in rows
+        if str(row.get("market_type") or row.get("market") or "moneyline").strip().lower() == target
+    ]
 
 
 def settled_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

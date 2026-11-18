@@ -2,8 +2,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const DEFAULT_ROOT = resolve(new URL('..', import.meta.url).pathname);
+const DEFAULT_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 function parseEnvFile(rootDir) {
   const path = join(rootDir, '.env');
@@ -101,8 +102,20 @@ export function collectDoctorChecks(options = {}) {
     )
   );
 
-  const python = envValue(env, 'PYTHON_BIN') || 'python3';
-  const pythonVersion = runCommand(python, ['--version'], { cwd: rootDir });
+  const configuredPython = envValue(env, 'PYTHON_BIN');
+  const pythonCandidates = configuredPython
+    ? [configuredPython]
+    : process.platform === 'win32'
+      ? ['python', 'python3', 'py']
+      : ['python3', 'python'];
+  let python = pythonCandidates[0];
+  let pythonVersion = { ok: false, stdout: '', stderr: '' };
+  for (const candidate of pythonCandidates) {
+    const res = runCommand(candidate, ['--version'], { cwd: rootDir });
+    python = candidate;
+    pythonVersion = res;
+    if (res.ok) break;
+  }
   checks.push(
     check(
       'python_available',
@@ -248,7 +261,9 @@ export function formatDoctorReport(checks) {
   return lines.join('\n');
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isDirectRun =
+  process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectRun) {
   const checks = collectDoctorChecks();
   console.log(formatDoctorReport(checks));
   process.exit(checks.some((item) => item.status === 'fail') ? 1 : 0);

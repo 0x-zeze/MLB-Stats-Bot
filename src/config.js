@@ -120,7 +120,7 @@ export function loadConfig() {
     interactiveAgent: boolFromEnv(process.env.INTERACTIVE_AGENT, true),
     printAlertToTerminal: boolFromEnv(process.env.PRINT_ALERT_TO_TERMINAL, false),
     maxGamesPerMessage: intFromEnv(process.env.MAX_GAMES_PER_MESSAGE, 8),
-    pythonExecutable: process.env.PYTHON_BIN || 'python3',
+    pythonExecutable: process.env.PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3'),
     dashboard: {
       enabled: boolFromEnv(process.env.DASHBOARD_ENABLED, true),
       host: process.env.DASHBOARD_HOST || '0.0.0.0',

@@ -53,7 +53,9 @@ test('quarantine report is read-only and identifies ambiguous rows', () => {
     ).run('d1', 'g1', '', 'moneyline', 'Value', 'away', -110, 0.55, 'open', '');
     db.close();
 
-    const before = new Database(dbPath, { readonly: true }).prepare('SELECT COUNT(*) AS c FROM bet_ledger').get().c;
+    const beforeDb = new Database(dbPath, { readonly: true });
+    const before = beforeDb.prepare('SELECT COUNT(*) AS c FROM bet_ledger').get().c;
+    beforeDb.close();
     const result = spawnSync(process.execPath, [SCRIPT, '--db', dbPath, '--json'], {
       cwd: ROOT,
       encoding: 'utf8'

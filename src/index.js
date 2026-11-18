@@ -152,11 +152,15 @@ function persistNewsFeatures(dateYmd, predictions) {
 }
 
 function isAllowed(chatId) {
-  // Fail closed: an empty allowlist denies everyone rather than opening the bot
-  // to any stranger who finds it (who could then burn paid LLM/Odds-API calls).
-  // /chatid runs before this gate so a new operator can still discover their ID.
+  // Fail closed: when neither ALLOWED_CHAT_IDS nor TELEGRAM_CHAT_ID is set,
+  // deny everyone rather than opening the bot to strangers who could burn paid
+  // LLM/Odds-API calls. /chatid runs before this gate so a new operator can
+  // still discover their ID.
+  const id = String(chatId);
+  const primaryChatId = String(config.telegramChatId || '').trim();
+  if (primaryChatId && id === primaryChatId) return true;
   if (config.allowedChatIds.length === 0) return false;
-  return config.allowedChatIds.includes(String(chatId));
+  return config.allowedChatIds.includes(id);
 }
 
 function applyNewsRiskVeto(predictions) {

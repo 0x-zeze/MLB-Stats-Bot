@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 import Database from 'better-sqlite3';
@@ -34,8 +35,9 @@ test('two processes opening storage on the same fresh db do not collide', () => 
   // "UNIQUE constraint failed: schema_migrations.id". The apply loop now
   // re-checks under an IMMEDIATE write lock and skips already-applied rows.
   const statePath = freshStatePath();
+  const storageModuleUrl = pathToFileURL(resolve(process.cwd(), 'src/storage.js')).href;
   const script = `
-    import { Storage } from ${JSON.stringify(resolve(process.cwd(), 'src/storage.js'))};
+    import { Storage } from ${JSON.stringify(storageModuleUrl)};
     const storage = new Storage(process.argv[1]);
     storage.close?.();
   `;

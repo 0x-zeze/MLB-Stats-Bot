@@ -6,11 +6,13 @@ import test from 'node:test';
 import { Storage } from '../src/storage.js';
 import { buildPlatoonPayload, capturePlatoonForGame } from '../src/platoonCapture.js';
 
-function freshStorage() {
-  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+function freshStorage(t) {
+  const tempDir = resolve(process.cwd(), '.tmp-platoon-capture-tests');
   mkdirSync(tempDir, { recursive: true });
   const statePath = resolve(tempDir, `state-plat-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
-  return new Storage(statePath);
+  const storage = new Storage(statePath);
+  if (t?.after) t.after(() => storage.close());
+  return storage;
 }
 
 // Boxscore with a full 9-hitter lineup (battingOrder 100..900).
@@ -68,8 +70,8 @@ test('buildPlatoonPayload tolerates missing stats', () => {
   assert.equal(payload.hittersCaptured, 0);
 });
 
-test('capturePlatoonForGame writes a snapshot for both sides', async () => {
-  const storage = freshStorage();
+test('capturePlatoonForGame writes a snapshot for both sides', async (t) => {
+  const storage = freshStorage(t);
   const payload = await capturePlatoonForGame(game(), boxscoreWithLineups(), storage, {
     fetch: fakeFetch(),
     season: 2026
@@ -84,15 +86,15 @@ test('capturePlatoonForGame writes a snapshot for both sides', async () => {
   assert.equal(stored.payload.away.weightedOps, 0.8);
 });
 
-test('capturePlatoonForGame is write-once (does not re-capture)', async () => {
-  const storage = freshStorage();
+test('capturePlatoonForGame is write-once (does not re-capture)', async (t) => {
+  const storage = freshStorage(t);
   await capturePlatoonForGame(game(), boxscoreWithLineups(), storage, { fetch: fakeFetch(), season: 2026 });
   const second = await capturePlatoonForGame(game(), boxscoreWithLineups(), storage, { fetch: fakeFetch(), season: 2026 });
   assert.equal(second, null);
 });
 
-test('capturePlatoonForGame skips when starter handedness unknown', async () => {
-  const storage = freshStorage();
+test('capturePlatoonForGame skips when starter handedness unknown', async (t) => {
+  const storage = freshStorage(t);
   const g = game();
   g.home.starter.pitchHand = {};
   g.away.starter.pitchHand = {};
@@ -101,5 +103,5 @@ test('capturePlatoonForGame skips when starter handedness unknown', async () => 
 });
 
 test.after(() => {
-  rmSync(resolve(process.cwd(), '.tmp-storage-tests'), { recursive: true, force: true });
+  rmSync(resolve(process.cwd(), '.tmp-platoon-capture-tests'), { recursive: true, force: true });
 });

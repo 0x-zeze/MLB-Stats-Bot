@@ -41,15 +41,17 @@ function gameResult(gamePk, away, home, awayScore, homeScore) {
   return { gamePk, away: { ...away, score: awayScore }, home: { ...home, score: homeScore }, winner };
 }
 
-function freshStorage() {
+function freshStorage(t) {
   const tempDir = resolve(process.cwd(), '.tmp-ledger-tests');
   mkdirSync(tempDir, { recursive: true });
   const statePath = resolve(tempDir, `state-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
-  return { storage: new Storage(statePath), tempDir };
+  const storage = new Storage(statePath);
+  if (t?.after) t.after(() => storage.close());
+  return { storage, tempDir };
 }
 
-test('recordBet logs a VALUE bet and settleBet pays a win in units', () => {
-  const { storage } = freshStorage();
+test('recordBet logs a VALUE bet and settleBet pays a win in units', (t) => {
+  const { storage } = freshStorage(t);
   const ari = team(1, 'Arizona', 'ARI');
   const cin = team(2, 'Cincinnati', 'CIN');
   // model 58% on ARI @ +160, quarter-Kelly stake 2.7u
@@ -73,8 +75,8 @@ test('recordBet logs a VALUE bet and settleBet pays a win in units', () => {
   assert.equal(rows[0].clv, 1.5);
 });
 
-test('settleBet pays a loss as negative stake and a push as zero', () => {
-  const { storage } = freshStorage();
+test('settleBet pays a loss as negative stake and a push as zero', (t) => {
+  const { storage } = freshStorage(t);
   const a = team(1, 'Aces', 'ACE');
   const b = team(2, 'Bats', 'BAT');
 
@@ -94,8 +96,8 @@ test('settleBet pays a loss as negative stake and a push as zero', () => {
   assert.equal(pushRow.units_pl, 0);
 });
 
-test('recordBet is idempotent and settleBet does not double-count', () => {
-  const { storage } = freshStorage();
+test('recordBet is idempotent and settleBet does not double-count', (t) => {
+  const { storage } = freshStorage(t);
   const a = team(1, 'Aces', 'ACE');
   const b = team(2, 'Bats', 'BAT');
   const pred = valuePrediction(30, '2026-06-12', a, b, 'away', { odds: 160, stake: 2.7, model: 58, fair: 51.2 });
@@ -113,8 +115,8 @@ test('recordBet is idempotent and settleBet does not double-count', () => {
   assert.equal(storage.readLedger()[0].units_pl, plAfterFirst); // unchanged
 });
 
-test('recordBet skips NO BET and zero-stake picks', () => {
-  const { storage } = freshStorage();
+test('recordBet skips NO BET and zero-stake picks', (t) => {
+  const { storage } = freshStorage(t);
   const a = team(1, 'Aces', 'ACE');
   const b = team(2, 'Bats', 'BAT');
   const noBet = valuePrediction(40, '2026-06-12', a, b, 'away', { odds: 160, stake: 2.7, model: 58, fair: 51.2 });
@@ -124,8 +126,8 @@ test('recordBet skips NO BET and zero-stake picks', () => {
   assert.equal(storage.readLedger().length, 0);
 });
 
-test('decision_id is unique per game for same-day same-market bets', () => {
-  const { storage } = freshStorage();
+test('decision_id is unique per game for same-day same-market bets', (t) => {
+  const { storage } = freshStorage(t);
   const a = team(1, 'Aces', 'ACE');
   const b = team(2, 'Bats', 'BAT');
   const c = team(3, 'Cats', 'CAT');
@@ -137,8 +139,8 @@ test('decision_id is unique per game for same-day same-market bets', () => {
   assert.equal(storage.recordBet(p2), '2026-06-12-moneyline-51');
 });
 
-test('recordBet uses explicit dateYmd when the prediction object lacks one', () => {
-  const { storage } = freshStorage();
+test('recordBet uses explicit dateYmd when the prediction object lacks one', (t) => {
+  const { storage } = freshStorage(t);
   const a = team(1, 'Aces', 'ACE');
   const b = team(2, 'Bats', 'BAT');
   // Mirror the live path: raw predictGame objects carry no dateYmd field.

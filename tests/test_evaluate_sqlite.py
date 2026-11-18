@@ -143,9 +143,70 @@ def test_filter_rows_by_market_returns_all_rows():
     rows = [
         {"market_type": "moneyline", "final_lean": "Home"},
         {"market_type": "moneyline", "final_lean": "Away"},
+        {"market_type": "totals", "final_lean": "Over 8.5"},
     ]
 
     assert [row["final_lean"] for row in filter_rows_by_market(rows, "moneyline")] == ["Home", "Away"]
+    assert len(filter_rows_by_market(rows, "all")) == 3
+
+
+def test_build_prediction_log_rows_dedupes_append_only_picks(tmp_path):
+    db_path = tmp_path / "append_only.sqlite"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE picks (
+                prediction_run_id TEXT PRIMARY KEY,
+                game_pk TEXT NOT NULL,
+                prediction_version INTEGER NOT NULL,
+                date_ymd TEXT,
+                matchup TEXT,
+                pick_confidence TEXT,
+                payload TEXT
+            );
+            CREATE TABLE bet_ledger (
+                decision_id TEXT PRIMARY KEY,
+                game_pk TEXT,
+                prediction_run_id TEXT,
+                date_ymd TEXT,
+                market TEXT,
+                team TEXT,
+                side TEXT,
+                line REAL,
+                odds REAL,
+                fair_prob REAL,
+                model_prob REAL,
+                edge REAL,
+                units_staked REAL,
+                status TEXT,
+                result TEXT,
+                units_pl REAL,
+                clv REAL,
+                recommended_at TEXT,
+                settled_at TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO picks VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("run-v1", "1001", 1, "2026-06-01", "Away A @ Home A", "Low", '{"pick":{"name":"Home A"}}'),
+        )
+        conn.execute(
+            "INSERT INTO picks VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("run-v2", "1001", 2, "2026-06-01", "Away A @ Home A", "High", '{"pick":{"name":"Home A"}}'),
+        )
+        conn.execute(
+            "INSERT INTO bet_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("d1", "1001", "run-v2", "2026-06-01", "moneyline", "Home A", "home", None, -120, 54, 60, 6, 2, "settled", "win", 1.667, 0.03, "rec", "set"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = build_prediction_log_rows_from_sqlite(db_path)
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == "High"
 
 
 def test_calculate_metrics_uses_stake_weighted_roi_and_separate_units_per_bet():

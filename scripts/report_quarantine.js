@@ -43,11 +43,38 @@ function buildReport(dbPath) {
     db.pragma('query_only = ON');
     const issues = [];
     const counts = {};
+    const hasPickProcessing = Boolean(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pick_processing'").get()
+    );
+    const pickCols = new Set(
+      db.prepare('PRAGMA table_info(picks)').all().map((col) => col.name)
+    );
+    const ledgerCols = new Set(
+      db.prepare('PRAGMA table_info(bet_ledger)').all().map((col) => col.name)
+    );
+    const hasPickVersion = pickCols.has('prediction_version');
+    const hasRunFk = pickCols.has('prediction_run_id') && ledgerCols.has('prediction_run_id');
+    const pickJoin = hasPickVersion
+      ? hasRunFk
+        ? `LEFT JOIN picks p ON p.rowid = COALESCE(
+             CASE WHEN b.prediction_run_id IS NOT NULL THEN (
+               SELECT p_exact.rowid FROM picks p_exact WHERE p_exact.prediction_run_id = b.prediction_run_id LIMIT 1
+             ) END,
+             (SELECT p_latest.rowid FROM picks p_latest WHERE p_latest.game_pk = b.game_pk ORDER BY p_latest.prediction_version DESC, p_latest.rowid DESC LIMIT 1)
+           )`
+        : `LEFT JOIN picks p ON p.rowid = (
+             SELECT p_latest.rowid FROM picks p_latest WHERE p_latest.game_pk = b.game_pk ORDER BY p_latest.prediction_version DESC, p_latest.rowid DESC LIMIT 1
+           )`
+      : `LEFT JOIN picks p ON p.rowid = (
+           SELECT p_latest.rowid FROM picks p_latest WHERE p_latest.game_pk = b.game_pk ORDER BY p_latest.rowid DESC LIMIT 1
+         )`;
     const rows = db
       .prepare(
-        `SELECT b.*, p.payload AS pick_payload, p.post_game_processed
+        `SELECT b.*, p.payload AS pick_payload,
+                ${hasPickProcessing ? 'COALESCE(pp.post_game_processed, p.post_game_processed)' : 'p.post_game_processed'} AS post_game_processed
          FROM bet_ledger b
-         LEFT JOIN picks p ON p.game_pk = b.game_pk
+         ${pickJoin}
+         ${hasPickProcessing ? 'LEFT JOIN pick_processing pp ON pp.game_pk = b.game_pk' : ''}
          ORDER BY b.date_ymd, b.decision_id`
       )
       .all();

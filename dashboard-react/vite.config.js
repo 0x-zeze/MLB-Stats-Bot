@@ -10,9 +10,18 @@ export default defineConfig({
     chunkSizeWarningLimit: 650,
     rollupOptions: {
       output: {
-        manualChunks: {
-          charts: ['recharts'],
-          vendor: ['react', 'react-dom'],
+        manualChunks(id) {
+          if (id.includes('node_modules/recharts') || id.includes('node_modules\\recharts')) {
+            return 'charts';
+          }
+          if (
+            id.includes('node_modules/react') ||
+            id.includes('node_modules\\react') ||
+            id.includes('node_modules/scheduler') ||
+            id.includes('node_modules\\scheduler')
+          ) {
+            return 'vendor';
+          }
         },
       },
     },

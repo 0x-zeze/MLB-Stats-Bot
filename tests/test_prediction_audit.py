@@ -179,6 +179,26 @@ class PredictionAuditBackendTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_list_returns_seeded_prediction(self) -> None:
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            conn.execute(
+                """INSERT INTO picks (
+                     prediction_run_id, game_pk, run_id, date_ymd, matchup, saved_at, payload
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "uuid-pick-2",
+                    "900001",
+                    "run-1",
+                    "2026-08-20",
+                    "AZ @ SF",
+                    "2026-08-20T12:05:00.000Z",
+                    "{}",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
         listing = list_audit_predictions(db_path=self.db_path)
         self.assertEqual(len(listing["rows"]), 1)
         row = listing["rows"][0]

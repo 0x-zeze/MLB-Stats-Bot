@@ -121,11 +121,15 @@ def _read_bot_state_json(path: Path) -> tuple[dict[str, dict[str, Any]], list[di
 
 
 def _read_bot_state_sqlite(path: Path) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-    with sqlite3.connect(path) as connection:
+    from contextlib import closing
+
+    with closing(sqlite3.connect(path)) as connection:
         connection.row_factory = sqlite3.Row
+        cols = {row["name"] for row in connection.execute("PRAGMA table_info(picks)")}
+        order_by = "prediction_version ASC, rowid ASC" if "prediction_version" in cols else "rowid ASC"
         predictions = {
             str(row["game_pk"]): _safe_json(row["payload"], {})
-            for row in connection.execute("SELECT game_pk, payload FROM picks")
+            for row in connection.execute(f"SELECT game_pk, payload FROM picks ORDER BY {order_by}")
         }
         row = connection.execute("SELECT learning_log FROM memory_summary WHERE id = 1").fetchone()
         learning_log = _safe_json(row["learning_log"], []) if row else []
@@ -161,7 +165,9 @@ def _read_line_snapshots(source: str | Path | None) -> dict[str, dict[str, float
     if path.suffix.lower() not in {".sqlite", ".sqlite3", ".db"} or not path.exists():
         return snapshots
     try:
-        with sqlite3.connect(path) as connection:
+        from contextlib import closing
+
+        with closing(sqlite3.connect(path)) as connection:
             connection.row_factory = sqlite3.Row
             for row in connection.execute("SELECT game_pk, market, value FROM line_snapshots"):
                 value = safe_float(row["value"], None)

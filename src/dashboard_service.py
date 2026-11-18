@@ -31,6 +31,7 @@ from .utils import data_path, safe_float
 
 DEFAULT_DASHBOARD_SETTINGS: dict[str, Any] = {
     "minimum_moneyline_edge": 0.05,
+    "minimum_projected_total_difference": 0.4,
     "minimum_data_quality_score": 60,
     "odds_stale_minutes": 15,
     "weather_stale_minutes": 60,
@@ -41,6 +42,15 @@ DEFAULT_DASHBOARD_SETTINGS: dict[str, Any] = {
     "enable_weather_adjustment": True,
     "enable_umpire_adjustment": False,
     "enable_market_movement_adjustment": True,
+    "timezone": "Asia/Jakarta",
+    "alertDetail": "compact",
+    "agentEnabled": True,
+    "apiProvider": "OpenRouter",
+    "modelName": "anthropic/claude-sonnet-4-6",
+    "autoAlerts": True,
+    "postGameAlerts": True,
+    "lineMovementAlerts": True,
+    "oddsProvider": "The Odds API",
 }
 
 _ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -169,9 +179,11 @@ def _read_telegram_state_from_sqlite() -> dict[str, Any] | None:
                     "learningLog": json.loads(mem_row["learning_log"] or "[]"),
                 }
 
-            # Predictions from picks table
+            # Predictions from picks table (ordered oldest -> newest so dict keeps latest version)
+            pick_cols = {row["name"] for row in conn.execute("PRAGMA table_info(picks)")}
+            order_by = "prediction_version ASC, rowid ASC" if "prediction_version" in pick_cols else "rowid ASC"
             predictions: dict[str, Any] = {}
-            for row in conn.execute("SELECT game_pk, payload FROM picks"):
+            for row in conn.execute(f"SELECT game_pk, payload FROM picks ORDER BY {order_by}"):
                 try:
                     payload = json.loads(row["payload"] or "{}")
                     predictions[str(row["game_pk"])] = payload

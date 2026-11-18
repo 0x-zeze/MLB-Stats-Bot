@@ -9,7 +9,13 @@
 // Restart: pm2 restart mlb-bot
 // Stop:    pm2 stop mlb-bot
 
+const fs = require('node:fs');
 const path = require('node:path');
+
+const nvmNode = path.join(
+  process.env.HOME || '/root',
+  '.nvm/versions/node/v24.18.0/bin/node'
+);
 
 module.exports = {
   apps: [
@@ -18,11 +24,8 @@ module.exports = {
       script: 'src/index.js',
       cwd: __dirname,
       // Pin the interpreter to the Node build better-sqlite3 was compiled for
-      // (ABI 137 / Node v24). Using a different Node causes ERR_DLOPEN_FAILED.
-      interpreter: path.join(
-        process.env.HOME || '/root',
-        '.nvm/versions/node/v24.18.0/bin/node'
-      ),
+      // when present on VPS, falling back to the active Node runtime elsewhere.
+      interpreter: fs.existsSync(nvmNode) ? nvmNode : process.execPath,
       exec_mode: 'fork',
       instances: 1,
       autorestart: true,

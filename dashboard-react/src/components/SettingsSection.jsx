@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
 import { Button } from './ui/button.jsx';
+import SettingsPanel from './SettingsPanel.jsx';
 import { Settings, Globe, Brain, Bell, Database, Shield, Eye, Save, Check } from 'lucide-react';
 
 const INITIAL_SETTINGS = {
@@ -35,6 +36,7 @@ function Toggle({ enabled, onChange }) {
 export default function SettingsSection() {
   const [settings, setSettings] = useState(INITIAL_SETTINGS);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const savedTimerRef = useRef(null);
@@ -70,17 +72,23 @@ export default function SettingsSection() {
 
   async function handleSave() {
     setError(null);
+    setSaving(true);
     try {
-      await api.saveSettings(settings);
+      const { dashboardToken: _ignoredToken, ...persistable } = settings;
+      const updated = await api.saveSettings(persistable);
+      setSettings((prev) => ({ ...prev, ...updated }));
       setSaved(true);
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       setError(err.message || 'Failed to save settings');
+    } finally {
+      setSaving(false);
     }
   }
 
   return (
+    <div className="space-y-6">
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
@@ -254,5 +262,15 @@ export default function SettingsSection() {
         </div>
       </CardContent>
     </Card>
+    <SettingsPanel
+      settings={settings}
+      onChange={(next) => {
+        setSettings((prev) => ({ ...prev, ...next }));
+        setSaved(false);
+      }}
+      onSave={handleSave}
+      saving={saving}
+    />
+    </div>
   );
 }

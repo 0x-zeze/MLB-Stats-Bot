@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -79,9 +80,11 @@ def _load_feature_rows(state_path: Path) -> dict[str, dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     if not state_path.exists() or state_path.suffix.lower() not in {".sqlite", ".sqlite3", ".db"}:
         return rows
-    with sqlite3.connect(state_path) as connection:
+    with closing(sqlite3.connect(state_path)) as connection:
         connection.row_factory = sqlite3.Row
-        for record in connection.execute("SELECT game_pk, payload FROM picks"):
+        cols = {row["name"] for row in connection.execute("PRAGMA table_info(picks)")}
+        order_by = "prediction_version ASC, rowid ASC" if "prediction_version" in cols else "rowid ASC"
+        for record in connection.execute(f"SELECT game_pk, payload FROM picks ORDER BY {order_by}"):
             try:
                 payload = json.loads(record["payload"])
             except (json.JSONDecodeError, TypeError):

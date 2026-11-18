@@ -28,6 +28,34 @@ export function npmCommand() {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
 
+export function npmSpawnSpec(args = []) {
+  const candidates = [
+    process.env.npm_execpath,
+    resolve(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    resolve(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  ].filter(Boolean);
+
+  for (const cliPath of candidates) {
+    if (existsSync(cliPath) && /\.[cm]?js$/i.test(cliPath)) {
+      return { command: process.execPath, args: [cliPath, ...args] };
+    }
+  }
+
+  return { command: npmCommand(), args };
+}
+
+export function resolveSafeApiHost(rawHost = process.env.DASHBOARD_API_HOST || '0.0.0.0', env = process.env) {
+  const host = String(rawHost || '0.0.0.0').trim() || '0.0.0.0';
+  const isLoopback = ['127.0.0.1', 'localhost', '::1', ''].includes(host);
+  if (!isLoopback && !String(env.DASHBOARD_API_TOKEN || '').trim()) {
+    console.warn(
+      `Dashboard API: refusing to bind ${host} without DASHBOARD_API_TOKEN; using 127.0.0.1. Set a token to expose it.`
+    );
+    return '127.0.0.1';
+  }
+  return host;
+}
+
 export function nodeCommand() {
   return process.execPath;
 }
@@ -37,28 +65,29 @@ export function pythonCommand() {
     process.env.PYTHON_BIN,
     process.env.PYTHON_EXECUTABLE,
     process.env.PYTHON,
-    process.platform === 'win32' ? 'python.exe' : 'python3',
-    'python'
+    ...(process.platform === 'win32' ? ['python.exe', 'python', 'py'] : ['python3', 'python'])
   ].filter(Boolean);
   const uniqueCandidates = [...new Set(candidates)];
 
   for (const candidate of uniqueCandidates) {
-    const result = spawnSync(candidate, ['--version'], { stdio: 'ignore' });
+    const result = spawnSync(candidate, ['--version'], { stdio: 'ignore', windowsHide: true });
     if (!result.error && result.status === 0) return candidate;
   }
 
-  throw new Error('Python is required. Install python3, then run npm start again.');
+  throw new Error('Python is required. Install Python 3.10+ or set PYTHON_BIN in .env, then run npm start again.');
 }
 
 export function startProcess(label, command, args, options = {}) {
   console.log(`Starting ${label}: ${command} ${args.join(' ')}`);
+  const useShell = Boolean(options.shell ?? (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)));
   const child = spawn(command, args, {
     cwd: rootDir,
     env: {
       ...process.env,
       ...(options.env || {})
     },
-    stdio: 'inherit'
+    stdio: 'inherit',
+    shell: useShell
   });
   child.label = label;
   return child;

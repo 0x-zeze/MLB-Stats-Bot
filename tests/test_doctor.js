@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import test from 'node:test';
 
 import { collectDoctorChecks, formatDoctorReport } from '../scripts/doctor.mjs';
@@ -79,4 +81,20 @@ test('doctor report prints pass warn and fail guidance', () => {
   assert.match(report, /\[WARN\] Odds API/);
   assert.match(report, /\[FAIL\] Telegram token/);
   assert.match(report, /Set TELEGRAM_BOT_TOKEN/);
+});
+
+test('doctor CLI entrypoint prints report and exits cleanly when required env set', () => {
+  const result = spawnSync(process.execPath, [resolve(process.cwd(), 'scripts/doctor.mjs')], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      TELEGRAM_BOT_TOKEN: 'ci-token',
+      TELEGRAM_CHAT_ID: '123456'
+    }
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /MLB Stats Bot doctor/);
+  assert.match(result.stdout, /\[PASS\] Python availability/);
 });

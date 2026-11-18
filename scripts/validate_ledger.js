@@ -43,13 +43,30 @@ function main() {
       return 2;
     }
 
+    const hasPickProcessing = tableExists(db, 'pick_processing');
+    const hasPicks = tableExists(db, 'picks');
+    const openProcessedSql = hasPickProcessing && hasPicks
+      ? `
+        SELECT COUNT(*) AS c
+        FROM bet_ledger b
+        WHERE b.status = 'open'
+          AND (
+            EXISTS (SELECT 1 FROM pick_processing pp WHERE pp.game_pk = b.game_pk AND pp.post_game_processed = 1)
+            OR EXISTS (SELECT 1 FROM picks p WHERE p.game_pk = b.game_pk AND p.post_game_processed = 1)
+          )
+      `
+      : hasPicks
+        ? `
+        SELECT COUNT(*) AS c
+        FROM bet_ledger b
+        WHERE b.status = 'open'
+          AND EXISTS (SELECT 1 FROM picks p WHERE p.game_pk = b.game_pk AND p.post_game_processed = 1)
+      `
+        : 'SELECT 0 AS c';
+
     const issues = [];
     const checks = {
-      openProcessed: db.prepare(`
-        SELECT COUNT(*) AS c
-        FROM bet_ledger b JOIN picks p ON p.game_pk = b.game_pk
-        WHERE b.status = 'open' AND p.post_game_processed = 1
-      `).get().c,
+      openProcessed: db.prepare(openProcessedSql).get().c,
       missingDate: db.prepare("SELECT COUNT(*) AS c FROM bet_ledger WHERE date_ymd IS NULL OR date_ymd = ''").get().c,
       invalidStatus: db.prepare("SELECT COUNT(*) AS c FROM bet_ledger WHERE status NOT IN ('open', 'settled', 'void')").get().c,
       invalidStake: db.prepare("SELECT COUNT(*) AS c FROM bet_ledger WHERE units_staked IS NULL OR units_staked < 0").get().c,

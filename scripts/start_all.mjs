@@ -1,17 +1,29 @@
 import {
   nodeCommand,
-  npmCommand,
+  npmSpawnSpec,
   pythonCommand,
+  resolveSafeApiHost,
   startProcess,
   waitForProcesses,
   waitForUrlOk
 } from './process_runner.mjs';
 
-const apiHost = process.env.DASHBOARD_API_HOST || '0.0.0.0';
+const apiHost = resolveSafeApiHost(process.env.DASHBOARD_API_HOST || '0.0.0.0');
 const apiPort = process.env.DASHBOARD_API_PORT || '8010';
 const webHost = process.env.DASHBOARD_WEB_HOST || '0.0.0.0';
 const webPort = process.env.DASHBOARD_WEB_PORT || '5173';
 const python = pythonCommand();
+const webSpec = npmSpawnSpec([
+  '--prefix',
+  'dashboard-react',
+  'run',
+  'dev',
+  '--',
+  '--host',
+  webHost,
+  '--port',
+  webPort
+]);
 
 const processes = [
   startProcess('Telegram bot', nodeCommand(), ['src/index.js'], {
@@ -28,17 +40,7 @@ const processes = [
     '--port',
     apiPort
   ]),
-  startProcess('Dashboard web', npmCommand(), [
-    '--prefix',
-    'dashboard-react',
-    'run',
-    'dev',
-    '--',
-    '--host',
-    webHost,
-    '--port',
-    webPort
-  ])
+  startProcess('Dashboard web', webSpec.command, webSpec.args)
 ];
 
 const processExit = waitForProcesses(processes);

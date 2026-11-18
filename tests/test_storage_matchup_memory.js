@@ -41,7 +41,7 @@ function result(gamePk, dateYmd, away, home, awayScore, homeScore) {
 }
 
 test('recordOutcome stores matchup memory across reversed venues', () => {
-  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  const tempDir = resolve(process.cwd(), '.tmp-matchup-memory-tests');
   mkdirSync(tempDir, { recursive: true });
   const statePath = resolve(tempDir, `state-${Date.now()}.json`);
   const storage = new Storage(statePath);
@@ -90,7 +90,7 @@ test('recordOutcome stores matchup memory across reversed venues', () => {
 });
 
 test('line snapshots persist last seen market values by game and market', () => {
-  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  const tempDir = resolve(process.cwd(), '.tmp-matchup-memory-tests');
   mkdirSync(tempDir, { recursive: true });
   const statePath = resolve(tempDir, `line-state-${Date.now()}.json`);
   const storage = new Storage(statePath);
@@ -120,7 +120,7 @@ test('line snapshots persist last seen market values by game and market', () => 
 });
 
 test('opening odds freeze the first-seen line for CLV even as the live line moves', () => {
-  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  const tempDir = resolve(process.cwd(), '.tmp-matchup-memory-tests');
   mkdirSync(tempDir, { recursive: true });
   const statePath = resolve(tempDir, `opening-state-${Date.now()}.json`);
   const storage = new Storage(statePath);
@@ -150,7 +150,7 @@ test('opening odds freeze the first-seen line for CLV even as the live line move
 });
 
 test('line alert reservations suppress duplicate movement alerts', () => {
-  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  const tempDir = resolve(process.cwd(), '.tmp-matchup-memory-tests');
   mkdirSync(tempDir, { recursive: true });
   const statePath = resolve(tempDir, `line-alert-state-${Date.now()}.json`);
   const storage = new Storage(statePath);
@@ -205,7 +205,7 @@ test('line alert reservations suppress duplicate movement alerts', () => {
 });
 
 test('lineup alert reservations suppress duplicate both-confirmed alerts', () => {
-  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  const tempDir = resolve(process.cwd(), '.tmp-matchup-memory-tests');
   mkdirSync(tempDir, { recursive: true });
   const statePath = resolve(tempDir, `lineup-alert-state-${Date.now()}.json`);
   const storage = new Storage(statePath);
@@ -230,7 +230,7 @@ test('lineup alert reservations suppress duplicate both-confirmed alerts', () =>
 });
 
 test('line movement alert preference persists per chat', () => {
-  const tempDir = resolve(process.cwd(), '.tmp-storage-tests');
+  const tempDir = resolve(process.cwd(), '.tmp-matchup-memory-tests');
   mkdirSync(tempDir, { recursive: true });
   const statePath = resolve(tempDir, `line-alert-pref-state-${Date.now()}.json`);
   const storage = new Storage(statePath);
@@ -254,4 +254,8 @@ test('line movement alert preference persists per chat', () => {
     rmSync(`${storage.dbPath}-wal`, { force: true });
     rmSync(`${storage.dbPath}-shm`, { force: true });
   }
+});
+
+test.after(() => {
+  rmSync(resolve(process.cwd(), '.tmp-matchup-memory-tests'), { recursive: true, force: true });
 });

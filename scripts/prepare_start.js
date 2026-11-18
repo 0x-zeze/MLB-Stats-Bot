@@ -1,12 +1,14 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { nodeCommand, npmCommand, pythonCommand, rootDir } from './process_runner.mjs';
+import { nodeCommand, npmSpawnSpec, pythonCommand, rootDir } from './process_runner.mjs';
 
 function run(command, args, cwd = rootDir) {
+  const useShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
   const result = spawnSync(command, args, {
     cwd,
-    stdio: 'inherit'
+    stdio: 'inherit',
+    shell: useShell
   });
 
   if (result.error) {
@@ -16,6 +18,11 @@ function run(command, args, cwd = rootDir) {
   if (result.status !== 0) {
     process.exit(result.status || 1);
   }
+}
+
+function runNpm(npmArgs, cwd = rootDir) {
+  const spec = npmSpawnSpec(npmArgs);
+  run(spec.command, spec.args, cwd);
 }
 
 function nodePackageReady(packageName, cwd = rootDir) {
@@ -45,7 +52,7 @@ function ensureRootDependencies() {
   if (nodePackageReady('better-sqlite3')) return;
 
   console.log('Installing root npm dependencies...');
-  run(npmCommand(), ['install']);
+  runNpm(['install']);
 }
 
 function ensureDashboardDependencies() {
@@ -53,7 +60,7 @@ function ensureDashboardDependencies() {
   if (existsSync(vitePath)) return;
 
   console.log('Installing dashboard npm dependencies...');
-  run(npmCommand(), ['--prefix', 'dashboard-react', 'install']);
+  runNpm(['--prefix', 'dashboard-react', 'install']);
 }
 
 function ensurePythonDependencies() {
@@ -73,9 +80,12 @@ function migrateStorage() {
 
 function runModelValidation() {
   console.log('Running moneyline model validation (npm run model)...');
-  const result = spawnSync(npmCommand(), ['run', 'model'], {
+  const spec = npmSpawnSpec(['run', 'model']);
+  const useShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(spec.command);
+  const result = spawnSync(spec.command, spec.args, {
     cwd: rootDir,
-    stdio: 'inherit'
+    stdio: 'inherit',
+    shell: useShell
   });
   if (result.error) {
     console.warn(`Model validation failed to start: ${result.error.message}`);

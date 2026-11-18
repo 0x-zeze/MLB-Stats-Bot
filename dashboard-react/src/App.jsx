@@ -41,7 +41,7 @@ export default function App() {
 
   useEffect(() => {
     api.evolution().then(setEvolutionData).catch(() => {});
-  }, []);
+  }, [auth.token]);
 
   useEffect(() => {
     setSelectedGame(null);
