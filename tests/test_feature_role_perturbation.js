@@ -119,7 +119,7 @@ function richBundle() {
     }),
     lineupProfiles: {
       away: { confirmed: true, count: 9, qualityScore: 0.45 },
-      home: { confirmed: true, count: 9, qualityScore: 0.7 }
+      home: { confirmed: true, count: 9, qualityScore: 0.5 }
     },
     modelMemory: {
       teamBias: { '113': -0.02, '120': 0.03 },

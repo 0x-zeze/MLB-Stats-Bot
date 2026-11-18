@@ -92,15 +92,17 @@ function formFactor(mb, side) {
 
 function bullpenFactor(mb, side) {
   const edge = signed(mb.bullpenEdge, side);
-  const score = Math.max(-1, Math.min(1, edge / 0.15));
+  const score = Math.max(-1, Math.min(1, edge / 0.14));
   let label = 'Bullpen netral';
-  if (score >= 0.15) label = 'Bullpen pick lebih fresh';
-  else if (score <= -0.15) label = 'Bullpen pick lebih lelah';
+  if (score >= 0.15) label = 'Bullpen pick lebih kuat & fresh';
+  else if (score <= -0.15) label = 'Bullpen lawan lebih kuat / pick lelah';
   return factor('bullpen', score, label, FACTOR_WEIGHTS.bullpen);
 }
 
 function lineupFactor(mb, item, side) {
   const edge = signed(mb.lineupEdge, side);
+  const pickLineup = side === 'home' ? item?.lineups?.home : item?.lineups?.away;
+  const pickConfirmed = Boolean(pickLineup?.confirmed && (pickLineup?.count || 0) >= 9);
   const confirmed = Boolean(
     item?.lineups?.away?.confirmed &&
       item?.lineups?.home?.confirmed &&
@@ -108,11 +110,24 @@ function lineupFactor(mb, item, side) {
       (item?.lineups?.home?.count || 0) >= 9
   );
   let score = Math.max(-1, Math.min(1, edge / 0.12));
-  // Incomplete lineup reduces confidence in the pick side.
-  if (!confirmed) score = Math.min(score, 0) - 0.15;
-  let label = confirmed ? 'Lineup confirmed' : 'Lineup belum confirmed penuh';
-  if (score >= 0.15) label = 'Lineup pick lebih kuat (confirmed)';
-  else if (score <= -0.2) label = confirmed ? 'Lineup lawan lebih kuat' : 'Lineup incomplete / lawan lebih kuat';
+  // Incomplete lineup reduces confidence in the pick side; when pick's own
+  // starting 9 is confirmed with positive quality, soften penalty.
+  if (!confirmed) {
+    score = pickConfirmed && edge > 0.02 ? Math.min(score, 0.2) - 0.05 : Math.min(score, 0) - 0.15;
+  }
+  const hasNewBats = toNumber(pickLineup?.acquisitionsInLineup, 0) > 0;
+  let label = confirmed
+    ? 'Lineup confirmed'
+    : pickConfirmed
+      ? 'Starting 9 pick confirmed'
+      : 'Lineup belum confirmed penuh';
+  if (score >= 0.15) {
+    label = hasNewBats
+      ? 'Starting lineup pick kuat (+rotasi/trade baru)'
+      : 'Starting lineup pick lebih kuat (confirmed)';
+  } else if (score <= -0.2) {
+    label = confirmed ? 'Starting lineup lawan lebih kuat' : 'Lineup incomplete / lawan lebih kuat';
+  }
   return factor('lineup', score, label, FACTOR_WEIGHTS.lineup);
 }
 

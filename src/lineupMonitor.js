@@ -11,7 +11,8 @@ const state = {
   bot: null,
   storage: null,
   config: {},
-  onBothLineupsConfirmed: null
+  onBothLineupsConfirmed: null,
+  onModelLineupRefresh: null
 };
 
 function intervalMinutes() {
@@ -221,13 +222,43 @@ async function pollLineupMonitor(key) {
       });
     }
 
-    if (!state.bot || !chatLineupAlertsEnabled(monitor.chatId)) continue;
+    const bothConfirmed = awayLineup.confirmed && homeLineup.confirmed;
+
+    // Model-level confirmed-lineup refresh: runs ONCE per gamePk as soon as both
+    // starting 9s are posted, independent of Telegram chat notification settings.
+    // Ensures stored predictions, snapshots, and evaluations reflect actual
+    // starting lineups rather than stale morning lineup=missing runs!
+    if (bothConfirmed && typeof state.onModelLineupRefresh === 'function') {
+      const refreshKey = `lineup-model-refresh:${gamePk}`;
+      const shouldRefresh = state.storage?.reserveLineAlert
+        ? state.storage.reserveLineAlert(
+            refreshKey,
+            { gamePk: String(gamePk), market: 'lineup_model_refresh' },
+            '__system__',
+            new Date().toISOString(),
+            24
+          )
+        : !prevAway?.confirmed || !prevHome?.confirmed;
+      if (shouldRefresh) {
+        try {
+          await state.onModelLineupRefresh({
+            game,
+            awayLineup,
+            homeLineup,
+            gamePk
+          });
+        } catch (error) {
+          console.error(`Model lineup refresh failed for game ${gamePk}:`, error.message);
+        }
+      }
+    }
+
+    if (monitor.chatId === '__system__' || !state.bot || !chatLineupAlertsEnabled(monitor.chatId)) continue;
 
     // New default: when both teams are confirmed, send ONE per-game pre-game
     // alert with the full prediction (team direction + confidence + odds).
     // This does NOT depend on the shared lineup cache transition; durable
     // per-chat dedupe decides if this chat/game still needs the alert.
-    const bothConfirmed = awayLineup.confirmed && homeLineup.confirmed;
     if (bothConfirmed && pregameAlertsEnabled() && typeof state.onBothLineupsConfirmed === 'function') {
       const reserved = state.storage?.reserveLineupAlert?.(monitor.chatId, gamePk);
       if (reserved) {
@@ -266,20 +297,31 @@ function stopMonitor(key) {
   activeMonitors.delete(key);
 }
 
-export function configureLineupMonitor({ bot, storage, config, onBothLineupsConfirmed } = {}) {
+export function configureLineupMonitor({
+  bot,
+  storage,
+  config,
+  onBothLineupsConfirmed,
+  onModelLineupRefresh
+} = {}) {
   state.bot = bot || state.bot;
   state.storage = storage || state.storage;
   state.config = config || state.config || {};
   if (typeof onBothLineupsConfirmed === 'function') {
     state.onBothLineupsConfirmed = onBothLineupsConfirmed;
   }
+  if (typeof onModelLineupRefresh === 'function') {
+    state.onModelLineupRefresh = onModelLineupRefresh;
+  }
 }
 
 export function startLineupMonitor(games, chatId) {
   if (!Array.isArray(games) || games.length === 0 || !chatId) return null;
   if (!lineupMonitorEnabled()) return null;
-  if (!chatLineupAlertsEnabled(chatId)) return null;
-  if (!state.bot || !state.storage) return null;
+  const isSystemMonitor = String(chatId) === '__system__';
+  if (!isSystemMonitor && !chatLineupAlertsEnabled(chatId)) return null;
+  if (!state.storage) return null;
+  if (!isSystemMonitor && !state.bot) return null;
 
   const activeGames = games.filter((game) => (game.gamePk || game.game_id || game.id) && !isFinalOrLive(game.status));
   if (activeGames.length === 0) return null;

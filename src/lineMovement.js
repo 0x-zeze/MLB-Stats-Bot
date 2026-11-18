@@ -545,20 +545,52 @@ export async function attachCurrentOdds(games = []) {
     if (!event) continue;
 
     const snapshot = buildSnapshot(game, event);
+    const pairs = extractSameBookQuotePairs(game, event);
+    let sameBookFair = null;
+    const validPairs = pairs.filter(
+      (p) =>
+        Number.isFinite(p.homeNoVigProb) &&
+        Number.isFinite(p.awayNoVigProb) &&
+        p.overround >= 0.995 &&
+        p.overround <= 1.12
+    );
+    if (validPairs.length > 0) {
+      const meanHome =
+        (validPairs.reduce((sum, p) => sum + p.homeNoVigProb, 0) / validPairs.length) * 100;
+      const meanAway = 100 - meanHome;
+      const meanOverround =
+        (validPairs.reduce((sum, p) => sum + p.overround, 0) / validPairs.length - 1) * 100;
+      sameBookFair = {
+        home: Math.round(meanHome * 100) / 100,
+        away: Math.round(meanAway * 100) / 100,
+        overround: Math.round(meanOverround * 10) / 10,
+        booksCount: validPairs.length
+      };
+    }
+
     game.currentOdds = {
       moneylineBook: snapshot.moneylineBook,
       awayMoneylineBook: snapshot.awayMoneylineBook,
       homeMoneylineBook: snapshot.homeMoneylineBook,
       awayMoneyline: snapshot.awayMoneyline,
       homeMoneyline: snapshot.homeMoneyline,
+      sameBookFair,
       oddsFetchedAt: fetchedAtIso
     };
     result.matchedGames += 1;
 
+    // Seed write-once opening_* snapshots immediately so sharp-money & CLV
+    // comparisons always have the true first-seen price, without mutating
+    // moneyline_home/away used by compareSnapshot movement alerts.
+    try {
+      state.storage?.seedOpeningLineSnapshots?.(game.gamePk, snapshot, fetchedAtIso);
+    } catch {
+      // non-blocking
+    }
+
     // P1 market tape: capture complete same-book home/away quote pairs for the
     // all-game research dataset. Best-effort — never breaks odds attachment.
     try {
-      const pairs = extractSameBookQuotePairs(game, event);
       if (pairs.length && state.storage?.recordMarketQuotePair) {
         const firstPitch = game.startTime || game.firstPitchUtc || null;
         const asOf = fetchedAtIso;

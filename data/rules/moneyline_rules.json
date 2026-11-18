@@ -30,6 +30,17 @@
       "notes": "option.edge < edgeThreshold. edgeThreshold = moneylineValueEdgeThreshold() (configurable), passed in via ctx.edgeThreshold."
     },
     {
+      "id": "js.cross_book_synthetic",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 35,
+      "action": "NO_BET",
+      "handler": "crossBookSynthetic",
+      "params": {},
+      "message": "cross-book synthetic pair ({awayBook} vs {homeBook}) tanpa same-book fair de-vig",
+      "notes": "Blocks VALUE when currentOdds explicitly pairs conflicting side books without a coherent same-book fair de-vig reference (eliminates negative-overround synthetic edge traps)."
+    },
+    {
       "id": "js.team_quality",
       "engines": ["js"],
       "tier": 1,
@@ -128,6 +139,17 @@
       "params": { "min_magnitude": 10 },
       "message": "sharp money contra: line moved {magnitude} cents against pick",
       "notes": "item.modelBreakdown.sharpMoney.direction === 'against_model' && magnitude >= min_magnitude."
+    },
+    {
+      "id": "js.adverse_selection_high_edge",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 85,
+      "action": "NO_BET",
+      "handler": "adverseSelectionHighEdge",
+      "params": { "max_unconfirmed_edge": 12.0, "min_contra_cents": 5, "max_fallbacks": 2 },
+      "message": "adverse selection guard: edge +{edge}% >= {cap}% tanpa konfirmasi lineup/market bersih",
+      "notes": "2026 ledger post-mortem: edge >= 12% went 1W-6L (-71.4% ROI) when lineups were unconfirmed or steam moved against pick. Requires confirmed 9/9 lineups on both sides, clean data, and no contra line movement."
     },
     {
       "id": "js.record_dominance",

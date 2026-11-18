@@ -77,6 +77,7 @@ function rebuildCoreInput(snapshot) {
     scheduleFatigueProfiles: toKeyMap(raw.scheduleFatigueProfiles),
     headToHead: raw.headToHead || null,
     injuryProfiles: toKeyMap(raw.injuryProfiles),
+    rosterProfiles: raw.rosterProfiles ? toKeyMap(raw.rosterProfiles) : undefined,
     lineupProfiles: raw.lineupProfiles || { away: null, home: null },
     modelMemory: raw.modelMemory || {},
     rollingTeamStats: toKeyMap(raw.rollingTeamStats),

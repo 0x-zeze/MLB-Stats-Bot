@@ -22,7 +22,18 @@ import {
   checkDataFreshness,
   filterSplitsBeforeDate
 } from './temporal_contract.js';
-import { predictGameMoneylineCore, buildCoreInputsSnapshot, PREDICTION_CORE_MODEL_VERSION } from './core/prediction_core.js';
+import {
+  predictGameMoneylineCore,
+  buildCoreInputsSnapshot,
+  PREDICTION_CORE_MODEL_VERSION,
+  starterSeasonEdge as coreStarterSeasonEdge,
+  starterRecentEdge as coreStarterRecentEdge,
+  starterEdge as coreStarterEdge,
+  lineupWinEdge as coreLineupWinEdge,
+  bullpenAvailabilityEdge as coreBullpenAvailabilityEdge,
+  shrinkPitcherStats,
+  guardFavoredCalibrationPercent
+} from './core/prediction_core.js';
 import {
   CONTROL_FEATURE_SCHEMA_VERSION,
   HEURISTIC_V1_MODEL_ID
@@ -163,6 +174,14 @@ function situationalWeightAdjustment(venueId, openerDetected, gameDateYmd) {
   return multipliers;
 }
 
+function americanToContinuousCents(value) {
+  const odds = toNumber(value, Number.NaN);
+  if (!Number.isFinite(odds) || odds === 0) return null;
+  if (odds >= 100) return odds - 100;
+  if (odds <= -100) return -(Math.abs(odds) - 100);
+  return odds;
+}
+
 // --- Sharp Money Detection ---
 export function detectSharpMoneySignal(modelPick, openingOdds, closingOdds) {
   if (!openingOdds || !closingOdds) return { direction: 'neutral', magnitude: 0, steam: false, risk: 0 };
@@ -170,8 +189,16 @@ export function detectSharpMoneySignal(modelPick, openingOdds, closingOdds) {
   const closing = toNumber(closingOdds[modelPick], 0);
   if (!opening || !closing) return { direction: 'neutral', magnitude: 0, steam: false, risk: 0 };
 
-  const movement = closing - opening;
-  const magnitude = Math.abs(movement);
+  const openCents = americanToContinuousCents(opening);
+  const closeCents = americanToContinuousCents(closing);
+  if (openCents === null || closeCents === null) {
+    return { direction: 'neutral', magnitude: 0, steam: false, risk: 0 };
+  }
+
+  // Continuous cents around ±100 prevents +105 -> -110 pick'em crossings from
+  // inflating into a fake -215 cent move (true move is -15 cents).
+  const movement = closeCents - openCents;
+  const magnitude = Math.round(Math.abs(movement) * 10) / 10;
   const direction = magnitude < 3 ? 'neutral' : movement < 0 ? 'toward_model' : 'against_model';
   const steam = magnitude >= 20;
 
@@ -547,16 +574,34 @@ function moneylineValueOption(item, side) {
   const team = side === 'away' ? item.away : item.home;
   let modelProbability = pureModelProbabilityForSide(item, side);
 
-  // Fair de-vig only when both sides share the same bookmaker. Best executable
-  // side price may still come from line shopping (side-specific book).
+  // Fair de-vig only when both sides share the same bookmaker, OR when
+  // attachCurrentOdds also captured a coherent same-book consensus no-vig pair.
+  // Best executable side price may still come from line shopping.
   const sameBook = moneylineBooksAreSame(item.currentOdds);
   const devig = devigMoneylinePercent(
     item.currentOdds?.awayMoneyline,
     item.currentOdds?.homeMoneyline,
     { sameBook }
   );
+  const sameBookConsensus = item.currentOdds?.sameBookFair;
+  const consensusSideFair =
+    sameBookConsensus &&
+    Number.isFinite(Number(sameBookConsensus[side])) &&
+    Number(sameBookConsensus[side]) > 0
+      ? Number(sameBookConsensus[side])
+      : null;
   const fairFromDevig =
-    devig?.usableAsFair && devig[side] != null ? (side === 'away' ? devig.away : devig.home) : null;
+    devig?.usableAsFair && devig[side] != null
+      ? side === 'away'
+        ? devig.away
+        : devig.home
+      : consensusSideFair;
+  const fairSource =
+    devig?.usableAsFair && devig[side] != null
+      ? 'same_book_devig'
+      : consensusSideFair != null
+        ? 'same_book_consensus_devig'
+        : 'raw_implied_executable';
   const fairProbability = fairFromDevig != null ? fairFromDevig : impliedProbability;
 
   // Market-anchored residual: when explicitly enabled, grading probability
@@ -608,7 +653,7 @@ function moneylineValueOption(item, side) {
     marketResidualWeight: anchored ? anchored.weight : 0,
     impliedProbability: round1(impliedProbability),
     fairProbability: round1(fairProbability),
-    fairSource: fairFromDevig != null ? 'same_book_devig' : 'raw_implied_executable',
+    fairSource,
     sameBookDevig: Boolean(fairFromDevig != null),
     overround: devig ? round1(devig.overround) : null,
     edge: round1(edge),
@@ -1606,33 +1651,111 @@ function firstStatNumber(stats, keys, fallback = 0) {
   return fallback;
 }
 
-function hitterLineupScore(player, slot) {
-  const stats = hitterBattingStats(player);
-  const plateAppearances = firstStatNumber(stats, ['plateAppearances', 'pa'], 0);
-  const atBats = firstStatNumber(stats, ['atBats', 'ab'], 0);
-  const known = plateAppearances >= 25 || atBats >= 25 || stats.ops !== undefined || stats.onBasePercentage !== undefined;
-  if (!known) return { value: 0, known: false };
+function blendHitterSeasonStats(currentStats, priorStats) {
+  const cur = currentStats || {};
+  const prior = priorStats || null;
+  const curPa = Math.max(
+    firstStatNumber(cur, ['plateAppearances', 'pa'], 0),
+    firstStatNumber(cur, ['atBats', 'ab'], 0)
+  );
+  const priorPa = prior
+    ? Math.max(
+        firstStatNumber(prior, ['plateAppearances', 'pa'], 0),
+        firstStatNumber(prior, ['atBats', 'ab'], 0)
+      )
+    : 0;
 
-  const ops = firstStatNumber(stats, ['ops'], DEFAULTS.ops);
-  const obp = firstStatNumber(stats, ['obp', 'onBasePercentage'], 0.32);
-  const slg = firstStatNumber(stats, ['slg', 'sluggingPercentage'], 0.4);
-  const homeRuns = firstStatNumber(stats, ['homeRuns', 'hr'], 0);
-  const sample = Math.max(plateAppearances, atBats, 1);
-  const powerPerPa = homeRuns / sample;
-  const slotWeight = slot <= 2 ? 1.18 : slot <= 5 ? 1.08 : slot <= 7 ? 0.92 : 0.78;
-  const score =
-    ((ops - DEFAULTS.ops) / 0.22) * 0.075 +
-    ((obp - 0.32) / 0.08) * 0.035 +
-    ((slg - 0.4) / 0.14) * 0.035 +
-    ((powerPerPa - 0.035) / 0.035) * 0.02;
+  const hasCurDirect =
+    curPa > 0 || cur.ops !== undefined || cur.onBasePercentage !== undefined || cur.obp !== undefined;
+  if (!hasCurDirect && priorPa <= 0 && !prior?.ops) {
+    return null;
+  }
+
+  // Prior-season talent baseline (shrunk slightly toward league average so a 40-PA
+  // September cup-of-coffee doesn't masquerade as a 600-PA superstar).
+  const priorTrust = priorPa > 0 ? clamp(priorPa / (priorPa + 140), 0, 0.85) : prior?.ops !== undefined ? 0.65 : 0;
+  const priorOps = priorTrust * firstStatNumber(prior, ['ops'], DEFAULTS.ops) + (1 - priorTrust) * DEFAULTS.ops;
+  const priorObp = priorTrust * firstStatNumber(prior, ['obp', 'onBasePercentage'], 0.32) + (1 - priorTrust) * 0.32;
+  const priorSlg = priorTrust * firstStatNumber(prior, ['slg', 'sluggingPercentage'], 0.4) + (1 - priorTrust) * 0.4;
+  const priorHrRate =
+    priorPa > 0
+      ? priorTrust * (firstStatNumber(prior, ['homeRuns', 'hr'], 0) / priorPa) + (1 - priorTrust) * 0.033
+      : 0.033;
+
+  // Current-season weight: when a batter has full-season stats (or synthetic test
+  // fixture with ops set and PA >= 25), trust current stats; when PA < 110 (early
+  // April, rookie call-up, or freshly traded batter), blend smoothly with prior.
+  if (priorTrust === 0 && (curPa >= 25 || cur.ops !== undefined || cur.onBasePercentage !== undefined)) {
+    const sample = Math.max(curPa, 25);
+    const shrink = curPa > 0 ? clamp(curPa / (curPa + 45), 0.45, 1) : 0.85;
+    const rawOps = firstStatNumber(cur, ['ops'], DEFAULTS.ops);
+    const rawObp = firstStatNumber(cur, ['obp', 'onBasePercentage'], 0.32);
+    const rawSlg = firstStatNumber(cur, ['slg', 'sluggingPercentage'], 0.4);
+    const rawHrRate = firstStatNumber(cur, ['homeRuns', 'hr'], 0) / sample;
+    return {
+      ops: shrink * rawOps + (1 - shrink) * DEFAULTS.ops,
+      obp: shrink * rawObp + (1 - shrink) * 0.32,
+      slg: shrink * rawSlg + (1 - shrink) * 0.4,
+      powerPerPa: shrink * rawHrRate + (1 - shrink) * 0.033,
+      effectivePa: sample
+    };
+  }
+
+  if (curPa < 5 && priorTrust > 0) {
+    return {
+      ops: priorOps,
+      obp: priorObp,
+      slg: priorSlg,
+      powerPerPa: priorHrRate,
+      effectivePa: Math.max(30, Math.round(priorPa * priorTrust))
+    };
+  }
+
+  if (curPa < 25 && priorTrust === 0) {
+    return null;
+  }
+
+  const PRIOR_PA = 110;
+  const wCur = clamp(curPa / (curPa + PRIOR_PA), 0, 1);
+  const curOps = firstStatNumber(cur, ['ops'], priorOps);
+  const curObp = firstStatNumber(cur, ['obp', 'onBasePercentage'], priorObp);
+  const curSlg = firstStatNumber(cur, ['slg', 'sluggingPercentage'], priorSlg);
+  const curHrRate = curPa > 0 ? firstStatNumber(cur, ['homeRuns', 'hr'], 0) / curPa : priorHrRate;
 
   return {
-    value: clamp(score * slotWeight, -0.16, 0.18),
-    known: true
+    ops: wCur * curOps + (1 - wCur) * priorOps,
+    obp: wCur * curObp + (1 - wCur) * priorObp,
+    slg: wCur * curSlg + (1 - wCur) * priorSlg,
+    powerPerPa: wCur * curHrRate + (1 - wCur) * priorHrRate,
+    effectivePa: curPa + Math.round(priorPa * priorTrust * (1 - wCur))
   };
 }
 
-function extractLineupProfile(boxTeam) {
+function hitterLineupScore(player, slot, fallbackLookup = null) {
+  const boxStats = hitterBattingStats(player);
+  const curStats = fallbackLookup?.current || boxStats;
+  const priorStats = fallbackLookup?.prior || player?.priorSeasonStats || null;
+  const blended = blendHitterSeasonStats(curStats, priorStats);
+  if (!blended) return { value: 0, known: false, ops: null, obp: null };
+
+  const { ops, obp, slg, powerPerPa } = blended;
+  const slotWeight = slot <= 2 ? 1.2 : slot <= 4 ? 1.12 : slot === 5 ? 1.04 : slot <= 7 ? 0.92 : 0.78;
+  const score =
+    ((ops - DEFAULTS.ops) / 0.22) * 0.078 +
+    ((obp - 0.32) / 0.08) * 0.036 +
+    ((slg - 0.4) / 0.14) * 0.036 +
+    ((powerPerPa - 0.034) / 0.035) * 0.02;
+
+  return {
+    value: clamp(score * slotWeight, -0.16, 0.18),
+    known: true,
+    ops,
+    obp
+  };
+}
+
+function extractLineupProfile(boxTeam, options = {}) {
+  const { hitterLookups = null, platoonSplits = null, rosterContext = null } = options;
   const players = Object.values(boxTeam?.players || {});
   const hitters = players
     .filter((player) => player?.battingOrder)
@@ -1653,24 +1776,81 @@ function extractLineupProfile(boxTeam) {
     .slice(0, 5)
     .map(lineupPlayerName)
     .filter(Boolean);
-  const leadoffStats = hitterBattingStats(orderedHitters[0]);
-  const leadoffObpValue = orderedHitters[0]
-    ? firstStatNumber(leadoffStats, ['obp', 'onBasePercentage'], Number.NaN)
-    : Number.NaN;
-  const hitterScores = orderedHitters.map((hitter, index) => hitterLineupScore(hitter, index + 1));
+
+  const getLookup = (player) => {
+    const id = player?.person?.id;
+    if (!id || !hitterLookups) return null;
+    return hitterLookups instanceof Map ? hitterLookups.get(id) : hitterLookups[id] || null;
+  };
+  const getPlatoon = (player) => {
+    const id = player?.person?.id;
+    if (!id || !platoonSplits) return null;
+    return platoonSplits instanceof Map ? platoonSplits.get(id) : platoonSplits[id] || null;
+  };
+
+  const hitterScores = orderedHitters.map((hitter, index) =>
+    hitterLineupScore(hitter, index + 1, getLookup(hitter))
+  );
+  const leadoffScore = hitterScores[0];
+  const leadoffRawStats = hitterBattingStats(orderedHitters[0]);
+  const leadoffObpValue =
+    leadoffScore?.known && Number.isFinite(leadoffScore.obp)
+      ? leadoffScore.obp
+      : orderedHitters[0]
+        ? firstStatNumber(leadoffRawStats, ['obp', 'onBasePercentage'], Number.NaN)
+        : Number.NaN;
+
   const knownStatCount = hitterScores.filter((score) => score.known).length;
   const weightedScore =
     knownStatCount >= 4
       ? hitterScores.reduce((sum, score) => sum + score.value, 0) / Math.max(1, orderedHitters.length)
       : 0;
 
+  // Top-of-order (slots 1-4) blended OPS.
+  const topFourKnown = hitterScores.slice(0, 4).filter((s) => s.known && Number.isFinite(s.ops));
+  const topOrderOps =
+    topFourKnown.length >= 3
+      ? Math.round((topFourKnown.reduce((sum, s) => sum + s.ops, 0) / topFourKnown.length) * 1000) / 1000
+      : null;
+
+  // Slot-weighted per-hitter handedness platoon OPS (shrunk toward hitter's blended OPS).
+  let platoonWeightedSum = 0;
+  let platoonWeightTotal = 0;
+  orderedHitters.forEach((hitter, index) => {
+    const split = getPlatoon(hitter);
+    const baseOps = hitterScores[index]?.ops ?? DEFAULTS.ops;
+    if (!split || !Number.isFinite(Number(split.ops))) return;
+    const ab = Math.max(0, toNumber(split.atBats, 0));
+    const wSplit = clamp(ab / (ab + 45), 0, 0.85);
+    const shrunkSplitOps = wSplit * Number(split.ops) + (1 - wSplit) * baseOps;
+    const slotW = index < 4 ? 1.15 : index < 7 ? 0.95 : 0.8;
+    platoonWeightedSum += shrunkSplitOps * slotW;
+    platoonWeightTotal += slotW;
+  });
+  const platoonOps =
+    platoonWeightTotal >= 4 ? Math.round((platoonWeightedSum / platoonWeightTotal) * 1000) / 1000 : null;
+
+  // Track newly traded/signed players who are actually starting in today's 1-9 lineup!
+  const acqIds = new Set(
+    (rosterContext?.recentAcquisitions || []).map((a) => String(a.id)).filter(Boolean)
+  );
+  const newStarters = orderedHitters
+    .filter((h) => h?.person?.id && acqIds.has(String(h.person.id)))
+    .map(lineupPlayerName)
+    .filter(Boolean);
+
   return {
     confirmed: orderedHitters.length >= 9,
     count: orderedHitters.length,
     topFive,
-    leadoffObp: Number.isFinite(leadoffObpValue) ? leadoffObpValue : null,
+    leadoffObp: Number.isFinite(leadoffObpValue) ? Math.round(leadoffObpValue * 1000) / 1000 : null,
+    topOrderOps,
+    platoonOps,
+    acquisitionsInLineup: newStarters.length,
+    newAdditionsNames: newStarters.slice(0, 3),
+    rosterTurnover: rosterContext ? toNumber(rosterContext.turnoverScore, 0) : 0,
     knownStatCount,
-    qualityScore: clamp(weightedScore, -0.12, 0.12)
+    qualityScore: clamp(weightedScore, -0.14, 0.14)
   };
 }
 
@@ -1681,7 +1861,160 @@ function lineupTemporalEligibility(game, predictionTimestampUtc) {
   });
 }
 
-async function fetchGameLineupProfile(game, requestedAtUtc = new Date().toISOString()) {
+async function fetchHitterSeasonStats(personId, season, asOfDateYmd = null) {
+  if (!personId) return null;
+  const params = new URLSearchParams({
+    group: 'hitting',
+    season: String(season),
+    gameType: 'R'
+  });
+  if (asOfDateYmd) {
+    const range = aggregateDateRange(season, asOfDateYmd);
+    if (!range) return null;
+    params.set('stats', 'byDateRange');
+    params.set('startDate', range.startDate);
+    params.set('endDate', range.endDate);
+  } else {
+    params.set('stats', 'season');
+  }
+  const data = await fetchJson(`${MLB_BASE_URL}/people/${personId}/stats?${params}`);
+  const splits = data.stats?.[0]?.splits || [];
+  if (splits.length === 0) return null;
+  if (splits.length === 1) return splits[0]?.stat || null;
+  // Mid-season traded player may return multiple team splits or a combined total
+  // split (no `team` field). Prefer the combined split, else aggregate PA-weighted.
+  const combined = splits.find((s) => !s.team);
+  if (combined?.stat) return combined.stat;
+  let totalPa = 0;
+  let totalAb = 0;
+  let totalHr = 0;
+  let weightedObp = 0;
+  let weightedSlg = 0;
+  for (const s of splits) {
+    const st = s?.stat || {};
+    const pa = Math.max(1, toNumber(st.plateAppearances ?? st.atBats, 0));
+    totalPa += toNumber(st.plateAppearances, 0);
+    totalAb += toNumber(st.atBats, 0);
+    totalHr += toNumber(st.homeRuns, 0);
+    weightedObp += toNumber(st.obp ?? st.onBasePercentage, 0.32) * pa;
+    weightedSlg += toNumber(st.slg ?? st.sluggingPercentage, 0.4) * pa;
+  }
+  const denom = Math.max(1, totalPa || totalAb);
+  const obp = weightedObp / denom;
+  const slg = weightedSlg / denom;
+  return {
+    plateAppearances: totalPa,
+    atBats: totalAb,
+    homeRuns: totalHr,
+    obp,
+    slg,
+    ops: obp + slg
+  };
+}
+
+async function fetchHitterPlatoonSplit(personId, splitCode, season) {
+  if (!personId || !splitCode) return null;
+  const params = new URLSearchParams({
+    stats: 'statSplits',
+    sitCodes: 'vl,vr',
+    group: 'hitting',
+    season: String(season),
+    gameType: 'R'
+  });
+  const data = await fetchJson(`${MLB_BASE_URL}/people/${personId}/stats?${params}`);
+  const splits = data?.stats?.[0]?.splits || [];
+  const matching = splits.filter((s) => s?.split?.code === splitCode && s?.stat);
+  if (matching.length === 0) return null;
+  const combined = matching.find((s) => !s.team) || matching[0];
+  return {
+    ops: toNumber(combined.stat?.ops, Number.NaN),
+    atBats: toNumber(combined.stat?.atBats, 0),
+    obp: toNumber(combined.stat?.obp, Number.NaN),
+    slg: toNumber(combined.stat?.slg, Number.NaN)
+  };
+}
+
+function orderedLineupBatterEntries(boxTeam) {
+  const players = Object.values(boxTeam?.players || {});
+  const hitters = players
+    .filter((p) => p?.battingOrder)
+    .sort((a, b) => Number.parseInt(a.battingOrder, 10) - Number.parseInt(b.battingOrder, 10));
+  const seen = new Set();
+  const out = [];
+  for (const h of hitters) {
+    const slot = battingOrderSlot(h);
+    if (slot >= 1 && slot <= 9 && !seen.has(slot)) {
+      seen.add(slot);
+      out.push(h);
+    }
+  }
+  return out;
+}
+
+async function enrichLineupHittersForSide(boxTeam, oppPitchHand, context = {}) {
+  const { season, dateYmd, hitterCache, platoonCache } = context;
+  const hitters = orderedLineupBatterEntries(boxTeam);
+  const hitterLookups = new Map();
+  const platoonSplits = new Map();
+  if (!season || hitters.length === 0) {
+    return { hitterLookups, platoonSplits };
+  }
+
+  const splitCode = oppPitchHand === 'L' ? 'vl' : oppPitchHand === 'R' ? 'vr' : null;
+  // Only fetch pre-day career/prior splits when dateYmd is not a strict historical
+  // replay of full-season `statSplits` (note: season-1 is strictly prior to `season`
+  // and 100% leakage-free on every date!).
+  await Promise.all(
+    hitters.map(async (player) => {
+      const id = player?.person?.id;
+      if (!id) return;
+      const boxStats = hitterBattingStats(player);
+      const boxPa = Math.max(
+        firstStatNumber(boxStats, ['plateAppearances', 'pa'], 0),
+        firstStatNumber(boxStats, ['atBats', 'ab'], 0)
+      );
+
+      // Fetch full current-season (all teams, handles mid-season trades!) + prior
+      // season (`season - 1`, handles Opening Day / April / offseason trades!)
+      // whenever boxscore PA < 90.
+      if (boxPa < 90) {
+        const cacheKey = `${id}:${season}:${dateYmd || 'live'}`;
+        let cached = hitterCache?.get(cacheKey);
+        if (cached === undefined) {
+          const [curAllTeams, priorSeason] = await Promise.all([
+            fetchHitterSeasonStats(id, season, dateYmd).catch(() => null),
+            fetchHitterSeasonStats(id, season - 1, null).catch(() => null)
+          ]);
+          cached = { current: curAllTeams || boxStats, prior: priorSeason };
+          hitterCache?.set(cacheKey, cached);
+        }
+        hitterLookups.set(id, cached);
+      }
+
+      // Per-hitter handedness platoon split from `season - 1` (strictly leakage-safe
+      // pre-season baseline) blended with current season when today >= live/asOf safe.
+      if (splitCode) {
+        const pKey = `${id}:${splitCode}:${season - 1}`;
+        let split = platoonCache?.get(pKey);
+        if (split === undefined) {
+          split = await fetchHitterPlatoonSplit(id, splitCode, season - 1).catch(() => null);
+          platoonCache?.set(pKey, split);
+        }
+        if (split && Number.isFinite(split.ops)) {
+          platoonSplits.set(id, split);
+        }
+      }
+    })
+  );
+
+  return { hitterLookups, platoonSplits };
+}
+
+async function fetchGameLineupProfile(
+  game,
+  requestedAtUtc = new Date().toISOString(),
+  context = {}
+) {
   const requestedTemporal = lineupTemporalEligibility(game, requestedAtUtc);
   if (!requestedTemporal.ok) {
     return {
@@ -1706,9 +2039,35 @@ async function fetchGameLineupProfile(game, requestedAtUtc = new Date().toISOStr
     };
   }
 
+  const awayTeamId = game?.teams?.away?.team?.id;
+  const homeTeamId = game?.teams?.home?.team?.id;
+  const awayStarterId = game?.teams?.away?.probablePitcher?.id;
+  const homeStarterId = game?.teams?.home?.probablePitcher?.id;
+  const awayStarterHand =
+    game?.teams?.away?.probablePitcher?.pitchHand?.code ||
+    context.pitcherDetails?.get?.(awayStarterId)?.pitchHand?.code ||
+    null;
+  const homeStarterHand =
+    game?.teams?.home?.probablePitcher?.pitchHand?.code ||
+    context.pitcherDetails?.get?.(homeStarterId)?.pitchHand?.code ||
+    null;
+
+  const [awayEnriched, homeEnriched] = await Promise.all([
+    enrichLineupHittersForSide(boxscore.teams?.away, homeStarterHand, context),
+    enrichLineupHittersForSide(boxscore.teams?.home, awayStarterHand, context)
+  ]);
+
   return {
-    away: extractLineupProfile(boxscore.teams?.away),
-    home: extractLineupProfile(boxscore.teams?.home),
+    away: extractLineupProfile(boxscore.teams?.away, {
+      hitterLookups: awayEnriched.hitterLookups,
+      platoonSplits: awayEnriched.platoonSplits,
+      rosterContext: context.rosterProfiles?.get?.(awayTeamId) || null
+    }),
+    home: extractLineupProfile(boxscore.teams?.home, {
+      hitterLookups: homeEnriched.hitterLookups,
+      platoonSplits: homeEnriched.platoonSplits,
+      rosterContext: context.rosterProfiles?.get?.(homeTeamId) || null
+    }),
     requestedAtUtc,
     fetchedAtUtc,
     temporal
@@ -1726,18 +2085,27 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
         bullpenOuts: 0,
         relieverAppearances: 0,
         relieverDates: new Map(),
-        highPitchRelievers: 0
+        highPitchRelievers: 0,
+        qualityOuts14d: 0,
+        qualityEarnedRuns14d: 0,
+        qualityHits14d: 0,
+        qualityWalks14d: 0,
+        qualityStrikeouts14d: 0,
+        qualityHomeRuns14d: 0
       }
     ])
   );
-  const games = await fetchRecentTeamGames(teamIds, dateYmd, 3);
+  // Look back 14 days so bullpen run-prevention quality (ERA/WHIP/K-BB/HR9) has
+  // real sample, while strictly isolating 3-day workload for fatigue metrics!
+  const games = await fetchRecentTeamGames(teamIds, dateYmd, 14);
 
-  const MAX_CONCURRENT = 5;
+  const MAX_CONCURRENT = 6;
   const queue = [...games];
-  const results = [];
   async function runNext() {
     while (queue.length) {
       const game = queue.shift();
+      const gameDate = String(game.officialDate || game.gameDate || '').slice(0, 10);
+      const isLast3Days = gameDate ? ymdDiff(dateYmd, gameDate) <= 3 : false;
       let boxscore;
       try {
         boxscore = await fetchBoxscore(game.gamePk);
@@ -1750,27 +2118,37 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
         const profile = profiles.get(team.id);
         if (!profile) continue;
 
-        profile.games += 1;
+        if (isLast3Days) profile.games += 1;
         const boxTeam = boxscore.teams?.[side];
         for (const personId of boxTeam?.pitchers || []) {
           const player = boxTeam.players?.[`ID${personId}`];
           const stats = player?.stats?.pitching || {};
           if (toNumber(stats.gamesStarted, 0) > 0) continue;
 
-          const pitches = toNumber(stats.numberOfPitches, 0);
-          profile.bullpenPitches += pitches;
-          profile.bullpenOuts += Math.round(parseInnings(stats.inningsPitched) * 3);
-          profile.relieverAppearances += 1;
-          if (pitches >= 25) profile.highPitchRelievers += 1;
+          const outs = Math.round(parseInnings(stats.inningsPitched) * 3);
+          profile.qualityOuts14d += outs;
+          profile.qualityEarnedRuns14d += toNumber(stats.earnedRuns, 0);
+          profile.qualityHits14d += toNumber(stats.hits, 0);
+          profile.qualityWalks14d += toNumber(stats.baseOnBalls, 0);
+          profile.qualityStrikeouts14d += toNumber(stats.strikeOuts, 0);
+          profile.qualityHomeRuns14d += toNumber(stats.homeRuns, 0);
 
-          const key = String(personId);
-          if (!profile.relieverDates.has(key)) profile.relieverDates.set(key, new Set());
-          profile.relieverDates.get(key).add(game.officialDate || game.gameDate);
+          if (isLast3Days) {
+            const pitches = toNumber(stats.numberOfPitches, 0);
+            profile.bullpenPitches += pitches;
+            profile.bullpenOuts += outs;
+            profile.relieverAppearances += 1;
+            if (pitches >= 25) profile.highPitchRelievers += 1;
+
+            const key = String(personId);
+            if (!profile.relieverDates.has(key)) profile.relieverDates.set(key, new Set());
+            profile.relieverDates.get(key).add(gameDate || game.gameDate);
+          }
         }
       }
     }
   }
-  const workers = Array.from({ length: Math.min(MAX_CONCURRENT, games.length) }, () => runNext());
+  const workers = Array.from({ length: Math.min(MAX_CONCURRENT, Math.max(1, games.length)) }, () => runNext());
   await Promise.all(workers);
 
   for (const [teamId, profile] of profiles.entries()) {
@@ -1781,26 +2159,55 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
 }
 
 function finalizeBullpenProfile(profile) {
-  const backToBackRelievers = [...profile.relieverDates.values()].filter((dates) => dates.size >= 2).length;
-  const innings = profile.bullpenOuts / 3;
+  const backToBackRelievers = [...(profile.relieverDates?.values?.() || [])].filter((dates) => dates.size >= 2).length;
+  const innings = toNumber(profile.bullpenOuts, 0) / 3;
   const fatigueScore =
-    profile.bullpenPitches / 120 +
+    toNumber(profile.bullpenPitches, 0) / 120 +
     backToBackRelievers * 0.2 +
-    profile.highPitchRelievers * 0.12 +
-    Math.max(0, profile.games - 2) * 0.15;
+    toNumber(profile.highPitchRelievers, 0) * 0.12 +
+    Math.max(0, toNumber(profile.games, 0) - 2) * 0.15;
   const level = fatigueScore >= 1.7 ? 'high' : fatigueScore >= 0.9 ? 'medium' : 'low';
+
+  // Bayesian-shrunk 14-day bullpen run-prevention quality (prior = 12 IP).
+  const qIp = toNumber(profile.qualityOuts14d, 0) / 3;
+  let reliefEra = null;
+  let reliefWhip = null;
+  let reliefKbb = null;
+  let reliefHr9 = null;
+  if (qIp >= 2) {
+    const PRIOR_IP = 12;
+    const w = clamp(qIp / (qIp + PRIOR_IP), 0, 1);
+    const rawEra = (toNumber(profile.qualityEarnedRuns14d, 0) * 9) / qIp;
+    const rawWhip =
+      (toNumber(profile.qualityHits14d, 0) + toNumber(profile.qualityWalks14d, 0)) / qIp;
+    const rawKbb =
+      toNumber(profile.qualityStrikeouts14d, 0) / Math.max(1, toNumber(profile.qualityWalks14d, 0));
+    const rawHr9 = (toNumber(profile.qualityHomeRuns14d, 0) * 9) / qIp;
+    reliefEra = Math.round((w * rawEra + (1 - w) * 4.05) * 100) / 100;
+    reliefWhip = Math.round((w * rawWhip + (1 - w) * 1.28) * 100) / 100;
+    reliefKbb = Math.round((w * rawKbb + (1 - w) * 2.35) * 100) / 100;
+    reliefHr9 = Math.round((w * rawHr9 + (1 - w) * 1.05) * 100) / 100;
+  }
+
+  const qualityText =
+    reliefEra !== null ? `, 14d RP ERA ${safeFixed(reliefEra)} WHIP ${safeFixed(reliefWhip)}` : '';
 
   return {
     teamId: profile.teamId,
-    games: profile.games,
-    bullpenPitches: profile.bullpenPitches,
+    games: toNumber(profile.games, 0),
+    bullpenPitches: toNumber(profile.bullpenPitches, 0),
     bullpenInnings: innings,
-    relieverAppearances: profile.relieverAppearances,
+    reliefInnings14d: Math.round(qIp * 10) / 10,
+    reliefEra,
+    reliefWhip,
+    reliefKbb,
+    reliefHr9,
+    relieverAppearances: toNumber(profile.relieverAppearances, 0),
     backToBackRelievers,
-    highPitchRelievers: profile.highPitchRelievers,
+    highPitchRelievers: toNumber(profile.highPitchRelievers, 0),
     fatigueScore,
     level,
-    line: `${profile.games}G last 3d, ${Math.round(profile.bullpenPitches)} pitches, ${safeFixed(innings, 1)} IP, B2B relievers ${backToBackRelievers}, fatigue ${level}`
+    line: `${toNumber(profile.games, 0)}G last 3d, ${Math.round(toNumber(profile.bullpenPitches, 0))} pitches, ${safeFixed(innings, 1)} IP, B2B relievers ${backToBackRelievers}, fatigue ${level}${qualityText}`
   };
 }
 
@@ -1822,8 +2229,11 @@ async function fetchSchedule(dateYmd) {
   });
 }
 
-function injuryTransactionStartDate(season) {
-  return `${season}-01-01`;
+function offseasonTransactionStartDate(season) {
+  // Include full winter offseason (Nov 1 of prior year) so offseason trades,
+  // free-agent signings, waiver claims, rotation additions, and 60-day IL
+  // placements are all captured on Opening Day of the new season!
+  return `${season - 1}-11-01`;
 }
 
 function injuryNoteFromTransaction(description) {
@@ -1839,36 +2249,95 @@ function injuryNoteFromTransaction(description) {
   return compactText(text, 120);
 }
 
-async function fetchTeamInjuryProfile(teamId, dateYmd, season) {
-  const rosterParams = new URLSearchParams({
-    rosterType: '40Man',
-    date: dateYmd
-  });
-  const transactionParams = new URLSearchParams({
-    teamId: String(teamId),
-    startDate: injuryTransactionStartDate(season),
-    endDate: dateYmd
-  });
+function classifyRosterTransaction(transaction, teamId) {
+  const desc = String(transaction?.description || '');
+  const typeDesc = String(transaction?.typeDesc || transaction?.typeCode || '').toLowerCase();
+  const toTeamId = transaction?.toTeam?.id;
+  const fromTeamId = transaction?.fromTeam?.id;
 
-  const [rosterData, transactionData] = await Promise.all([
-    fetchJson(`${MLB_BASE_URL}/teams/${teamId}/roster?${rosterParams}`),
-    fetchJson(`${MLB_BASE_URL}/transactions?${transactionParams}`)
-  ]);
+  if (/traded/i.test(desc) || typeDesc.includes('trade') || typeDesc === 'tr') {
+    if (toTeamId && Number(toTeamId) === Number(teamId)) return 'trade_in';
+    if (fromTeamId && Number(fromTeamId) === Number(teamId)) return 'trade_out';
+    return 'trade';
+  }
+  if (/signed as a free agent|signed free agent/i.test(desc) || typeDesc.includes('free agent')) {
+    return 'signing';
+  }
+  if (/claimed .* off waivers/i.test(desc) || typeDesc.includes('claim')) {
+    return toTeamId && Number(toTeamId) === Number(teamId) ? 'claim_in' : 'claim_out';
+  }
+  if (/designated .* for assignment|released/i.test(desc)) {
+    return 'departure';
+  }
+  return null;
+}
 
-  const latestInjuryTransactions = new Map();
-  for (const transaction of transactionData.transactions || []) {
-    const personId = transaction.person?.id;
-    const description = transaction.description || '';
-    if (!personId || !/injured list|injury|injured/i.test(description)) continue;
+function parseRosterAndTransactions(rosterData, transactionData, teamId, dateYmd = null) {
+  const rosterItems = Array.isArray(rosterData?.roster) ? rosterData.roster : [];
+  const activePlayerIds = new Set();
+  const rosterPositionById = new Map();
 
-    latestInjuryTransactions.set(personId, {
-      date: transaction.date || '',
-      description,
-      note: injuryNoteFromTransaction(description)
-    });
+  for (const item of rosterItems) {
+    const id = item?.person?.id;
+    if (!id) continue;
+    rosterPositionById.set(id, item.position?.abbreviation || item.position?.name || '-');
+    if (!/injured/i.test(item.status?.description || '')) {
+      activePlayerIds.add(id);
+    }
   }
 
-  return (rosterData.roster || [])
+  const latestInjuryTransactions = new Map();
+  const acquisitionsByPerson = new Map();
+  const departuresByPerson = new Map();
+
+  for (const transaction of transactionData?.transactions || []) {
+    const txDate = String(transaction?.date || transaction?.effectiveDate || '').slice(0, 10);
+    // Strict temporal guard: ignore any transaction dated after prediction day.
+    if (dateYmd && txDate && txDate > dateYmd) continue;
+
+    const personId = transaction?.person?.id;
+    const personName = transaction?.person?.fullName || 'Unknown player';
+    const description = transaction?.description || '';
+    if (!personId) continue;
+
+    if (/injured list|injury|injured/i.test(description)) {
+      latestInjuryTransactions.set(personId, {
+        date: txDate,
+        description,
+        note: injuryNoteFromTransaction(description)
+      });
+    }
+
+    const kind = classifyRosterTransaction(transaction, teamId);
+    if (!kind) continue;
+
+    if (
+      (kind === 'trade_in' || kind === 'signing' || kind === 'claim_in' || kind === 'trade') &&
+      activePlayerIds.has(personId)
+    ) {
+      acquisitionsByPerson.set(personId, {
+        id: personId,
+        name: personName,
+        position: rosterPositionById.get(personId) || '-',
+        type: kind === 'signing' ? 'signing' : kind.startsWith('claim') ? 'claim' : 'trade',
+        date: txDate,
+        description: compactText(description, 140)
+      });
+      departuresByPerson.delete(personId);
+    } else if (
+      (kind === 'trade_out' || kind === 'departure' || kind === 'claim_out') &&
+      !activePlayerIds.has(personId)
+    ) {
+      departuresByPerson.set(personId, {
+        id: personId,
+        name: personName,
+        type: kind,
+        date: txDate
+      });
+    }
+  }
+
+  const injuries = rosterItems
     .filter((item) => /injured/i.test(item.status?.description || ''))
     .map((item) => {
       const latest = latestInjuryTransactions.get(item.person?.id) || null;
@@ -1885,22 +2354,249 @@ async function fetchTeamInjuryProfile(teamId, dateYmd, season) {
       const statusSort = String(a.status).localeCompare(String(b.status));
       return statusSort || String(a.name).localeCompare(String(b.name));
     });
+
+  const recentAcquisitions = [...acquisitionsByPerson.values()].sort((a, b) =>
+    String(b.date).localeCompare(String(a.date))
+  );
+  const recentDepartures = [...departuresByPerson.values()].sort((a, b) =>
+    String(b.date).localeCompare(String(a.date))
+  );
+  const turnoverScore =
+    Math.round(
+      clamp((recentAcquisitions.length * 1.15 + recentDepartures.length * 0.75) / 14, 0, 1) * 1000
+    ) / 1000;
+
+  return {
+    injuries,
+    rosterContext: {
+      teamId,
+      activeCount: activePlayerIds.size,
+      activePlayerIds: [...activePlayerIds],
+      recentAcquisitions: recentAcquisitions.slice(0, 15),
+      recentDepartures: recentDepartures.slice(0, 15),
+      acquisitionsCount: recentAcquisitions.length,
+      departuresCount: recentDepartures.length,
+      turnoverScore
+    }
+  };
 }
 
-async function fetchInjuryProfiles(teamIds, dateYmd, season) {
+async function fetchTeamRosterAndInjuries(teamId, dateYmd, season) {
+  const rosterParams = new URLSearchParams({
+    rosterType: '40Man',
+    date: dateYmd
+  });
+  const transactionParams = new URLSearchParams({
+    teamId: String(teamId),
+    startDate: offseasonTransactionStartDate(season),
+    endDate: dateYmd
+  });
+
+  const [rosterData, transactionData] = await Promise.all([
+    fetchJson(`${MLB_BASE_URL}/teams/${teamId}/roster?${rosterParams}`),
+    fetchJson(`${MLB_BASE_URL}/transactions?${transactionParams}`)
+  ]);
+
+  return parseRosterAndTransactions(rosterData, transactionData, teamId, dateYmd);
+}
+
+async function fetchRosterAndInjuryProfiles(teamIds, dateYmd, season) {
   const injuries = new Map();
+  const rosters = new Map();
 
   await Promise.all(
     teamIds.map(async (teamId) => {
       try {
-        injuries.set(teamId, await fetchTeamInjuryProfile(teamId, dateYmd, season));
+        const parsed = await fetchTeamRosterAndInjuries(teamId, dateYmd, season);
+        injuries.set(teamId, parsed.injuries);
+        rosters.set(teamId, parsed.rosterContext);
       } catch {
         injuries.set(teamId, []);
+        rosters.set(teamId, {
+          teamId,
+          activeCount: 0,
+          activePlayerIds: [],
+          recentAcquisitions: [],
+          recentDepartures: [],
+          acquisitionsCount: 0,
+          departuresCount: 0,
+          turnoverScore: 0
+        });
       }
     })
   );
 
-  return injuries;
+  return { injuries, rosters };
+}
+
+/**
+ * Early-season / post-offseason team stat continuity:
+ * When current-season games played < 35 (March/April of a new season), blend
+ * current stats with prior-season (`season - 1`) stats AND regress toward
+ * league-average DEFAULTS in proportion to roster turnover (`turnoverScore`).
+ * High trade/free-agent turnover shrinks stale last-year team averages toward
+ * neutral so today's actual Probable Starter + Starting Lineup carry the edge!
+ */
+function blendTeamStatsWithPrior(currentMap, priorMap, rosterProfiles = new Map(), teamIds = []) {
+  const allIds = new Set([
+    ...teamIds,
+    ...(currentMap instanceof Map ? currentMap.keys() : []),
+    ...(priorMap instanceof Map ? priorMap.keys() : [])
+  ]);
+  const blended = new Map();
+  const FULL_SAMPLE_GAMES = 35;
+
+  for (const teamId of allIds) {
+    const cur = currentMap?.get?.(teamId) || null;
+    const prior = priorMap?.get?.(teamId) || null;
+    const curGames = toNumber(cur?.hitting?.gamesPlayed ?? cur?.pitching?.gamesPlayed, 0);
+
+    if (cur && curGames >= FULL_SAMPLE_GAMES) {
+      blended.set(teamId, cur);
+      continue;
+    }
+    if (!cur && !prior) continue;
+
+    const turnover = toNumber(rosterProfiles?.get?.(teamId)?.turnoverScore, 0);
+    const wCur = clamp(curGames / FULL_SAMPLE_GAMES, 0, 1);
+    const wPrior = prior ? (1 - wCur) * 0.65 * (1 - turnover * 0.55) : 0;
+    const wLeague = Math.max(0, 1 - wCur - wPrior);
+
+    const blendNum = (curVal, priorVal, defVal) => {
+      const c = Number.isFinite(curVal) && curGames > 0 ? curVal : defVal;
+      const p = Number.isFinite(priorVal) && prior ? priorVal : defVal;
+      return wCur * c + wPrior * p + wLeague * defVal;
+    };
+
+    const effectiveGames = Math.max(1, curGames || 1);
+    const blendedRpg = blendNum(
+      cur?.hitting ? rpg(cur.hitting) : Number.NaN,
+      prior?.hitting ? rpg(prior.hitting) : Number.NaN,
+      DEFAULTS.rpg
+    );
+    const blendedOps = blendNum(
+      cur?.hitting ? statOps(cur.hitting) : Number.NaN,
+      prior?.hitting ? statOps(prior.hitting) : Number.NaN,
+      DEFAULTS.ops
+    );
+    const blendedIso = blendNum(
+      cur?.hittingAdvanced ? statIso(cur.hittingAdvanced) : Number.NaN,
+      prior?.hittingAdvanced ? statIso(prior.hittingAdvanced) : Number.NaN,
+      DEFAULTS.iso
+    );
+    const blendedKRate = blendNum(
+      cur?.hittingAdvanced ? battingKRate(cur.hittingAdvanced) : Number.NaN,
+      prior?.hittingAdvanced ? battingKRate(prior.hittingAdvanced) : Number.NaN,
+      DEFAULTS.kRate
+    );
+    const blendedBbRate = blendNum(
+      cur?.hittingAdvanced ? battingBbRate(cur.hittingAdvanced) : Number.NaN,
+      prior?.hittingAdvanced ? battingBbRate(prior.hittingAdvanced) : Number.NaN,
+      DEFAULTS.bbRate
+    );
+    const blendedEra = blendNum(
+      cur?.pitching ? statEra(cur.pitching) : Number.NaN,
+      prior?.pitching ? statEra(prior.pitching) : Number.NaN,
+      DEFAULTS.era
+    );
+    const blendedWhip = blendNum(
+      cur?.pitching ? statWhip(cur.pitching) : Number.NaN,
+      prior?.pitching ? statWhip(prior.pitching) : Number.NaN,
+      DEFAULTS.whip
+    );
+    const blendedKMinusBb = blendNum(
+      cur?.pitchingAdvanced ? pitchingKMinusBb(cur.pitchingAdvanced) : Number.NaN,
+      prior?.pitchingAdvanced ? pitchingKMinusBb(prior.pitchingAdvanced) : Number.NaN,
+      DEFAULTS.kMinusBb
+    );
+    const blendedHr9 = blendNum(
+      cur?.pitchingAdvanced ? pitchingHr9(cur.pitchingAdvanced) : Number.NaN,
+      prior?.pitchingAdvanced ? pitchingHr9(prior.pitchingAdvanced) : Number.NaN,
+      DEFAULTS.hr9
+    );
+
+    blended.set(teamId, {
+      team: cur?.team || prior?.team || { id: teamId },
+      hitting: {
+        ...(cur?.hitting || {}),
+        gamesPlayed: effectiveGames,
+        runs: blendedRpg * effectiveGames,
+        ops: blendedOps.toFixed(3)
+      },
+      hittingAdvanced: {
+        ...(cur?.hittingAdvanced || {}),
+        iso: blendedIso,
+        strikeoutsPerPlateAppearance: blendedKRate,
+        walksPerPlateAppearance: blendedBbRate
+      },
+      pitching: {
+        ...(cur?.pitching || {}),
+        gamesPlayed: effectiveGames,
+        era: blendedEra.toFixed(2),
+        whip: blendedWhip.toFixed(2),
+        runs: blendedEra * effectiveGames
+      },
+      pitchingAdvanced: {
+        ...(cur?.pitchingAdvanced || {}),
+        strikeoutsMinusWalksPercentage: blendedKMinusBb,
+        homeRunsPer9: blendedHr9
+      },
+      blendedWithPriorSeason: wPrior > 0
+    });
+  }
+
+  return blended;
+}
+
+function blendStandingsWithPrior(currentMap, priorMap, rosterProfiles = new Map(), teamIds = []) {
+  const allIds = new Set([
+    ...teamIds,
+    ...(currentMap instanceof Map ? currentMap.keys() : []),
+    ...(priorMap instanceof Map ? priorMap.keys() : [])
+  ]);
+  const blended = new Map();
+  const FULL_STANDINGS_GAMES = 30;
+
+  for (const teamId of allIds) {
+    const cur = currentMap?.get?.(teamId) || null;
+    const prior = priorMap?.get?.(teamId) || null;
+    const curGames = toNumber(cur?.gamesPlayed, 0);
+    if (cur && curGames >= FULL_STANDINGS_GAMES) {
+      blended.set(teamId, cur);
+      continue;
+    }
+    if (!cur && !prior) continue;
+
+    const turnover = toNumber(rosterProfiles?.get?.(teamId)?.turnoverScore, 0);
+    const wCur = clamp(curGames / FULL_STANDINGS_GAMES, 0, 1);
+    const wPrior = prior ? (1 - wCur) * 0.62 * (1 - turnover * 0.55) : 0;
+    const wLeague = Math.max(0, 1 - wCur - wPrior);
+
+    const curPct = cur && curGames > 0 ? leagueRecordPct(cur.leagueRecord) : DEFAULTS.winPct;
+    const priorPct = prior ? leagueRecordPct(prior.leagueRecord) : DEFAULTS.winPct;
+    const shrunkPct = clamp(wCur * curPct + wPrior * priorPct + wLeague * DEFAULTS.winPct, 0.3, 0.7);
+
+    const curRdPerG = cur && curGames > 0 ? runDiffPerGame(cur) : 0;
+    const priorRdPerG = prior ? runDiffPerGame(prior) : 0;
+    const shrunkRdPerG = wCur * curRdPerG + wPrior * priorRdPerG;
+    const effectiveGames = Math.max(1, curGames || 1);
+
+    blended.set(teamId, {
+      ...(prior || {}),
+      ...(cur || {}),
+      team: cur?.team || prior?.team || { id: teamId },
+      gamesPlayed: curGames,
+      runDifferential: Math.round(shrunkRdPerG * effectiveGames * 10) / 10,
+      leagueRecord: {
+        wins: cur?.leagueRecord?.wins ?? 0,
+        losses: cur?.leagueRecord?.losses ?? 0,
+        pct: shrunkPct.toFixed(3)
+      },
+      blendedWithPriorSeason: wPrior > 0
+    });
+  }
+
+  return blended;
 }
 
 async function fetchTeamStats(season, asOfDateYmd = null) {
@@ -1960,18 +2656,76 @@ async function fetchRollingTeamStats(season, dateYmd, days = ROLLING_FORM_DAYS) 
   return getRollingTeamStatMap(await fetchJson(`${MLB_BASE_URL}/teams/stats?${params}`));
 }
 
-async function fetchStandings(season, dateYmd) {
-  const range = aggregateDateRange(season, dateYmd);
-  if (!range) return new Map();
+async function fetchStandings(season, dateYmd = null) {
+  if (dateYmd) {
+    const range = aggregateDateRange(season, dateYmd);
+    if (!range) return new Map();
+
+    const params = new URLSearchParams({
+      leagueId: '103,104',
+      season: String(season),
+      standingsTypes: 'regularSeason',
+      date: range.endDate
+    });
+
+    return getStandingMap(await fetchJson(`${MLB_BASE_URL}/standings?${params}`));
+  }
 
   const params = new URLSearchParams({
     leagueId: '103,104',
     season: String(season),
-    standingsTypes: 'regularSeason',
-    date: range.endDate
+    standingsTypes: 'regularSeason'
   });
-
   return getStandingMap(await fetchJson(`${MLB_BASE_URL}/standings?${params}`));
+}
+
+function combinePitcherStatSplits(splits) {
+  if (!Array.isArray(splits) || splits.length === 0) return null;
+  if (splits.length === 1) return splits[0]?.stat || null;
+  const combined = splits.find((s) => !s.team);
+  if (combined?.stat) return combined.stat;
+
+  // Aggregate across multi-team splits so mid-season traded pitchers carry their
+  // complete season workload instead of only their first or second club's split!
+  let outs = 0;
+  let er = 0;
+  let hits = 0;
+  let bb = 0;
+  let so = 0;
+  let hr = 0;
+  let gs = 0;
+  let gp = 0;
+  let weightedKMinusBb = 0;
+  for (const s of splits) {
+    const st = s?.stat || {};
+    const ip = parseInnings(st.inningsPitched);
+    outs += Math.round(ip * 3);
+    er += toNumber(st.earnedRuns, 0);
+    hits += toNumber(st.hits, 0);
+    bb += toNumber(st.baseOnBalls, 0);
+    so += toNumber(st.strikeOuts, 0);
+    hr += toNumber(st.homeRuns, 0);
+    gs += toNumber(st.gamesStarted, 0);
+    gp += toNumber(st.gamesPitched ?? st.appearances, 0);
+    weightedKMinusBb += toNumber(st.strikeoutsMinusWalksPercentage, DEFAULTS.kMinusBb) * Math.max(0.5, ip);
+  }
+  const ip = outs / 3;
+  const whole = Math.floor(outs / 3);
+  const rem = outs % 3;
+  return {
+    inningsPitched: `${whole}.${rem}`,
+    era: ip > 0 ? ((er * 9) / ip).toFixed(2) : DEFAULTS.era.toFixed(2),
+    whip: ip > 0 ? ((hits + bb) / ip).toFixed(2) : DEFAULTS.whip.toFixed(2),
+    earnedRuns: er,
+    hits,
+    baseOnBalls: bb,
+    strikeOuts: so,
+    homeRuns: hr,
+    gamesStarted: gs,
+    gamesPitched: gp,
+    homeRunsPer9: ip > 0 ? (hr * 9) / ip : DEFAULTS.hr9,
+    strikeoutsMinusWalksPercentage: ip > 0 ? weightedKMinusBb / ip : DEFAULTS.kMinusBb
+  };
 }
 
 async function fetchPitcherStats(personId, season, asOfDateYmd = null) {
@@ -1983,7 +2737,7 @@ async function fetchPitcherStats(personId, season, asOfDateYmd = null) {
     gameType: 'R'
   });
   // Season-to-date ends strictly before prediction day. Full-season without an
-  // as-of remains live-only and is not promotion-safe historical evidence.
+  // as-of is used for completed prior seasons (`season - 1`, strictly historical).
   if (asOfDateYmd) {
     const range = aggregateDateRange(season, asOfDateYmd);
     if (!range) return null;
@@ -1995,7 +2749,24 @@ async function fetchPitcherStats(personId, season, asOfDateYmd = null) {
   }
 
   const data = await fetchJson(`${MLB_BASE_URL}/people/${personId}/stats?${params}`);
-  return data.stats?.[0]?.splits?.[0]?.stat || null;
+  return combinePitcherStatSplits(data.stats?.[0]?.splits || []);
+}
+
+async function fetchPitcherStatsWithPrior(personId, season, asOfDateYmd = null) {
+  if (!personId) return null;
+  const current = await fetchPitcherStats(personId, season, asOfDateYmd).catch(() => null);
+  const currentIp = current ? parseInnings(current.inningsPitched) : 0;
+  // When current-season sample is < 45 IP (Opening Day, April, call-up, or IL return),
+  // attach prior-season (`season - 1`) stats across all teams so Bayesian IP shrinkage
+  // in prediction_core.js preserves true pitcher talent immediately after offseason trades!
+  if (currentIp >= 45) return current;
+
+  const priorSeason = await fetchPitcherStats(personId, season - 1, null).catch(() => null);
+  if (!current && !priorSeason) return null;
+  return {
+    ...(current || { inningsPitched: '0.0' }),
+    priorSeason
+  };
 }
 
 async function fetchPerson(personId) {
@@ -2014,17 +2785,40 @@ async function fetchPitcherRecentStarts(personId, season, limit = 5, asOfDateYmd
     gameType: 'R'
   });
   const data = await fetchJson(`${MLB_BASE_URL}/people/${personId}/stats?${params}`);
-  // Strict as-of: only starts before the prediction date. Without a cutoff we
-  // would include future season games (lookahead). Missing asOf → empty, not
-  // full-season slice(-limit).
+  // Strict as-of: only starts before the prediction date.
   const started = (data.stats?.[0]?.splits || []).filter(
     (split) => toNumber(split.stat?.gamesStarted, 0) > 0
   );
-  const eligible = asOfDateYmd
+  let eligible = asOfDateYmd
     ? filterSplitsBeforeDate(started, asOfDateYmd)
     : [];
-  const starts = eligible.slice(-limit);
 
+  // Early-season supplement (March/April): if a starter has < 3 starts so far in
+  // the new season, pull remaining starts from late `season - 1` regular season
+  // (strictly < asOfDateYmd) so traded/returning starters aren't missing recent form!
+  const month = asOfDateYmd ? Number.parseInt(String(asOfDateYmd).slice(5, 7), 10) : 6;
+  if (asOfDateYmd && eligible.length < 3 && month <= 4) {
+    try {
+      const priorParams = new URLSearchParams({
+        stats: 'gameLog',
+        group: 'pitching',
+        season: String(season - 1),
+        gameType: 'R'
+      });
+      const priorData = await fetchJson(`${MLB_BASE_URL}/people/${personId}/stats?${priorParams}`);
+      const priorStarted = filterSplitsBeforeDate(
+        (priorData.stats?.[0]?.splits || []).filter(
+          (split) => toNumber(split.stat?.gamesStarted, 0) > 0
+        ),
+        asOfDateYmd
+      );
+      eligible = [...priorStarted.slice(-(limit - eligible.length)), ...eligible];
+    } catch {
+      // Keep current-season starts if prior gameLog unavailable.
+    }
+  }
+
+  const starts = eligible.slice(-limit);
   return summarizePitcherStarts(starts);
 }
 
@@ -2217,66 +3011,15 @@ function finalGameResult(game, dateYmd) {
 }
 
 function starterSeasonEdge(homePitcherStats, awayPitcherStats) {
-  if (!homePitcherStats && !awayPitcherStats) return 0;
-
-  const homeEra = statEra(homePitcherStats);
-  const awayEra = statEra(awayPitcherStats);
-  const homeWhip = statWhip(homePitcherStats);
-  const awayWhip = statWhip(awayPitcherStats);
-  const homeKbb = kToBb(homePitcherStats);
-  const awayKbb = kToBb(awayPitcherStats);
-  const homeKMinusBb = pitchingKMinusBb(homePitcherStats);
-  const awayKMinusBb = pitchingKMinusBb(awayPitcherStats);
-  const homeHr9 = pitchingHr9(homePitcherStats);
-  const awayHr9 = pitchingHr9(awayPitcherStats);
-
-  return clamp(
-    (awayEra - homeEra) / 2.4 +
-      (awayWhip - homeWhip) / 0.6 +
-      (homeKbb - awayKbb) / 4.0 +
-      (homeKMinusBb - awayKMinusBb) / 0.16 +
-      (awayHr9 - homeHr9) / 1.1,
-    -1.6,
-    1.6
-  );
+  return coreStarterSeasonEdge(homePitcherStats, awayPitcherStats);
 }
 
-// Last-N starts edge from real gameLog rows (already fetched for display).
-// Season ERA alone is slow to reflect current stuff/command; recent form is
-// the actionable SP signal when both sides have enough IP.
 function starterRecentEdge(homeRecent, awayRecent) {
-  const homeIp = toNumber(homeRecent?.innings, 0);
-  const awayIp = toNumber(awayRecent?.innings, 0);
-  if (homeIp < 6 || awayIp < 6) return 0;
-
-  const homeEra = toNumber(homeRecent.era, DEFAULTS.era);
-  const awayEra = toNumber(awayRecent.era, DEFAULTS.era);
-  const homeWhip = toNumber(homeRecent.whip, DEFAULTS.whip);
-  const awayWhip = toNumber(awayRecent.whip, DEFAULTS.whip);
-  const homeKbb =
-    toNumber(homeRecent.strikeouts, 0) / Math.max(1, toNumber(homeRecent.walks, 0));
-  const awayKbb =
-    toNumber(awayRecent.strikeouts, 0) / Math.max(1, toNumber(awayRecent.walks, 0));
-  const homeHr9 = homeIp > 0 ? (toNumber(homeRecent.homeRuns, 0) * 9) / homeIp : DEFAULTS.hr9;
-  const awayHr9 = awayIp > 0 ? (toNumber(awayRecent.homeRuns, 0) * 9) / awayIp : DEFAULTS.hr9;
-
-  const raw =
-    (awayEra - homeEra) / 2.6 +
-    (awayWhip - homeWhip) / 0.65 +
-    (homeKbb - awayKbb) / 4.5 +
-    (awayHr9 - homeHr9) / 1.2;
-  const sampleWeight = clamp(Math.min(homeIp, awayIp) / 18, 0.35, 1);
-  return clamp(raw * sampleWeight, -1.2, 1.2);
+  return coreStarterRecentEdge(homeRecent, awayRecent);
 }
 
 function starterEdge(homePitcherStats, awayPitcherStats, homeRecent = null, awayRecent = null) {
-  const season = starterSeasonEdge(homePitcherStats, awayPitcherStats);
-  const recent = starterRecentEdge(homeRecent, awayRecent);
-  if (!homePitcherStats && !awayPitcherStats && recent === 0) return 0;
-  // When recent form is available, give it real weight — season stats alone
-  // produced a flat ~55% ceiling because SP edge was mostly lagging averages.
-  if (recent === 0) return season;
-  return clamp(season * 0.55 + recent * 0.45, -1.6, 1.6);
+  return coreStarterEdge(homePitcherStats, awayPitcherStats, homeRecent, awayRecent);
 }
 
 function createReasons({
@@ -2834,37 +3577,11 @@ function buildFeatureAvailability({
   };
 }
 
-function lineupRunAdjustment(lineup, injuries) {
-  if (!lineup) return 0;
-
-  const hitterInjuries = Array.isArray(injuries)
-    ? injuries.filter((injury) => injury.position !== 'P').length
-    : 0;
-
-  if (lineup.confirmed) {
-    return clamp(0.06 - hitterInjuries * 0.025, -0.2, 0.08);
-  }
-
-  if (lineup.count > 0) {
-    return clamp(-0.04 - Math.max(0, 9 - lineup.count) * 0.025, -0.25, 0.02);
-  }
-
-  return 0;
-}
-
 function lineupWinEdge(homeLineup, awayLineup, homeInjuries, awayInjuries) {
-  const homeQuality = toNumber(homeLineup?.qualityScore, 0);
-  const awayQuality = toNumber(awayLineup?.qualityScore, 0);
-  const homeAvailability = lineupRunAdjustment(homeLineup, homeInjuries);
-  const awayAvailability = lineupRunAdjustment(awayLineup, awayInjuries);
-  return clamp(homeQuality - awayQuality + (homeAvailability - awayAvailability) * 0.45, -0.18, 0.18);
+  return coreLineupWinEdge(homeLineup, awayLineup, homeInjuries, awayInjuries);
 }
 
-// Both teams have publicly posted full nine-hitter lineups. Confirmed lineups
-// remove a real source of uncertainty (replacement-level fill-ins) so the
-// model's existing matchup edge should count slightly more — but only when
-// directional info is already there. We expose this as a small multiplier,
-// never as a free bump to either side's win probability.
+// Both teams have publicly posted full nine-hitter lineups.
 export function bothLineupsConfirmed(lineups) {
   const away = lineups?.away;
   const home = lineups?.home;
@@ -2873,20 +3590,8 @@ export function bothLineupsConfirmed(lineups) {
   );
 }
 
-function bullpenAvailabilityEdge(homeBullpen, awayBullpen) {
-  const homeFatigue = toNumber(homeBullpen?.fatigueScore, 0);
-  const awayFatigue = toNumber(awayBullpen?.fatigueScore, 0);
-  const homeB2b = toNumber(homeBullpen?.backToBackRelievers, 0);
-  const awayB2b = toNumber(awayBullpen?.backToBackRelievers, 0);
-  const homeHighPitch = toNumber(homeBullpen?.highPitchRelievers, 0);
-  const awayHighPitch = toNumber(awayBullpen?.highPitchRelievers, 0);
-  return clamp(
-    (awayFatigue - homeFatigue) * 0.075 +
-      (awayB2b - homeB2b) * 0.025 +
-      (awayHighPitch - homeHighPitch) * 0.018,
-    -0.18,
-    0.18
-  );
+function bullpenAvailabilityEdge(homeBullpen, awayBullpen, options = {}) {
+  return coreBullpenAvailabilityEdge(homeBullpen, awayBullpen, options);
 }
 
 function edgeTeamLabel(edge, away, home) {
@@ -2907,7 +3612,14 @@ function lineupStatusLine(team, lineup) {
   if (lineup.confirmed) {
     const topNames = lineup.topFive?.slice(0, 3) || [];
     const top = topNames.length ? ` top: ${topNames.join(', ')}` : '';
-    return `${label}: confirmed ${lineup.count}/9${top}`;
+    const platoon = Number.isFinite(Number(lineup.platoonOps))
+      ? ` | split OPS ${Number(lineup.platoonOps).toFixed(3)}`
+      : '';
+    const additions =
+      Array.isArray(lineup.newAdditionsNames) && lineup.newAdditionsNames.length > 0
+        ? ` | new: ${lineup.newAdditionsNames.join(', ')}`
+        : '';
+    return `${label}: confirmed ${lineup.count}/9${top}${platoon}${additions}`;
   }
   if (lineup.count > 0) return `${label}: partial ${lineup.count}/9`;
   return `${label}: lineup belum tersedia`;
@@ -2927,7 +3639,8 @@ function predictGame(
   lineupProfiles,
   modelMemory,
   rollingTeamStats = new Map(),
-  predictionTimestampUtc = null
+  predictionTimestampUtc = null,
+  rosterProfiles = null
 ) {
   // All deterministic probability math lives in the pure canonical core
   // (src/core/prediction_core.js). This wrapper injects the externally-sourced
@@ -2947,6 +3660,7 @@ function predictGame(
     scheduleFatigueProfiles,
     headToHead,
     injuryProfiles,
+    rosterProfiles,
     lineupProfiles,
     modelMemory,
     rollingTeamStats,
@@ -3209,9 +3923,22 @@ function predictGame(
 export const __mlbTestInternals = {
   actualStarterForSide,
   aggregateDateRange,
+  americanToContinuousCents,
   starterEdge,
   starterRecentEdge,
   starterSeasonEdge,
+  shrinkPitcherStats,
+  guardFavoredCalibrationPercent,
+  lineupWinEdge,
+  bullpenAvailabilityEdge,
+  blendHitterSeasonStats,
+  hitterLineupScore,
+  extractLineupProfile,
+  finalizeBullpenProfile,
+  parseRosterAndTransactions,
+  blendTeamStatsWithPrior,
+  blendStandingsWithPrior,
+  combinePitcherStatSplits,
   blendedTeamOffenseEdge,
   blendedTeamPreventionEdge,
   rollingFormWindow,
@@ -3248,16 +3975,19 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
   // Each fetch falls back to an empty Map so one transient API failure degrades
   // that single signal (the model has DEFAULTS for missing data) instead of
   // throwing out of getMlbPredictions and zeroing the entire slate.
-  // collectorProvenance records per-collector status so callers can distinguish
-  // a genuine empty result (valid_empty) from a transient fetch failure
-  // (fetch_failed) — both yield an empty Map, but only the former is real data.
   const collectorProvenance = {};
-  const profileFetch = async (label, source, fn) => {
+  const profileFetch = async (label, source, fn, fallbackValue = () => new Map()) => {
     const fetchStart = new Date().toISOString();
     try {
       const result = await fn();
       const sampleSize =
-        result instanceof Map ? result.size : Array.isArray(result) ? result.length : null;
+        result instanceof Map
+          ? result.size
+          : result?.injuries instanceof Map
+            ? result.injuries.size
+            : Array.isArray(result)
+              ? result.length
+              : null;
       collectorProvenance[label] = {
         source,
         fetchStart,
@@ -3277,18 +4007,58 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
         sampleSize: 0,
         failureReason: error?.message || String(error || 'unknown_error')
       };
-      return new Map();
+      return fallbackValue();
     }
   };
   const requestedCutoff = aggregateDateRange(season, dateYmd)?.endDate || null;
-  const [teamStats, rollingTeamStats, standings, bullpenProfiles, scheduleFatigueProfiles, injuryProfiles] = await Promise.all([
+  const [
+    rawTeamStats,
+    rollingTeamStats,
+    rawStandings,
+    bullpenProfiles,
+    scheduleFatigueProfiles,
+    rosterAndInjuryBundle
+  ] = await Promise.all([
     profileFetch('teamStats', 'MLB StatsAPI byDateRange+byDateRangeAdvanced', () => fetchTeamStats(season, dateYmd)),
     profileFetch('rollingTeamStats', 'MLB StatsAPI byDateRange', () => fetchRollingTeamStats(season, dateYmd)),
     profileFetch('standings', 'MLB StatsAPI standings', () => fetchStandings(season, dateYmd)),
-    profileFetch('bullpenProfiles', 'MLB StatsAPI schedule+boxscore', () => fetchBullpenProfiles(teamIds, dateYmd)),
-    profileFetch('scheduleFatigueProfiles', 'MLB StatsAPI schedule', () => fetchScheduleFatigueProfiles(teamIds, dateYmd)),
-    profileFetch('injuryProfiles', 'MLB StatsAPI injuries', () => fetchInjuryProfiles(teamIds, dateYmd, season))
+    profileFetch('bullpenProfiles', 'MLB StatsAPI schedule+boxscore (14d quality + 3d fatigue)', () =>
+      fetchBullpenProfiles(teamIds, dateYmd)
+    ),
+    profileFetch('scheduleFatigueProfiles', 'MLB StatsAPI schedule', () =>
+      fetchScheduleFatigueProfiles(teamIds, dateYmd)
+    ),
+    profileFetch(
+      'injuryProfiles',
+      'MLB StatsAPI 40Man roster + offseason/in-season transactions',
+      () => fetchRosterAndInjuryProfiles(teamIds, dateYmd, season),
+      () => ({ injuries: new Map(), rosters: new Map() })
+    )
   ]);
+
+  const injuryProfiles = rosterAndInjuryBundle?.injuries || new Map();
+  const rosterProfiles = rosterAndInjuryBundle?.rosters || new Map();
+
+  // Early-season continuity: when any active club has < 35 games played in the
+  // new season, pull completed `season - 1` baselines and blend inversely with
+  // offseason/in-season roster turnover (`turnoverScore`).
+  const needsPriorTeamBlend = teamIds.some(
+    (teamId) => toNumber(rawTeamStats.get(teamId)?.hitting?.gamesPlayed, 0) < 35
+  );
+  const needsPriorStandingsBlend = teamIds.some(
+    (teamId) => toNumber(rawStandings.get(teamId)?.gamesPlayed, 0) < 30
+  );
+  const [priorTeamStats, priorStandings] = await Promise.all([
+    needsPriorTeamBlend ? fetchTeamStats(season - 1, null).catch(() => new Map()) : Promise.resolve(new Map()),
+    needsPriorStandingsBlend ? fetchStandings(season - 1, null).catch(() => new Map()) : Promise.resolve(new Map())
+  ]);
+  const teamStats = needsPriorTeamBlend
+    ? blendTeamStatsWithPrior(rawTeamStats, priorTeamStats, rosterProfiles, teamIds)
+    : rawTeamStats;
+  const standings = needsPriorStandingsBlend
+    ? blendStandingsWithPrior(rawStandings, priorStandings, rosterProfiles, teamIds)
+    : rawStandings;
+
   const probablePitcherIds = [
     ...new Set(
       games
@@ -3317,7 +4087,7 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       }
 
       try {
-        pitcherStats.set(personId, await fetchPitcherStats(personId, season, dateYmd));
+        pitcherStats.set(personId, await fetchPitcherStatsWithPrior(personId, season, dateYmd));
         pitcherStatsOk += 1;
       } catch {
         pitcherStats.set(personId, null);
@@ -3337,7 +4107,7 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
     })
   );
   collectorProvenance.pitcherStats = {
-    source: 'MLB StatsAPI person stats',
+    source: 'MLB StatsAPI person stats (current + prior-season shrinkage)',
     fetchStart: pitcherFetchStart,
     fetchEnd: new Date().toISOString(),
     status: pitcherStatsFailed === 0 ? 'ok' : pitcherStatsOk === 0 ? 'fetch_failed' : 'partial',
@@ -3385,6 +4155,8 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
 
   const lineupProfiles = new Map();
   const lineupRequestTimestampUtc = new Date().toISOString();
+  const hitterCache = new Map();
+  const platoonCache = new Map();
   let lineupOk = 0;
   let lineupFailed = 0;
   await Promise.all(
@@ -3392,7 +4164,14 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       try {
         lineupProfiles.set(
           game.gamePk,
-          await fetchGameLineupProfile(game, lineupRequestTimestampUtc)
+          await fetchGameLineupProfile(game, lineupRequestTimestampUtc, {
+            season,
+            dateYmd,
+            hitterCache,
+            platoonCache,
+            pitcherDetails,
+            rosterProfiles
+          })
         );
         lineupOk += 1;
       } catch {
@@ -3408,7 +4187,7 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
     })
   );
   collectorProvenance.lineup = {
-    source: 'MLB StatsAPI lineup (feed/explore)',
+    source: 'MLB StatsAPI boxscore + hitter prior/trade/platoon enrichment',
     fetchStart: lineupRequestTimestampUtc,
     fetchEnd: new Date().toISOString(),
     status: lineupFailed === 0 ? 'ok' : lineupOk === 0 ? 'fetch_failed' : 'partial',
@@ -3431,6 +4210,8 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       home: lineupProfile.home || null
     };
     const headToHead = headToHeadStats.get(game.gamePk);
+    const awayTeamId = game.teams.away.team.id;
+    const homeTeamId = game.teams.home.team.id;
     const prediction = predictGame(
       game,
       teamStats,
@@ -3445,8 +4226,13 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       controlLineupProfile,
       modelMemory,
       rollingTeamStats,
-      predictionTimestampUtc
+      predictionTimestampUtc,
+      rosterProfiles
     );
+    prediction.rosterContext = {
+      away: rosterProfiles.get(awayTeamId) || null,
+      home: rosterProfiles.get(homeTeamId) || null
+    };
     // Freeze the raw core inputs so this live prediction can be recomputed by
     // snapshot replay (not just projected). Plain JSON; Maps serialized.
     prediction.coreInputs = buildCoreInputsSnapshot({
@@ -3460,6 +4246,7 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       scheduleFatigueProfiles,
       headToHead,
       injuryProfiles,
+      rosterProfiles,
       lineupProfiles: controlLineupProfile,
       modelMemory,
       rollingTeamStats,

@@ -69,6 +69,25 @@ export const JS_HANDLERS = {
     return { fired: false };
   },
 
+  // Cross-book synthetic de-vig guard: when side prices come from explicitly
+  // different books AND no coherent same-book fair de-vig reference exists,
+  // block synthetic VALUE (prevents phantom edge from cross-book overround).
+  crossBookSynthetic(ctx) {
+    const odds = ctx.item?.currentOdds;
+    const awayBook = odds?.awayMoneylineBook;
+    const homeBook = odds?.homeMoneylineBook;
+    if (!awayBook || !homeBook) return { fired: false };
+    const sameSideBooks = String(awayBook).toLowerCase() === String(homeBook).toLowerCase();
+    if (sameSideBooks || ctx.option?.sameBookDevig) return { fired: false };
+    return {
+      fired: true,
+      tokens: {
+        awayBook: String(awayBook),
+        homeBook: String(homeBook)
+      }
+    };
+  },
+
   // src/mlb.js:541-545 — picked-team season win% quality floor.
   teamQuality(ctx, params) {
     const floor = toNumber(params.min_win_pct, 0.52);
@@ -157,6 +176,41 @@ export const JS_HANDLERS = {
     const min = toNumber(params.min_magnitude, 10);
     if (sharp && sharp.direction === 'against_model' && sharp.magnitude >= min) {
       return { fired: true, tokens: { magnitude: sharp.magnitude } };
+    }
+    return { fired: false };
+  },
+
+  // Adverse-selection ceiling on extreme apparent edges (>= 12%): in 2026 live
+  // results, >=12% edges went 1W-6L (-71.4% ROI) when lineups were unconfirmed
+  // or steam moved against the model (unobserved scratches/rest/trades).
+  adverseSelectionHighEdge(ctx, params) {
+    const cap = toNumber(params.max_unconfirmed_edge, 12.0);
+    const edge = toNumber(ctx.option?.edge, 0);
+    if (edge < cap) return { fired: false };
+
+    const awayLineup = ctx.item?.lineups?.away;
+    const homeLineup = ctx.item?.lineups?.home;
+    const bothConfirmed = Boolean(
+      awayLineup?.confirmed &&
+        homeLineup?.confirmed &&
+        toNumber(awayLineup?.count, 0) >= 9 &&
+        toNumber(homeLineup?.count, 0) >= 9
+    );
+    const sharp = ctx.item?.modelBreakdown?.sharpMoney;
+    const contraMove =
+      Boolean(sharp && sharp.direction === 'against_model') &&
+      toNumber(sharp?.magnitude, 0) >= toNumber(params.min_contra_cents, 5);
+    const highFallbacks =
+      toNumber(ctx.item?.featureFallbacks?.count, 0) >= toNumber(params.max_fallbacks, 2);
+
+    if (!bothConfirmed || contraMove || highFallbacks) {
+      return {
+        fired: true,
+        tokens: {
+          edge: edge.toFixed(1),
+          cap: cap.toFixed(1)
+        }
+      };
     }
     return { fired: false };
   },

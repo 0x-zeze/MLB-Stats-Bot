@@ -49,6 +49,7 @@ export function buildCoreInputsSnapshot({
   scheduleFatigueProfiles,
   headToHead,
   injuryProfiles,
+  rosterProfiles,
   lineupProfiles,
   modelMemory,
   rollingTeamStats,
@@ -66,7 +67,7 @@ export function buildCoreInputsSnapshot({
       : Array.isArray(parkFactorBaselines)
         ? parkFactorBaselines
         : [];
-  return {
+  const snapshot = {
     game: game || null,
     teamStats: mapToObject(teamStats),
     standings: mapToObject(standings),
@@ -83,6 +84,10 @@ export function buildCoreInputsSnapshot({
     evolutionControls: evolutionControls || {},
     parkFactorBaselines: parkEntries
   };
+  if (rosterProfiles != null) {
+    snapshot.rosterProfiles = mapToObject(rosterProfiles);
+  }
+  return snapshot;
 }
 
 // League-average fallbacks (mirrors DEFAULTS in mlb.js). Kept local so the
@@ -478,18 +483,107 @@ export function blendedTeamPreventionEdge(seasonHome, seasonAway, rollingHome, r
 // starter edges (pure)
 // ---------------------------------------------------------------------------
 
+function parseBaseballInnings(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.max(0, value) : null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const [whole, partial = '0'] = text.split('.');
+  const wholeNum = Number.parseInt(whole, 10);
+  const partialNum = Number.parseInt(partial, 10);
+  if (!Number.isFinite(wholeNum)) return null;
+  const safePartial = Number.isFinite(partialNum) && partialNum >= 0 && partialNum <= 2 ? partialNum : 0;
+  return Math.max(0, (wholeNum * 3 + safePartial) / 3);
+}
+
+/**
+ * Bayesian IP shrinkage + prior-season continuity for probable starters.
+ * In early April, post-trade debuts, or rookie call-ups (low IP), raw ERA/WHIP
+ * is noisy; shrink smoothly toward prior-season talent (if present on
+ * `stats.priorSeason`) and league-average xFIP-style skill baselines.
+ * Legacy fixtures without `inningsPitched` or `priorSeason` pass through
+ * unchanged so existing golden tests remain bit-exact.
+ */
+export function shrinkPitcherStats(stats) {
+  if (!stats || typeof stats !== 'object') return null;
+  const rawIp = parseBaseballInnings(stats.inningsPitched ?? stats.ip ?? stats.innings);
+  const hasPrior = Boolean(stats.priorSeason && typeof stats.priorSeason === 'object');
+  if (rawIp === null && !hasPrior) {
+    return stats;
+  }
+
+  // Build prior baseline from priorSeason (shrunk gently toward league DEFAULTS)
+  // so offseason-traded starters carry their real talent to their new club on Day 1.
+  let priorEra = DEFAULTS.era;
+  let priorWhip = DEFAULTS.whip;
+  let priorKbb = 2.2;
+  let priorKMinusBb = DEFAULTS.kMinusBb;
+  let priorHr9 = DEFAULTS.hr9;
+
+  if (hasPrior) {
+    const p = stats.priorSeason;
+    const pIp = parseBaseballInnings(p.inningsPitched ?? p.ip ?? p.innings);
+    const pWeight = pIp === null ? 0.72 : clamp(pIp / (pIp + 45), 0, 0.82);
+    priorEra = pWeight * statEra(p) + (1 - pWeight) * DEFAULTS.era;
+    priorWhip = pWeight * statWhip(p) + (1 - pWeight) * DEFAULTS.whip;
+    priorKbb = pWeight * kToBb(p) + (1 - pWeight) * 2.2;
+    priorKMinusBb = pWeight * pitchingKMinusBb(p) + (1 - pWeight) * DEFAULTS.kMinusBb;
+    priorHr9 = pWeight * pitchingHr9(p) + (1 - pWeight) * DEFAULTS.hr9;
+  }
+
+  const ip = rawIp ?? 0;
+  const PRIOR_IP = 35;
+  const w = clamp(ip / (ip + PRIOR_IP), 0, 1);
+
+  const obsEra = ip > 0 ? statEra(stats) : priorEra;
+  const obsWhip = ip > 0 ? statWhip(stats) : priorWhip;
+  const obsKbb = ip > 0 ? kToBb(stats) : priorKbb;
+  const obsKMinusBb = ip > 0 ? pitchingKMinusBb(stats) : priorKMinusBb;
+  const obsHr9 = ip > 0 ? pitchingHr9(stats) : priorHr9;
+
+  const shrunkKMinusBb = w * obsKMinusBb + (1 - w) * priorKMinusBb;
+  const shrunkHr9 = w * obsHr9 + (1 - w) * priorHr9;
+  let shrunkEra = w * obsEra + (1 - w) * priorEra;
+  const shrunkWhip = w * obsWhip + (1 - w) * priorWhip;
+  const shrunkKbb = w * obsKbb + (1 - w) * priorKbb;
+
+  // xFIP-style skill stabilizer when current-season sample is < 65 IP:
+  // prevents lucky/unlucky early-season BABIP/LOB% from distorting ERA.
+  if (ip < 65) {
+    const skillEra = clamp(
+      DEFAULTS.era - (shrunkKMinusBb - DEFAULTS.kMinusBb) * 9.0 + (shrunkHr9 - DEFAULTS.hr9) * 1.15,
+      2.35,
+      6.10
+    );
+    const skillBlend = clamp((65 - ip) / 65, 0, 1) * 0.22;
+    shrunkEra = shrunkEra * (1 - skillBlend) + skillEra * skillBlend;
+  }
+
+  return {
+    ...stats,
+    era: shrunkEra,
+    whip: shrunkWhip,
+    strikeoutsMinusWalksPercentage: shrunkKMinusBb,
+    homeRunsPer9: shrunkHr9,
+    _shrunkKbb: shrunkKbb,
+    _effectiveIp: ip
+  };
+}
+
 export function starterSeasonEdge(homePitcherStats, awayPitcherStats) {
   if (!homePitcherStats && !awayPitcherStats) return 0;
-  const homeEra = statEra(homePitcherStats);
-  const awayEra = statEra(awayPitcherStats);
-  const homeWhip = statWhip(homePitcherStats);
-  const awayWhip = statWhip(awayPitcherStats);
-  const homeKbb = kToBb(homePitcherStats);
-  const awayKbb = kToBb(awayPitcherStats);
-  const homeKMinusBb = pitchingKMinusBb(homePitcherStats);
-  const awayKMinusBb = pitchingKMinusBb(awayPitcherStats);
-  const homeHr9 = pitchingHr9(homePitcherStats);
-  const awayHr9 = pitchingHr9(awayPitcherStats);
+  const homeShrunk = shrinkPitcherStats(homePitcherStats);
+  const awayShrunk = shrinkPitcherStats(awayPitcherStats);
+  const homeEra = statEra(homeShrunk);
+  const awayEra = statEra(awayShrunk);
+  const homeWhip = statWhip(homeShrunk);
+  const awayWhip = statWhip(awayShrunk);
+  const homeKbb = Number.isFinite(homeShrunk?._shrunkKbb) ? homeShrunk._shrunkKbb : kToBb(homeShrunk);
+  const awayKbb = Number.isFinite(awayShrunk?._shrunkKbb) ? awayShrunk._shrunkKbb : kToBb(awayShrunk);
+  const homeKMinusBb = pitchingKMinusBb(homeShrunk);
+  const awayKMinusBb = pitchingKMinusBb(awayShrunk);
+  const homeHr9 = pitchingHr9(homeShrunk);
+  const awayHr9 = pitchingHr9(awayShrunk);
   return clamp(
     (awayEra - homeEra) / 2.4 +
       (awayWhip - homeWhip) / 0.6 +
@@ -540,7 +634,18 @@ function lineupRunAdjustment(lineup, injuries) {
     ? injuries.filter((injury) => injury.position !== 'P').length
     : 0;
   if (lineup.confirmed) {
-    return clamp(0.06 - hitterInjuries * 0.025, -0.2, 0.08);
+    const quality = toNumber(lineup.qualityScore, 0);
+    // When the active confirmed 9-man lineup has strong positive hitter talent
+    // (e.g. healthy stars or newly acquired trade/free-agent replacements),
+    // legacy 40-man IL entries drag less on today's actual run production.
+    const effectiveInjuries = quality > 0.02 ? hitterInjuries * 0.72 : hitterInjuries;
+    const leadoffBonus = Number.isFinite(Number(lineup.leadoffObp))
+      ? clamp((Number(lineup.leadoffObp) - 0.325) * 0.35, -0.02, 0.03)
+      : 0;
+    const newAdditions = Math.max(0, toNumber(lineup.acquisitionsInLineup, 0));
+    const acquisitionSpark =
+      newAdditions > 0 && quality > 0 ? Math.min(0.024, newAdditions * 0.009) : 0;
+    return clamp(0.075 + leadoffBonus + acquisitionSpark - effectiveInjuries * 0.024, -0.2, 0.11);
   }
   if (lineup.count > 0) {
     return clamp(-0.04 - Math.max(0, 9 - lineup.count) * 0.025, -0.25, 0.02);
@@ -553,7 +658,42 @@ export function lineupWinEdge(homeLineup, awayLineup, homeInjuries, awayInjuries
   const awayQuality = toNumber(awayLineup?.qualityScore, 0);
   const homeAvailability = lineupRunAdjustment(homeLineup, homeInjuries);
   const awayAvailability = lineupRunAdjustment(awayLineup, awayInjuries);
-  return clamp(homeQuality - awayQuality + (homeAvailability - awayAvailability) * 0.45, -0.18, 0.18);
+
+  // Per-hitter handedness platoon OPS (vs opposing SP throwing hand), when
+  // captured pre-game. Defaults to 0 when absent so legacy snapshots replay bit-exact.
+  const homePlatoonAdj = Number.isFinite(Number(homeLineup?.platoonOps))
+    ? clamp((Number(homeLineup.platoonOps) - DEFAULTS.ops) / 0.18, -0.08, 0.08)
+    : 0;
+  const awayPlatoonAdj = Number.isFinite(Number(awayLineup?.platoonOps))
+    ? clamp((Number(awayLineup.platoonOps) - DEFAULTS.ops) / 0.18, -0.08, 0.08)
+    : 0;
+
+  // Top-of-order (slots 1-4) OPS impact + confirmed starting-9 readiness boost.
+  const homeTopAdj = Number.isFinite(Number(homeLineup?.topOrderOps))
+    ? clamp((Number(homeLineup.topOrderOps) - 0.75) * 0.22, -0.03, 0.035)
+    : 0;
+  const awayTopAdj = Number.isFinite(Number(awayLineup?.topOrderOps))
+    ? clamp((Number(awayLineup.topOrderOps) - 0.75) * 0.22, -0.03, 0.035)
+    : 0;
+
+  const homeConfirmedBoost =
+    homeLineup?.confirmed && (homeLineup?.count || 0) >= 9
+      ? 0.018 + Math.max(0, homeQuality) * 0.22
+      : 0;
+  const awayConfirmedBoost =
+    awayLineup?.confirmed && (awayLineup?.count || 0) >= 9
+      ? 0.018 + Math.max(0, awayQuality) * 0.22
+      : 0;
+
+  return clamp(
+    (homeQuality - awayQuality) * 1.15 +
+      (homePlatoonAdj - awayPlatoonAdj) * 0.65 +
+      (homeTopAdj - awayTopAdj) +
+      (homeConfirmedBoost - awayConfirmedBoost) +
+      (homeAvailability - awayAvailability) * 0.48,
+    -0.22,
+    0.22
+  );
 }
 
 export function bothLineupsConfirmed(lineups) {
@@ -564,20 +704,76 @@ export function bothLineupsConfirmed(lineups) {
   );
 }
 
-export function bullpenAvailabilityEdge(homeBullpen, awayBullpen) {
+export function bullpenAvailabilityEdge(homeBullpen, awayBullpen, options = {}) {
   const homeFatigue = toNumber(homeBullpen?.fatigueScore, 0);
   const awayFatigue = toNumber(awayBullpen?.fatigueScore, 0);
   const homeB2b = toNumber(homeBullpen?.backToBackRelievers, 0);
   const awayB2b = toNumber(awayBullpen?.backToBackRelievers, 0);
   const homeHighPitch = toNumber(homeBullpen?.highPitchRelievers, 0);
   const awayHighPitch = toNumber(awayBullpen?.highPitchRelievers, 0);
-  return clamp(
-    (awayFatigue - homeFatigue) * 0.075 +
-      (awayB2b - homeB2b) * 0.025 +
-      (awayHighPitch - homeHighPitch) * 0.018,
-    -0.18,
-    0.18
-  );
+
+  const fatiguePart =
+    (awayFatigue - homeFatigue) * 0.07 +
+    (awayB2b - homeB2b) * 0.024 +
+    (awayHighPitch - homeHighPitch) * 0.017;
+
+  // Bullpen run-prevention quality (14d shrunk relief ERA/WHIP/K-BB/HR9).
+  // Absent on legacy snapshots -> 0 so historical replays stay exact.
+  const hasReliefQuality =
+    Number.isFinite(Number(homeBullpen?.reliefEra)) &&
+    Number.isFinite(Number(awayBullpen?.reliefEra));
+  let qualityPart = 0;
+  if (hasReliefQuality) {
+    const homeEra = Number(homeBullpen.reliefEra);
+    const awayEra = Number(awayBullpen.reliefEra);
+    const homeWhip = toNumber(homeBullpen.reliefWhip, DEFAULTS.whip);
+    const awayWhip = toNumber(awayBullpen.reliefWhip, DEFAULTS.whip);
+    const homeKbb = toNumber(homeBullpen.reliefKbb, 2.3);
+    const awayKbb = toNumber(awayBullpen.reliefKbb, 2.3);
+    const homeHr9 = toNumber(homeBullpen.reliefHr9, DEFAULTS.hr9);
+    const awayHr9 = toNumber(awayBullpen.reliefHr9, DEFAULTS.hr9);
+    const workloadScale = options.highBullpenWorkload ? 1.25 : 1.0;
+    qualityPart =
+      clamp(
+        (awayEra - homeEra) * 0.048 +
+          (awayWhip - homeWhip) * 0.12 +
+          (homeKbb - awayKbb) * 0.016 +
+          (awayHr9 - homeHr9) * 0.028,
+        -0.12,
+        0.12
+      ) * workloadScale;
+  }
+
+  return clamp(fatiguePart + qualityPart, -0.2, 0.2);
+}
+
+/**
+ * Guard calibrated favored-side percentage against non-monotonic calibration-map
+ * artifacts (e.g. legacy 2026 [0.498->0.3889] dip that inverted 50.0-51.6%
+ * favorites into <50% underdogs, and 65-70% artificial overconfidence spikes).
+ * Preserves identity calibration (`calibrated === raw`) untouched.
+ */
+export function guardFavoredCalibrationPercent(rawFavoredPercent, calibratedFavoredPercent) {
+  const raw = Number(rawFavoredPercent);
+  const cal = Number(calibratedFavoredPercent);
+  if (!Number.isFinite(raw) || !Number.isFinite(cal)) return calibratedFavoredPercent;
+  // Identity calibration (or exact match): never alter.
+  if (Math.abs(cal - raw) < 1e-9) return cal;
+
+  // Never allow a calibration map to invert the model's favored side (< 50%).
+  if (raw > 50 && cal < 50.1) {
+    return Math.round(Math.max(50.1, 50 + Math.min(2.4, (raw - 50) * 0.65 + 0.1)) * 10) / 10;
+  }
+  if (raw === 50 && cal < 50) {
+    return 50;
+  }
+
+  // Tame artificial upward jumps above 64.0% when raw probability is moderate
+  // (fixes the 65-70% overconfidence bucket observed across 2026 outcomes).
+  if (cal > 64.0 && cal > raw + 3.0) {
+    return Math.round(Math.max(raw, 64.0 + (cal - 64.0) * 0.45) * 10) / 10;
+  }
+  return cal;
 }
 
 function parseWeatherNumber(value) {
@@ -769,6 +965,7 @@ export function predictGameMoneylineCore(input) {
     scheduleFatigueProfiles,
     headToHead,
     injuryProfiles,
+    rosterProfiles,
     lineupProfiles,
     modelMemory,
     rollingTeamStats,
@@ -833,6 +1030,8 @@ export function predictGameMoneylineCore(input) {
   const homePitcherRest = pitcherRestProfile(homeStarter, homePitcherRecent, gameDateYmd);
   const awayInjuries = get(injuryProfiles, awayTeam.id) || [];
   const homeInjuries = get(injuryProfiles, homeTeam.id) || [];
+  const awayRoster = get(rosterProfiles, awayTeam.id) || null;
+  const homeRoster = get(rosterProfiles, homeTeam.id) || null;
   const awayLineup = lineupProfiles?.away || null;
   const homeLineup = lineupProfiles?.home || null;
 
@@ -885,8 +1084,19 @@ export function predictGameMoneylineCore(input) {
     homePitcherRest,
     awayPitcherRest
   );
+  const openerDetected = homeOpenerSituation.isOpener || awayOpenerSituation.isOpener;
+  const homeRecentAvgIp =
+    toNumber(homePitcherRecent?.games, 0) > 0
+      ? toNumber(homePitcherRecent?.innings, 0) / Math.max(1, toNumber(homePitcherRecent?.games, 1))
+      : 5.5;
+  const awayRecentAvgIp =
+    toNumber(awayPitcherRecent?.games, 0) > 0
+      ? toNumber(awayPitcherRecent?.innings, 0) / Math.max(1, toNumber(awayPitcherRecent?.games, 1))
+      : 5.5;
+  const highBullpenWorkload = openerDetected || homeRecentAvgIp < 4.8 || awayRecentAvgIp < 4.8;
+
   const lineupEdge = lineupWinEdge(homeLineup, awayLineup, homeInjuries, awayInjuries);
-  const bullpenEdge = bullpenAvailabilityEdge(homeBullpen, awayBullpen);
+  const bullpenEdge = bullpenAvailabilityEdge(homeBullpen, awayBullpen, { highBullpenWorkload });
 
   const homeVsStarterHand = awayStarter?.pitchHand?.code === 'L'
     ? splitPct(homeStanding, 'left')
@@ -911,10 +1121,35 @@ export function predictGameMoneylineCore(input) {
   const homeAdvantageWeightMultiplier = weightMultiplier(evolutionControls, 'home_advantage');
 
   const venueId = game.venue?.id || 0;
-  const openerDetected = homeOpenerSituation.isOpener || awayOpenerSituation.isOpener;
   const sitWeights = situationalWeightAdjustment(parkFactorBaselines, venueId, openerDetected, gameDateYmd);
 
-  const offenseComponent = clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) * 0.32 * offenseWeightMultiplier * sitWeights.offense;
+  // Early-season / high-roster-turnover adjustment: when clubs have traded or
+  // rotated players and current-season team sample is small (< 35G), down-weight
+  // stale team-aggregate offense slightly and boost the actual starting 9 lineup!
+  const homeGamesSample = toNumber(
+    homeStanding?.gamesPlayed ?? homeProfile?.hitting?.gamesPlayed,
+    100
+  );
+  const awayGamesSample = toNumber(
+    awayStanding?.gamesPlayed ?? awayProfile?.hitting?.gamesPlayed,
+    100
+  );
+  const earlySeasonFactor = clamp((35 - Math.min(homeGamesSample, awayGamesSample)) / 35, 0, 1);
+  const homeTurnover = toNumber(homeLineup?.rosterTurnover ?? homeRoster?.turnoverScore, 0);
+  const awayTurnover = toNumber(awayLineup?.rosterTurnover ?? awayRoster?.turnoverScore, 0);
+  const avgTurnover = clamp((homeTurnover + awayTurnover) / 2, 0, 1);
+  const teamOffenseTurnoverScale = 1 - earlySeasonFactor * avgTurnover * 0.22;
+  const lineupTurnoverBoost = 1 + earlySeasonFactor * avgTurnover * 0.30;
+
+  const bothConfirmed = bothLineupsConfirmed({ away: awayLineup, home: homeLineup });
+  const lineupComponent = lineupEdge * (bothConfirmed ? 1.08 : 0.92) * lineupTurnoverBoost;
+
+  const offenseComponent =
+    clamp(offenseEdge + offenseFatigueEdge, -1.5, 1.5) *
+    0.32 *
+    offenseWeightMultiplier *
+    sitWeights.offense *
+    teamOffenseTurnoverScale;
   const preventionComponent = clamp(preventionEdge, -1.35, 1.35) * 0.26;
   const starterComponent = clamp(spEdge, -1.35, 1.35) * 0.42 * starterWeightMultiplier * sitWeights.starting_pitcher;
   const bullpenComponent = bullpenEdge * 0.35 * bullpenWeightMultiplier * sitWeights.bullpen;
@@ -928,7 +1163,7 @@ export function predictGameMoneylineCore(input) {
     offenseComponent +
     preventionComponent +
     starterComponent +
-    lineupEdge * (bothLineupsConfirmed({ away: awayLineup, home: homeLineup }) ? 0.95 : 0.85) +
+    lineupComponent +
     bullpenComponent +
     fatigueEdge * 0.7;
 
@@ -941,9 +1176,17 @@ export function predictGameMoneylineCore(input) {
   const recordDominated =
     Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
 
-  const bothConfirmed = bothLineupsConfirmed({ away: awayLineup, home: homeLineup });
+  const confirmationDirection =
+    Math.abs(lineupComponent) >= 0.03 && Math.sign(lineupComponent) === Math.sign(matchupEdge)
+      ? matchupEdge
+      : matchupEdge;
   const confirmationEdge = bothConfirmed
-    ? clamp(Math.sign(matchupEdge) * Math.min(Math.abs(matchupEdge) * 0.08, 0.04), -0.04, 0.04)
+    ? clamp(
+        Math.sign(confirmationDirection) *
+          Math.min(Math.abs(matchupEdge) * 0.09 + Math.abs(lineupComponent) * 0.12, 0.055),
+        -0.055,
+        0.055
+      )
     : 0;
 
   const edge =
@@ -961,22 +1204,29 @@ export function predictGameMoneylineCore(input) {
   const rawAwayProbability = 100 - rawHomeProbability;
 
   // Calibration is the FINAL probability transform. Calibrate the favored side
-  // and derive the other as its complement so both always sum to 100.
-  // `homeProbability`/`awayProbability` are the display-rounded values used by
-  // every surface. `homeProbabilityPrecise`/`awayProbabilityPrecise` keep the
-  // unrounded calibrated value so replay can compare against the exact
-  // production number without display-rounding noise.
+  // (guarded against winner-inversion dips and extreme map spikes) and derive
+  // the other as its complement so both always sum to 100.
   let homeProbability = rawHomeProbability;
   let awayProbability = rawAwayProbability;
   let homeProbabilityPrecise = rawHomeProbability;
   let awayProbabilityPrecise = rawAwayProbability;
   if (rawHomeProbability >= 50) {
-    homeProbability = clamp(calibratePercent(rawHomeProbability, 'moneyline'), 30, 70);
+    const calibratedRaw = calibratePercent(rawHomeProbability, 'moneyline');
+    homeProbability = clamp(
+      guardFavoredCalibrationPercent(rawHomeProbability, calibratedRaw),
+      30,
+      70
+    );
     awayProbability = 100 - homeProbability;
     homeProbabilityPrecise = homeProbability;
     awayProbabilityPrecise = awayProbability;
   } else {
-    awayProbability = clamp(calibratePercent(rawAwayProbability, 'moneyline'), 30, 70);
+    const calibratedRaw = calibratePercent(rawAwayProbability, 'moneyline');
+    awayProbability = clamp(
+      guardFavoredCalibrationPercent(rawAwayProbability, calibratedRaw),
+      30,
+      70
+    );
     homeProbability = 100 - awayProbability;
     awayProbabilityPrecise = awayProbability;
     homeProbabilityPrecise = homeProbability;
@@ -993,7 +1243,7 @@ export function predictGameMoneylineCore(input) {
     starterEdge: starterComponent,
     starterSeasonEdge: spSeasonEdge,
     starterRecentEdge: spRecentEdgeRaw,
-    lineupEdge: lineupEdge * (bothConfirmed ? 0.95 : 0.85),
+    lineupEdge: lineupComponent,
     confirmationEdge,
     bullpenEdge: bullpenComponent,
     fatigueEdge: fatigueEdge * 0.7,
@@ -1010,6 +1260,8 @@ export function predictGameMoneylineCore(input) {
     rollingPreventionWeight: preventionBlend.rollingWeight,
     rollingOffenseEdge: offenseBlend.rollingEdge,
     rollingPreventionEdge: preventionBlend.rollingEdge,
+    rosterTurnoverAvg: avgTurnover,
+    earlySeasonFactor,
     recordDominated,
     rawHomeProbability,
     rawAwayProbability,

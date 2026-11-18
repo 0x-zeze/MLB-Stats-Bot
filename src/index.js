@@ -306,6 +306,22 @@ async function sendBothLineupsPregameAlert(bot, chatId, game, awayLineup, homeLi
   return true;
 }
 
+async function handleModelLineupRefresh({ game, awayLineup, homeLineup, gamePk }) {
+  const dateYmd = dateForPrediction(game);
+  if (!dateYmd || !gamePk) return;
+  const modelMemory = config.modelMemory ? storage.getMemory() : {};
+  const predictions = await getMlbPredictions(dateYmd, modelMemory);
+  await attachOddsContext(predictions);
+  await attachMarketContext(predictions);
+  await attachNewsContext(config, predictions, storage);
+  applyNewsRiskVeto(predictions);
+  applyRollingClvGate(predictions);
+  await attachAgentAnalyses(predictions);
+  persistNewsFeatures(dateYmd, predictions);
+  storage.savePredictions(dateYmd, predictions);
+  console.log(`[LineupMonitor] Stored predictions refreshed with confirmed starting 9 for game ${gamePk} (${dateYmd})`);
+}
+
 async function attachOddsContext(predictions) {
   await attachCurrentOdds(predictions).catch((error) => {
     console.warn('Odds/value engine context unavailable:', error.message);
@@ -2589,7 +2605,8 @@ async function main() {
     bot,
     storage,
     config,
-    onBothLineupsConfirmed: ({ chatId, game, awayLineup, homeLineup }) => sendBothLineupsPregameAlert(bot, chatId, game, awayLineup, homeLineup)
+    onBothLineupsConfirmed: ({ chatId, game, awayLineup, homeLineup }) => sendBothLineupsPregameAlert(bot, chatId, game, awayLineup, homeLineup),
+    onModelLineupRefresh: handleModelLineupRefresh
   });
   startScheduler(bot);
 

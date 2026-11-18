@@ -1582,6 +1582,32 @@ export class Storage {
   }
 
   savePredictions(dateYmd, predictions) {
+    // Persist candidate feature snapshots (roster/trades, bullpen 14d quality,
+    // enriched starting lineup) for season-2 ML/backtest dataset completeness.
+    try {
+      const ts = prediction.asOfUtc || new Date().toISOString();
+      if (prediction.rosterContext && (prediction.rosterContext.away || prediction.rosterContext.home)) {
+        this.setFeatureSnapshot(key, 'roster_transactions', dateYmd, prediction.rosterContext, {
+          overwrite: true,
+          timestamp: ts
+        });
+      }
+      if (prediction.bullpen && (prediction.bullpen.away?.reliefEra != null || prediction.bullpen.home?.reliefEra != null)) {
+        this.setFeatureSnapshot(key, 'bullpen_quality', dateYmd, prediction.bullpen, {
+          overwrite: true,
+          timestamp: ts
+        });
+      }
+      if (prediction.lineups?.away?.confirmed && prediction.lineups?.home?.confirmed) {
+        this.setFeatureSnapshot(key, 'confirmed_lineup_profile', dateYmd, prediction.lineups, {
+          overwrite: false,
+          timestamp: ts
+        });
+      }
+    } catch {
+      // candidate snapshots are non-blocking
+    }
+
     const saveRows = this.db.transaction(() => {
       for (const prediction of predictions) {
         if (String(prediction.status).toLowerCase().includes('final')) continue;
@@ -1707,9 +1733,32 @@ export class Storage {
       const snapshot = this.getLineSnapshot(gamePk, market);
       return snapshot ? Number(snapshot.value) : NaN;
     };
-    const home = read('opening_home');
-    const away = read('opening_away');
+    let home = read('opening_home');
+    let away = read('opening_away');
     const total = read('opening_total');
+
+    // Fallback to earliest eligible paired market quote when line_snapshots
+    // was not yet seeded.
+    if (!plausibleMoneyline(home) && !plausibleMoneyline(away)) {
+      try {
+        const pair = this.db
+          .prepare(
+            `SELECT home_odds, away_odds, bookmaker, fetched_at_utc
+             FROM market_quote_pairs
+             WHERE game_pk = ? AND market = 'moneyline' AND is_eligible = 1
+             ORDER BY is_opening DESC, fetched_at_utc ASC
+             LIMIT 1`
+          )
+          .get(String(gamePk));
+        if (pair) {
+          home = Number(pair.home_odds);
+          away = Number(pair.away_odds);
+        }
+      } catch {
+        // table may not exist on minimal test fixtures
+      }
+    }
+
     if (!plausibleMoneyline(home) && !plausibleMoneyline(away)) return null;
     return {
       homeMoneyline: plausibleMoneyline(home) ? home : null,
@@ -1719,6 +1768,25 @@ export class Storage {
       source: 'line_snapshots',
       savedAt: new Date().toISOString()
     };
+  }
+
+  seedOpeningLineSnapshots(gamePk, odds = {}, timestamp = new Date().toISOString()) {
+    if (!gamePk || !odds) return;
+    const pk = String(gamePk);
+    const entries = [
+      ['opening_home', Number(odds.homeMoneyline)],
+      ['opening_away', Number(odds.awayMoneyline)],
+      ['opening_total', Number(odds.totalLine)]
+    ];
+    const stmt = this.db.prepare(
+      `INSERT OR IGNORE INTO line_snapshots (game_pk, market, value, timestamp)
+       VALUES (?, ?, ?, ?)`
+    );
+    for (const [market, val] of entries) {
+      if (Number.isFinite(val) && val !== 0) {
+        stmt.run(pk, market, val, timestamp);
+      }
+    }
   }
 
   setLineSnapshot(gamePk, market, value, timestamp = new Date().toISOString()) {
