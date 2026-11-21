@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -88,10 +90,31 @@ def dashboard_rate_limit_per_minute() -> int:
         return 120
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_MAX_RATE_LIMIT_KEYS = 2048
+
+
+def _validate_date_ymd(value: str | None) -> str | None:
+    if value is None or value == "":
+        return None
+    text = str(value).strip()
+    if not _DATE_RE.match(text):
+        raise HTTPException(status_code=422, detail="Invalid date format; expected YYYY-MM-DD")
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid calendar date") from None
+    return text
+
+
 def _client_rate_key(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    trust_proxy = os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}
+    forwarded = ""
+    if trust_proxy:
+        parts = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+        forwarded = parts[-1] if parts else ""
     host = forwarded or (request.client.host if request.client else "unknown")
-    return f"{host}:{request.url.path}"
+    return host
 
 
 def rate_limit_exceeded(key: str, now: float | None = None) -> bool:
@@ -102,6 +125,13 @@ def rate_limit_exceeded(key: str, now: float | None = None) -> bool:
 
     current = time.monotonic() if now is None else now
     window_start = current - 60.0
+    if len(_RATE_LIMIT_STATE) > _MAX_RATE_LIMIT_KEYS:
+        stale = [
+            k for k, timestamps in _RATE_LIMIT_STATE.items()
+            if not timestamps or timestamps[-1] < window_start
+        ]
+        for k in stale:
+            _RATE_LIMIT_STATE.pop(k, None)
     hits = [timestamp for timestamp in _RATE_LIMIT_STATE.get(key, []) if timestamp >= window_start]
     if len(hits) >= limit:
         _RATE_LIMIT_STATE[key] = hits
@@ -153,25 +183,10 @@ app = FastAPI(
     description="Prediction control-center API for MLB moneyline, quality, and performance.",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=csv_env("DASHBOARD_CORS_ORIGINS", ["http://localhost:5173", "http://127.0.0.1:5173"]),
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type"],
-)
-
-
-@app.get("/health")
-def health() -> dict[str, Any]:
-    """Health check used by local dev and VPS monitoring."""
-    return get_health_status()
-
-
 @app.middleware("http")
 async def dashboard_rate_limit(request: Request, call_next):
     """Apply a small in-memory rate limit to authenticated API routes."""
-    if not request.url.path.startswith("/api/"):
+    if request.method == "OPTIONS" or not request.url.path.startswith("/api/"):
         return await call_next(request)
 
     limit = dashboard_rate_limit_per_minute()
@@ -189,6 +204,24 @@ async def dashboard_rate_limit(request: Request, call_next):
     return await call_next(request)
 
 
+# Register CORSMiddleware LAST so it wraps dashboard_rate_limit (outermost),
+# ensuring CORS headers are attached even to 429 responses.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=csv_env("DASHBOARD_CORS_ORIGINS", ["http://localhost:5173", "http://127.0.0.1:5173"]),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["Content-Disposition"],
+)
+
+
+@app.get("/health")
+def health() -> dict[str, Any]:
+    """Health check used by local dev and VPS monitoring."""
+    return get_health_status()
+
+
 @app.get("/api/settings", dependencies=API_DEPENDENCIES)
 def api_settings() -> dict[str, Any]:
     """Return dashboard thresholds and toggles."""
@@ -198,13 +231,17 @@ def api_settings() -> dict[str, Any]:
 @app.put("/api/settings", dependencies=API_DEPENDENCIES)
 def api_update_settings(settings: dict[str, Any]) -> dict[str, Any]:
     """Update dashboard thresholds and toggles."""
-    return save_dashboard_settings(settings)
+    try:
+        return save_dashboard_settings(settings)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @app.get("/api/today", dependencies=API_DEPENDENCIES)
 def api_today(date: str | None = None, source: str = "live") -> dict[str, Any]:
     """Return today's games, predictions, market comparison, and quality reports."""
-    return get_today_dashboard(date_ymd=date, source=source)
+    validated_date = _validate_date_ymd(date)
+    return get_today_dashboard(date_ymd=validated_date, source=source)
 
 
 @app.get("/api/history", dependencies=API_DEPENDENCIES)
@@ -228,7 +265,8 @@ def api_ledger() -> dict[str, Any]:
 @app.get("/api/evolution", dependencies=API_DEPENDENCIES)
 def api_evolution(limit: int = 20) -> dict[str, Any]:
     """Return read-only evolution engine summaries for the dashboard."""
-    return get_evolution_dashboard(limit=limit)
+    bounded = max(1, min(int(limit), 200))
+    return get_evolution_dashboard(limit=bounded)
 
 
 @app.post("/api/evolve", dependencies=API_DEPENDENCIES)
@@ -261,7 +299,10 @@ def api_prediction_audit(prediction_id: str) -> dict[str, Any]:
 @app.post("/api/backtest", dependencies=API_DEPENDENCIES)
 def api_backtest(request: BacktestRequest) -> dict[str, Any]:
     """Run a local CSV backtest for the selected market and date range."""
-    return run_dashboard_backtest(request_payload(request))
+    try:
+        return run_dashboard_backtest(request_payload(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @app.get("/api/backtest/mock", dependencies=API_DEPENDENCIES)
@@ -281,7 +322,8 @@ def _csv_response(filename: str, text: str) -> Response:
 @app.get("/api/export/today", dependencies=API_DEPENDENCIES)
 def export_today(date: str | None = None, source: str = "live") -> Response:
     """Export today's prediction cards as CSV."""
-    payload = get_today_dashboard(date_ymd=date, source=source)
+    validated_date = _validate_date_ymd(date)
+    payload = get_today_dashboard(date_ymd=validated_date, source=source)
     return _csv_response("today_predictions.csv", rows_to_csv(payload.get("games", [])))
 
 
@@ -305,7 +347,10 @@ def export_performance() -> Response:
 @app.post("/api/export/backtest", dependencies=API_DEPENDENCIES)
 def export_backtest(request: BacktestRequest) -> Response:
     """Run and export a backtest result table."""
-    payload = run_dashboard_backtest(request_payload(request))
+    try:
+        payload = run_dashboard_backtest(request_payload(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     return _csv_response("backtest_results.csv", rows_to_csv(payload.get("rows", [])))
 
 
@@ -317,12 +362,15 @@ def export_backtest_default(
     market_type: str = "moneyline",
 ) -> Response:
     """Export a backtest for simple browser downloads."""
-    payload = run_dashboard_backtest(
-        {
-            "season": season,
-            "start_date": start_date,
-            "end_date": end_date,
-            "market_type": market_type,
-        }
-    )
+    try:
+        payload = run_dashboard_backtest(
+            {
+                "season": season,
+                "start_date": _validate_date_ymd(start_date),
+                "end_date": _validate_date_ymd(end_date),
+                "market_type": market_type,
+            }
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     return _csv_response("backtest_results.csv", rows_to_csv(payload.get("rows", [])))

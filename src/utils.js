@@ -6,8 +6,15 @@ export function sigmoid(value) {
   return 1 / (1 + Math.exp(-value));
 }
 
+export function isFiniteNumber(value) {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') {
+    return false;
+  }
+  return Number.isFinite(Number(value));
+}
+
 export function toNumber(value, fallback = 0) {
-  if (value === null || value === undefined || value === '') return fallback;
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return fallback;
   const normalized = String(value).replace('%', '').trim();
   const parsed = Number.parseFloat(normalized);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -57,7 +64,16 @@ export function splitIntoTelegramMessages(text, limit = 3900) {
 }
 
 export function isValidDateYmd(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return (
+    Number.isFinite(parsed.getTime()) &&
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
 }
 
 export function dateInTimezone(timeZone, date = new Date()) {

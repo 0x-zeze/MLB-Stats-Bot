@@ -171,10 +171,10 @@ def main() -> int:
 
     bm, nm = brier("model_prob")
     bf, nf = brier("fair_prob")
-    print(f"Brier model_prob: {bm:.4f} (n={nm})")
-    print(f"Brier fair_prob:  {bf:.4f} (n={nf})")
+    print(f"Brier model_prob: {f'{bm:.4f}' if bm is not None else 'n/a'} (n={nm})")
+    print(f"Brier fair_prob:  {f'{bf:.4f}' if bf is not None else 'n/a'} (n={nf})")
 
-    maps = json.loads(MAPS.read_text()) if MAPS.exists() else {}
+    maps = json.loads(MAPS.read_text(encoding="utf-8")) if MAPS.exists() else {}
     pts = maps.get("moneyline") or []
     print(f"\nCurrent map_points ({len(pts)}): {pts}")
     print("Interpolation check (raw -> calibrated):")
@@ -223,8 +223,19 @@ def main() -> int:
     print("\n=== PHASE 3.4 LLM A/B (agentShift pairs) ===")
     # Count agentShift in picks payload
     try:
+        pick_cols = {r["name"] for r in db.execute("PRAGMA table_info(picks)")}
+        order_col = "prediction_version DESC, rowid DESC" if "prediction_version" in pick_cols else "rowid DESC"
         pick_rows = db.execute(
-            "SELECT game_pk, payload FROM picks WHERE payload LIKE '%agentShift%'"
+            f"""
+            WITH ranked AS (
+                SELECT game_pk, payload,
+                       ROW_NUMBER() OVER (PARTITION BY game_pk ORDER BY {order_col}) AS rn
+                FROM picks
+            )
+            SELECT game_pk, payload
+            FROM ranked
+            WHERE rn = 1 AND payload LIKE '%agentShift%'
+            """
         ).fetchall()
         applied = 0
         rejected = 0

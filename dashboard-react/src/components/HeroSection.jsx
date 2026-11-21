@@ -1,14 +1,16 @@
 import { BarChart3, TrendingUp, ShieldAlert, Target, Gauge, Database } from 'lucide-react';
 import { Button } from './ui/button.jsx';
+import { isFiniteNum } from '../utils.js';
 
 export default function HeroSection({ onRefresh, onTabChange, summary = {}, loading }) {
+  const hasCounts = isFiniteNum(summary.bet_count) && isFiniteNum(summary.lean_count);
   const metrics = [
     { label: 'Games Today', value: summary.total_games ?? '-', icon: BarChart3, color: 'bg-accent-blue' },
     { label: 'Value Bets', value: summary.bet_count ?? '-', icon: TrendingUp, color: 'bg-accent-green' },
     { label: 'Lean Picks', value: summary.lean_count ?? '-', icon: Target, color: 'bg-accent-blue' },
     { label: 'No Bet', value: summary.no_bet_count ?? '-', icon: ShieldAlert, color: 'bg-accent-red' },
-    { label: 'Avg Quality', value: summary.average_data_quality ? `${Math.round(summary.average_data_quality)}` : '-', icon: Database, color: 'bg-accent-yellow' },
-    { label: 'Model Picks', value: summary.total_games ? (summary.bet_count + summary.lean_count) : '-', icon: Gauge, color: 'bg-accent-green' },
+    { label: 'Avg Quality', value: isFiniteNum(summary.average_data_quality) ? `${Math.round(Number(summary.average_data_quality))}` : '-', icon: Database, color: 'bg-accent-yellow' },
+    { label: 'Model Picks', value: summary.total_games && hasCounts ? (Number(summary.bet_count) + Number(summary.lean_count)) : '-', icon: Gauge, color: 'bg-accent-green' },
   ];
 
   return (

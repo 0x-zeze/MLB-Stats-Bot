@@ -194,8 +194,14 @@ def calibrate_banded_shrink(raw_probability: float) -> float:
     if not _BANDED_SHRINK_ENABLED:
         return raw_probability
     p = clamp(raw_probability, 0.05, 0.95)
-    for (lo, hi), factor in _BANDED_SHRINK_FACTORS.items():
-        lo_f, hi_f = float(lo), float(hi)
+    for band_key, factor in _BANDED_SHRINK_FACTORS.items():
+        if isinstance(band_key, tuple) and len(band_key) == 2:
+            lo_f, hi_f = float(band_key[0]), float(band_key[1])
+        else:
+            parts = str(band_key).split("-")
+            if len(parts) != 2:
+                continue
+            lo_f, hi_f = float(parts[0]), float(parts[1])
         if lo_f <= p < hi_f or (p >= 0.95 and hi_f >= 0.95):
             return clamp(0.5 + (p - 0.5) * factor, 0.05, 0.95)
     return p
@@ -595,13 +601,20 @@ def retrain_all_game(sqlite_path: str | Path | None = None) -> dict[str, Any]:
                 }
             rows = conn.execute(
                 """
-                SELECT mp.raw_home_probability, mp.calibrated_home_probability,
-                       mp.pick_side, mp.promotion_eligible,
+                WITH latest_mp AS (
+                    SELECT mp.game_pk, mp.raw_home_probability, mp.calibrated_home_probability,
+                           mp.pick_side, mp.promotion_eligible,
+                           ROW_NUMBER() OVER (PARTITION BY mp.game_pk ORDER BY mp.rowid DESC) AS rn
+                    FROM model_predictions mp
+                    WHERE mp.model_id = 'heuristic_v1'
+                      AND mp.promotion_eligible = 1
+                )
+                SELECT lm.raw_home_probability, lm.calibrated_home_probability,
+                       lm.pick_side, lm.promotion_eligible,
                        go.winner_team_id, go.home_team_id
-                FROM model_predictions mp
-                JOIN game_outcomes go ON go.game_pk = mp.game_pk
-                WHERE mp.model_id = 'heuristic_v1'
-                  AND mp.promotion_eligible = 1
+                FROM latest_mp lm
+                JOIN game_outcomes go ON go.game_pk = lm.game_pk
+                WHERE lm.rn = 1
                 """
             )
             for row in rows:

@@ -206,8 +206,8 @@ def expected_bullpen_quality_remaining(
     raw_quality = 0.5 + era_quality + availability_score - total_fatigue
     quality_score = clamp(raw_quality, 0.1, 0.95)
 
-    # Effective ERA: how many runs the bullpen is likely to allow
-    era_adjustment = (1.0 - quality_score) * 2.0  # scale quality to ERA modifier
+    # Effective ERA: center at quality_score == 0.5 (league average -> 0.0 adjustment)
+    era_adjustment = (0.5 - quality_score) * 2.0  # scale quality to ERA modifier
     effective_era = clamp(league_avg_bullpen_era + era_adjustment, 2.5, 7.0)
 
     # Fatigue penalty in expected runs

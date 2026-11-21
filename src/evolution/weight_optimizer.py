@@ -20,8 +20,10 @@ def _normalize(weights: dict[str, float]) -> dict[str, float]:
 
 
 def _validate_delta(current: dict[str, float], proposed: dict[str, float]) -> str | None:
-    for key, current_value in current.items():
-        if abs(safe_float(proposed.get(key), current_value) - safe_float(current_value)) > MAX_WEIGHT_DELTA:
+    for key in set(current.keys()) | set(proposed.keys()):
+        current_value = safe_float(current.get(key), 0.0)
+        proposed_value = safe_float(proposed.get(key), 0.0)
+        if abs(proposed_value - current_value) > MAX_WEIGHT_DELTA:
             return f"Weight change for {key} exceeds {MAX_WEIGHT_DELTA:.2f}."
     if max((safe_float(value) for value in proposed.values()), default=0.0) > MAX_FACTOR_WEIGHT:
         return f"One factor exceeds dominance cap {MAX_FACTOR_WEIGHT:.2f}."
@@ -36,7 +38,8 @@ def _version_id(payload: dict[str, Any]) -> str:
 def optimize_weights_safely(backtest_data: dict[str, Any]) -> dict[str, Any]:
     store = read_json("weight_versions")
     active_version = store.get("active_version", "weights-v1.0")
-    active = next((item for item in store.get("versions", []) if item.get("version") == active_version), store.get("versions", [{}])[0])
+    versions = store.get("versions") or []
+    active = next((item for item in versions if item.get("version") == active_version), versions[0] if versions else {})
     active_weights = active.get("weights", {})
     proposed_weights = backtest_data.get("proposed_weights") or {}
     market = backtest_data.get("market", "moneyline")

@@ -92,14 +92,14 @@ export function loadChallengerArtifact(modelId, artifactsDir = MODEL_ARTIFACTS_D
     } catch {
       continue;
     }
-    // The artifact file is the full training report; the deployable artifact
-    // lives under its `artifact` key. Accept either form.
-    const inner = parsed.artifact && typeof parsed.artifact === 'object' ? parsed.artifact : parsed;
-    if (inner.model_id !== modelId) continue;
-    if (inner.status === 'insufficient_data' || inner.artifact == null) {
-      // Report form with no usable artifact.
-      if (parsed.status === 'insufficient_data' || parsed.artifact == null) continue;
+    // The artifact file may be a training report ({ status, artifact }) or a
+    // bare deployable artifact. Accept either form.
+    const isReport = parsed && typeof parsed === 'object' && Object.prototype.hasOwnProperty.call(parsed, 'artifact');
+    if (isReport && (parsed.status === 'insufficient_data' || !parsed.artifact || typeof parsed.artifact !== 'object')) {
+      continue;
     }
+    const inner = isReport ? parsed.artifact : parsed;
+    if (!inner || inner.model_id !== modelId) continue;
     const verify = verifyArtifactForModel(modelId, inner);
     if (!verify.ok) continue;
     // Newest by mtime — prefer the most recently trained compatible artifact.

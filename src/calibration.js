@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { clamp } from './utils.js';
+import { clamp, isFiniteNumber } from './utils.js';
 import {
   CONTROL_FEATURE_SCHEMA_VERSION,
   HEURISTIC_V1_IMPL_VERSION,
@@ -255,7 +255,7 @@ function normalizedHashInput(value = {}) {
       ? validation.mapping
       : null,
     shrinkFactor:
-      Number.isFinite(Number(value.shrinkFactor))
+      isFiniteNumber(value.shrinkFactor)
         ? Number(value.shrinkFactor)
         : null,
     modelId: value.modelId || null,
@@ -266,7 +266,7 @@ function normalizedHashInput(value = {}) {
     population: value.population || null,
     trainingCutoff: value.trainingCutoff || null,
     method: value.method || null,
-    samples: Number.isFinite(Number(value.samples))
+    samples: isFiniteNumber(value.samples)
       ? Number(value.samples)
       : null,
     datasetHash: value.datasetHash || null
@@ -323,10 +323,11 @@ function usesLowSampleShrinkage(
   ) {
     return false;
   }
+  if (!isFiniteNumber(marketMeta.samples)) {
+    return false;
+  }
   const samples = Number(marketMeta.samples);
-  return (
-    Number.isFinite(samples) && samples < threshold
-  );
+  return samples < threshold;
 }
 
 function calibrationArtifactCacheKey(
@@ -739,8 +740,8 @@ export function calibratePercent(
   rawPercent,
   market = 'moneyline'
 ) {
+  if (!isFiniteNumber(rawPercent)) return rawPercent;
   const raw = Number(rawPercent);
-  if (!Number.isFinite(raw)) return rawPercent;
   const side = raw > 1 ? raw / 100 : raw;
   const calibrated = calibrateProbability(side, market);
   return Math.round(calibrated * 1000) / 10;
@@ -764,8 +765,8 @@ export function calibrateProbabilityWithArtifact(
   rawProbability,
   artifact
 ) {
+  if (!isFiniteNumber(rawProbability)) return rawProbability;
   const raw = Number(rawProbability);
-  if (!Number.isFinite(raw)) return rawProbability;
   const mode = String(artifact?.mode || 'identity');
   const validation = validateCalibrationMapping(
     artifact?.mapping
@@ -773,9 +774,7 @@ export function calibrateProbabilityWithArtifact(
   const mapping = validation.valid
     ? validation.mapping
     : null;
-  const shrinkFactor = Number.isFinite(
-    Number(artifact?.shrinkFactor)
-  )
+  const shrinkFactor = isFiniteNumber(artifact?.shrinkFactor)
     ? Number(artifact.shrinkFactor)
     : 0.5;
   const shrink = (p) =>
@@ -801,8 +800,8 @@ export function calibratePercentWithArtifact(
   rawPercent,
   artifact
 ) {
+  if (!isFiniteNumber(rawPercent)) return rawPercent;
   const raw = Number(rawPercent);
-  if (!Number.isFinite(raw)) return rawPercent;
   const side = raw > 1 ? raw / 100 : raw;
   return Math.round(
     calibrateProbabilityWithArtifact(side, artifact) *

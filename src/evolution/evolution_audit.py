@@ -155,12 +155,19 @@ def _probability_bucket(probability: float | None) -> str:
     return "probability:70+"
 
 
+def _matches_reason_token(normalized: str, token: str) -> bool:
+    escaped = re.escape(token.strip())
+    if not escaped:
+        return False
+    return bool(re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", normalized))
+
+
 def _classify_reason(text: Any) -> str | None:
-    normalized = str(text or "").lower()
-    if not normalized:
+    normalized = str(text or "").strip().lower()
+    if not normalized or normalized == "general":
         return None
     for label, tokens in REASON_PATTERNS.items():
-        if any(token in normalized for token in tokens):
+        if any(_matches_reason_token(normalized, token) for token in tokens):
             return label
     return "other"
 
@@ -397,7 +404,13 @@ def reason_quality(rows: list[dict[str, Any]], losses: list[dict[str, Any]], min
                 grouped[tag]["weighted_losses"] += weight
 
     for loss in losses:
-        tag = _classify_reason(loss.get("affected_factor") or loss.get("loss_type"))
+        loss_type = str(loss.get("loss_type") or "").strip().lower()
+        if loss_type in NON_ACTIONABLE_LOSS_TYPES:
+            continue
+        raw_factor = loss.get("affected_factor")
+        if str(raw_factor or "").strip().lower() == "general":
+            raw_factor = None
+        tag = _classify_reason(raw_factor or loss_type)
         if tag:
             grouped[tag]["loss_mentions"] += 1
 
@@ -766,7 +779,8 @@ def _release_calibrated_confidence_caps(
         )
         if not bucket_label:
             # Fallback for older controls that predate parameters.probability_bucket.
-            bucket_label = rule_key.replace("audit:confidence_cap:", "").replace("plus", "+").replace("-", ":", 1)
+            bucket_label = re.sub(r"^audit:(?:[a-z_]+:)?confidence_cap:", "", rule_key)
+            bucket_label = bucket_label.replace("plus", "+").replace("-", ":", 1)
             if not bucket_label.startswith("probability:"):
                 bucket_label = bucket_label.replace("probability", "probability:", 1) if "probability" in bucket_label else bucket_label
 
@@ -829,12 +843,12 @@ def _rate_limit_guardrail_apply(
         last_sample = last_sizes.get(rule_key, 0)
         evidence = candidate.get("evidence") or {}
         evidence_sample = int(evidence.get("decided") or evidence.get("sample_size") or evidence.get("count") or 0)
-        # New pattern with strong evidence: allow even without increment gate
-        if last_sample == 0 and evidence_sample >= SAFE_APPLY_MIN_SAMPLE * 2:
-            eligible.append(candidate)
-            continue
-        # Existing pattern: require meaningful sample increment
-        if current_sample - last_sample >= SAFE_APPLY_MIN_SAMPLE_INCREMENT or last_sample == 0:
+        if last_sample == 0:
+            if evidence_sample >= SAFE_APPLY_MIN_SAMPLE:
+                eligible.append(candidate)
+            else:
+                skipped_increment.append(rule_key)
+        elif current_sample - last_sample >= SAFE_APPLY_MIN_SAMPLE_INCREMENT:
             eligible.append(candidate)
         else:
             skipped_increment.append(rule_key)

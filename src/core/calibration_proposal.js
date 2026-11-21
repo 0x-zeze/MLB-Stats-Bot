@@ -32,6 +32,7 @@ import {
   HEURISTIC_V1_MODEL_ID,
   CONTROL_FEATURE_SCHEMA_VERSION
 } from './model_ids.js';
+import { isFiniteNumber } from '../utils.js';
 
 export const OOF_CALIBRATION_ARTIFACT_MANIFEST_VERSION =
   'oof-calibration-artifact-v1';
@@ -49,7 +50,7 @@ const EPS = 1e-6;
  * Verify an OOF calibration proposal artifact is compatible + untampered.
  * Returns { ok, reasons }.
  */
-export function verifyOofCalibrationArtifact(artifact) {
+export function verifyOofCalibrationArtifact(artifact, expectedModelId = HEURISTIC_V1_MODEL_ID) {
   const reasons = [];
   if (!artifact || typeof artifact !== 'object') {
     return { ok: false, reasons: ['artifact_missing'] };
@@ -59,7 +60,7 @@ export function verifyOofCalibrationArtifact(artifact) {
       `manifest_version_mismatch (got ${artifact.artifact_manifest_version})`
     );
   }
-  if (artifact.model_id !== HEURISTIC_V1_MODEL_ID) {
+  if (expectedModelId && artifact.model_id !== expectedModelId) {
     reasons.push(`model_id_mismatch (got ${artifact.model_id})`);
   }
   const method = artifact.method;
@@ -68,7 +69,7 @@ export function verifyOofCalibrationArtifact(artifact) {
       `method_not_deployable (got ${method}; only ${OOF_CALIBRATION_DEPLOYABLE_METHODS.join('/')} have JS parity)`
     );
   }
-  if (typeof artifact.sample_count !== 'number' || artifact.sample_count < 0) {
+  if (typeof artifact.sample_count !== 'number' || !Number.isFinite(artifact.sample_count) || artifact.sample_count < 0) {
     reasons.push('sample_count_missing_or_nonnumeric');
   }
   if (!artifact.dataset_hash) {
@@ -96,8 +97,10 @@ export function verifyOofCalibrationArtifact(artifact) {
       if (!v.valid) reasons.push(`isotonic_map_invalid:${v.reason}`);
     }
   }
-  // Re-derive artifact hash (tamper reject).
-  if (artifact.artifact_hash) {
+  // Re-derive artifact hash (tamper reject; required on verified artifacts).
+  if (!artifact.artifact_hash || typeof artifact.artifact_hash !== 'string') {
+    reasons.push('artifact_hash_missing');
+  } else {
     const recomputed = hashArtifactContent(artifact);
     if (recomputed !== artifact.artifact_hash) {
       reasons.push('artifact_hash_mismatch');
@@ -111,8 +114,8 @@ export function verifyOofCalibrationArtifact(artifact) {
  * Frozen-replay: all params come from the artifact, nothing recomputed live.
  */
 export function applyOofCalibration(artifact, rawProbability) {
+  if (!isFiniteNumber(rawProbability)) return rawProbability;
   const raw = Number(rawProbability);
-  if (!Number.isFinite(raw)) return rawProbability;
   const method = artifact.method;
   const params = artifact.params;
   if (method === 'identity') {
@@ -164,7 +167,7 @@ export function loadOofCalibrationArtifact(
       continue;
     // Skip report-form files that carry no usable artifact (insufficient_data).
     if (parsed.status === 'insufficient_data') continue;
-    const verify = verifyOofCalibrationArtifact(inner);
+    const verify = verifyOofCalibrationArtifact(inner, modelId);
     if (!verify.ok) continue;
     const mtime = fileMtime(path);
     if (!best || mtime > best.mtime) {
@@ -257,6 +260,9 @@ export function hashArtifactContent(artifact) {
 }
 
 function stableStringify(value) {
+  if (value === undefined) {
+    return 'null';
+  }
   if (typeof value === 'number') {
     return Number.isInteger(value) ? String(value) : JSON.stringify(value);
   }
@@ -267,9 +273,11 @@ function stableStringify(value) {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(',')}]`;
+    return `[${value.map((item) => (item === undefined ? 'null' : stableStringify(item))).join(',')}]`;
   }
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value)
+    .filter((k) => value[k] !== undefined)
+    .sort();
   return `{${keys
     .map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`)
     .join(',')}}`;

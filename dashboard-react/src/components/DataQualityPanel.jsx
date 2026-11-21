@@ -33,7 +33,7 @@ function CheckRow({ label, value }) {
 
 export default function DataQualityPanel({ quality }) {
   const score = Number(quality?.score) || 0;
-  const issues = [...(quality?.issues || []), ...(quality?.stale_fields || [])];
+  const issues = [...new Set([...(quality?.issues || []), ...(quality?.stale_fields || [])])];
   return (
     <div className="rounded-lg border-2 border-ink bg-paper p-4 shadow-neo-sm">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

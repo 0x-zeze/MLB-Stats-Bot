@@ -514,30 +514,33 @@ def _compute_metrics_from_outcomes(outcomes: list[dict[str, Any]]) -> dict[str, 
     if not outcomes:
         return {"sample_size": 0, "roi": 0.0, "brier_score": 1.0, "log_loss": 1.0, "accuracy": 0.0, "average_clv": 0.0, "max_drawdown": 0.0}
 
-    wins = sum(1 for o in outcomes if o.get("result") == "win")
-    total = len(outcomes)
-    accuracy = wins / total if total else 0.0
+    decided = [o for o in outcomes if str(o.get("result") or "").lower() in ("win", "loss")]
+    wins = sum(1 for o in decided if str(o.get("result") or "").lower() == "win")
+    decided_total = len(decided)
+    accuracy = wins / decided_total if decided_total else 0.0
 
-    profit_losses = [safe_float(o.get("profit_loss"), 0.0) for o in outcomes]
-    roi = sum(profit_losses) / total if total else 0.0
+    profit_losses = [safe_float(o.get("profit_loss"), 0.0) for o in decided]
+    roi = sum(profit_losses) / decided_total if decided_total else 0.0
 
-    brier_values = [safe_float(o.get("brier_score"), None) for o in outcomes]
-    brier_valid = [b for b in brier_values if b is not None]
+    brier_values = [safe_float(o.get("brier_score"), None) for o in decided]
+    brier_valid = [max(0.0, b) for b in brier_values if b is not None]
     brier_score = sum(brier_valid) / len(brier_valid) if brier_valid else 1.0
 
     import math
     log_loss_values = []
-    for o in outcomes:
+    for o in decided:
         bs = safe_float(o.get("brier_score"), None)
         if bs is not None:
-            prob = 1.0 - math.sqrt(bs) if o.get("result") == "win" else math.sqrt(bs)
+            bs_clamped = max(0.0, min(1.0, bs))
+            is_win = str(o.get("result") or "").lower() == "win"
+            prob = 1.0 - math.sqrt(bs_clamped) if is_win else math.sqrt(bs_clamped)
             prob = max(1e-15, min(1 - 1e-15, prob))
-            outcome_val = 1.0 if o.get("result") == "win" else 0.0
+            outcome_val = 1.0 if is_win else 0.0
             ll = -(outcome_val * math.log(prob) + (1 - outcome_val) * math.log(1 - prob))
             log_loss_values.append(ll)
     log_loss = sum(log_loss_values) / len(log_loss_values) if log_loss_values else 1.0
 
-    clv_values = [safe_float(o.get("clv"), None) for o in outcomes]
+    clv_values = [safe_float(o.get("clv"), None) for o in decided]
     clv_valid = [c for c in clv_values if c is not None]
     average_clv = sum(clv_valid) / len(clv_valid) if clv_valid else 0.0
 
@@ -551,7 +554,7 @@ def _compute_metrics_from_outcomes(outcomes: list[dict[str, Any]]) -> dict[str, 
         max_drawdown = max(max_drawdown, drawdown)
 
     return {
-        "sample_size": total,
+        "sample_size": decided_total,
         "roi": roi,
         "brier_score": brier_score,
         "log_loss": log_loss,
@@ -582,9 +585,9 @@ def _write_candidates(candidates: list[dict[str, Any]]) -> None:
 
 
 def backtest_candidates() -> dict[str, Any]:
-    """Run backtest on pending candidates and pass through promotion gate."""
+    """Run backtest on pending/deferred candidates without auto-promoting unsimulated rules."""
     candidates = read_jsonl("rule_candidates")
-    pending = [c for c in candidates if c.get("backtest_status") == "pending"]
+    pending = [c for c in candidates if c.get("backtest_status") in ("pending", "insufficient_data")]
     outcomes = [o for o in read_prediction_outcomes() if str(o.get("market") or "moneyline").lower() in ACTIVE_MARKETS]
 
     if not outcomes or not pending:
@@ -594,7 +597,7 @@ def backtest_candidates() -> dict[str, Any]:
     batch = pending[:10]
 
     for candidate in batch:
-        created_at = str(candidate.get("created_at") or candidate.get("date") or "")
+        created_at = str(candidate.get("created_at") or candidate.get("date") or "")[:10]
         if not created_at:
             candidate["backtest_status"] = "skipped"
             candidate["promotion_status"] = "skipped"
@@ -606,8 +609,8 @@ def backtest_candidates() -> dict[str, Any]:
             candidate["promotion_status"] = "skipped"
             continue
 
-        before = [o for o in outcomes if str(o.get("date", "")) < created_at and str(o.get("market") or "moneyline").lower() == candidate_market]
-        after = [o for o in outcomes if str(o.get("date", "")) >= created_at and str(o.get("market") or "moneyline").lower() == candidate_market]
+        before = [o for o in outcomes if str(o.get("date", ""))[:10] < created_at and str(o.get("market") or "moneyline").lower() == candidate_market]
+        after = [o for o in outcomes if str(o.get("date", ""))[:10] >= created_at and str(o.get("market") or "moneyline").lower() == candidate_market]
 
         segment = candidate.get("segment")
         if segment:
@@ -622,12 +625,18 @@ def backtest_candidates() -> dict[str, Any]:
         before_metrics = _compute_metrics_from_outcomes(before)
         after_metrics = _compute_metrics_from_outcomes(after)
 
+        # Evaluate gate without auto-persisting into approved_rules.json:
+        # before/after outcomes are calendar splits of baseline model performance,
+        # not counterfactual rule simulations. Explicit human promotion is required.
         gate_result = run_promotion_gate(
             candidate, before_metrics, after_metrics,
-            min_sample_size=20, persist=True,
+            min_sample_size=20, persist=False,
         )
         candidate["backtest_status"] = "completed"
-        candidate["promotion_status"] = gate_result["status"]
+        candidate["promotion_status"] = (
+            "ready_for_review" if gate_result["status"] == "approved" else gate_result["status"]
+        )
+        candidate["backtest_gate_result"] = gate_result
         results.append(gate_result)
 
     _write_candidates(candidates)
@@ -649,30 +658,51 @@ def promote_approved() -> dict[str, Any]:
         return {"promoted": 0, "message": "No approved candidates to promote."}
 
     weight_versions = read_json("weight_versions")
+    versions = weight_versions.setdefault("versions", [])
+    current_version = str(weight_versions.get("active_version") or "weights-v1.0")
+    active_entry = next(
+        (item for item in versions if item.get("version") == current_version),
+        versions[-1] if versions else {},
+    )
+    active_weights = dict(active_entry.get("weights") or {})
+    moneyline_weights = dict(active_weights.get("moneyline") or {})
+    weight_changed = False
     promoted = []
 
     for candidate in approved:
         candidate_type = str(candidate.get("type", "")).lower()
 
         if candidate_type in ("weight_update", "weight_change"):
-            current_weights = weight_versions.get("current_weights", {})
             target = candidate.get("target_weight") or candidate.get("weight_name")
             new_value = safe_float(candidate.get("new_value") or candidate.get("proposed_value"), None)
             if target and new_value is not None:
-                current_weights[target] = new_value
-                weight_versions["current_weights"] = current_weights
+                moneyline_weights[target] = new_value
+                weight_changed = True
 
         candidate["promotion_status"] = "promoted"
         promoted.append(candidate.get("candidate_id"))
 
-    if promoted:
-        current_version = str(weight_versions.get("active_version", "weights-v1.0"))
+    if weight_changed:
         try:
             prefix, version = current_version.rsplit("v", 1)
             major, minor = version.split(".", 1)
-            weight_versions["active_version"] = f"{prefix}v{major}.{int(minor) + 1}"
+            next_version = f"{prefix}v{major}.{int(minor) + 1}"
         except ValueError:
-            weight_versions["active_version"] = f"{current_version}-promoted"
+            next_version = f"{current_version}-promoted"
+        for item in versions:
+            if item.get("status") == "active":
+                item["status"] = "archived"
+        versions.append({
+            "version": next_version,
+            "date_created": date.today().isoformat(),
+            "reason": f"Promoted approved candidates: {', '.join(str(cid) for cid in promoted)}",
+            "previous_version": current_version,
+            "status": "active",
+            "weights": {**active_weights, "moneyline": moneyline_weights},
+            "rollback_supported": True,
+            "production_update_allowed": True,
+        })
+        weight_versions["active_version"] = next_version
         write_json("weight_versions", weight_versions)
 
     _write_candidates(candidates)

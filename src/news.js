@@ -122,7 +122,8 @@ function parseFeedXml(xml, source, options = {}) {
       item?.pubDate || item?.published || item?.updated || item?.['dc:date'] || item?.date
     );
     const availableAt = toUtcIso(item?.availableAt || item?.['dc:available'] || item?.['news:availableAt']);
-    const author = cap(item?.author?.name ?? item?.author ?? item?.['dc:creator'], 120) || null;
+    const rawAuthor = Array.isArray(item?.author) ? item.author[0] : item?.author;
+    const author = cap(rawAuthor?.name ?? rawAuthor ?? item?.['dc:creator'], 120) || null;
     return {
       id: articleId(url, title, publishedAt),
       source: String(source?.source || 'unknown'),
@@ -170,7 +171,12 @@ function teamTokens(team) {
   const words = name.split(/\s+/).filter(Boolean);
   const nickname = words.at(-1) || '';
   const compoundNickname = nickname.length <= 3 ? words.slice(-2).join(' ') : '';
-  return [...new Set([name, nickname, compoundNickname, abbreviation].filter(Boolean))];
+  // Avoid ambiguous bare "sox" (shared by Boston Red Sox & Chicago White Sox)
+  // and common English/stat words ("min", "sea") as bare abbreviations.
+  const safeNickname = nickname === 'sox' ? '' : nickname;
+  const noisyAbbr = new Set(['min', 'sea']);
+  const safeAbbr = noisyAbbr.has(abbreviation) ? '' : abbreviation;
+  return [...new Set([name, safeNickname, compoundNickname, safeAbbr].filter(Boolean))];
 }
 
 function containsToken(text, token) {

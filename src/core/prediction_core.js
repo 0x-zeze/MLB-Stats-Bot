@@ -27,7 +27,7 @@
  *   market/edge/stake logic must consume only the calibrated value.
  */
 
-import { clamp, sigmoid, toNumber } from '../utils.js';
+import { clamp, isFiniteNumber, sigmoid, toNumber } from '../utils.js';
 
 export const PREDICTION_CORE_MODEL_VERSION = 'moneyline-core-v1.0';
 
@@ -305,13 +305,16 @@ function pitcherStartRatio(stats) {
   return clamp(gamesStarted / appearances, 0, 1);
 }
 
+const NON_PITCHER_OPENER_RE = /\b(home|season|series|road|spring|exhibition|day)\s+opener\b/i;
+
 export function detectOpenerSituation(game, side, pitcher, stats) {
   const teamEntry = game?.teams?.[side] || {};
   const noteText = [
-    ...collectOpenerNoteText(game),
     ...collectOpenerNoteText(teamEntry),
     ...collectOpenerNoteText(pitcher)
-  ].join(' ');
+  ]
+    .filter((line) => !NON_PITCHER_OPENER_RE.test(line))
+    .join(' ');
   const noteMatch = OPENER_KEYWORD_RE.test(noteText);
   const startRatio = pitcherStartRatio(stats);
   const appearances = toNumber(stats?.gamesPitched ?? stats?.appearances ?? stats?.games, 0);
@@ -468,7 +471,7 @@ export function blendedTeamPreventionEdge(seasonHome, seasonAway, rollingHome, r
   const rollingEdge =
     (statEra(awayPitch) - statEra(homePitch)) / 1.8 +
     (statWhip(awayPitch) - statWhip(homePitch)) / 0.55 +
-    (toNumber(homePitch.homeRunsPer9, DEFAULTS.hr9) - toNumber(awayPitch.homeRunsPer9, DEFAULTS.hr9)) / 1.2 +
+    (toNumber(awayPitch.homeRunsPer9, DEFAULTS.hr9) - toNumber(homePitch.homeRunsPer9, DEFAULTS.hr9)) / 1.2 +
     (toNumber(homePitch.strikeoutWalkRatio, 2.2) - toNumber(awayPitch.strikeoutWalkRatio, 2.2)) / 4.0;
   const sample = Math.min(homeGames, awayGames);
   const rollingWeight = clamp((sample - 7) / 12, 0, 0.4);
@@ -639,7 +642,7 @@ function lineupRunAdjustment(lineup, injuries) {
     // (e.g. healthy stars or newly acquired trade/free-agent replacements),
     // legacy 40-man IL entries drag less on today's actual run production.
     const effectiveInjuries = quality > 0.02 ? hitterInjuries * 0.72 : hitterInjuries;
-    const leadoffBonus = Number.isFinite(Number(lineup.leadoffObp))
+    const leadoffBonus = isFiniteNumber(lineup.leadoffObp)
       ? clamp((Number(lineup.leadoffObp) - 0.325) * 0.35, -0.02, 0.03)
       : 0;
     const newAdditions = Math.max(0, toNumber(lineup.acquisitionsInLineup, 0));
@@ -661,18 +664,18 @@ export function lineupWinEdge(homeLineup, awayLineup, homeInjuries, awayInjuries
 
   // Per-hitter handedness platoon OPS (vs opposing SP throwing hand), when
   // captured pre-game. Defaults to 0 when absent so legacy snapshots replay bit-exact.
-  const homePlatoonAdj = Number.isFinite(Number(homeLineup?.platoonOps))
+  const homePlatoonAdj = isFiniteNumber(homeLineup?.platoonOps)
     ? clamp((Number(homeLineup.platoonOps) - DEFAULTS.ops) / 0.18, -0.08, 0.08)
     : 0;
-  const awayPlatoonAdj = Number.isFinite(Number(awayLineup?.platoonOps))
+  const awayPlatoonAdj = isFiniteNumber(awayLineup?.platoonOps)
     ? clamp((Number(awayLineup.platoonOps) - DEFAULTS.ops) / 0.18, -0.08, 0.08)
     : 0;
 
   // Top-of-order (slots 1-4) OPS impact + confirmed starting-9 readiness boost.
-  const homeTopAdj = Number.isFinite(Number(homeLineup?.topOrderOps))
+  const homeTopAdj = isFiniteNumber(homeLineup?.topOrderOps)
     ? clamp((Number(homeLineup.topOrderOps) - 0.75) * 0.22, -0.03, 0.035)
     : 0;
-  const awayTopAdj = Number.isFinite(Number(awayLineup?.topOrderOps))
+  const awayTopAdj = isFiniteNumber(awayLineup?.topOrderOps)
     ? clamp((Number(awayLineup.topOrderOps) - 0.75) * 0.22, -0.03, 0.035)
     : 0;
 
@@ -720,8 +723,8 @@ export function bullpenAvailabilityEdge(homeBullpen, awayBullpen, options = {}) 
   // Bullpen run-prevention quality (14d shrunk relief ERA/WHIP/K-BB/HR9).
   // Absent on legacy snapshots -> 0 so historical replays stay exact.
   const hasReliefQuality =
-    Number.isFinite(Number(homeBullpen?.reliefEra)) &&
-    Number.isFinite(Number(awayBullpen?.reliefEra));
+    isFiniteNumber(homeBullpen?.reliefEra) &&
+    isFiniteNumber(awayBullpen?.reliefEra);
   let qualityPart = 0;
   if (hasReliefQuality) {
     const homeEra = Number(homeBullpen.reliefEra);
@@ -882,8 +885,10 @@ export function buildMatchupMemoryContext(modelMemory, awayTeam, homeTeam) {
 // situational weights (pure; park factors injected)
 // ---------------------------------------------------------------------------
 
-function situationalWeightAdjustment(parkFactorBaselines, venueId, openerDetected, gameDateYmd) {
-  const parkInfo = parkFactorBaselines?.get ? parkFactorBaselines.get(venueId) : null;
+function situationalWeightAdjustment(parkFactorBaselines, venueId, openerDetected, gameDateYmd, homeTeamId = 0) {
+  const parkInfo = parkFactorBaselines?.get
+    ? (parkFactorBaselines.get(venueId) || parkFactorBaselines.get(homeTeamId))
+    : null;
   const runFactor = parkInfo ? parkInfo.runFactor : 1.0;
   const parkType = runFactor >= 1.05 ? 'hitter_park' : runFactor <= 0.95 ? 'pitcher_park' : 'neutral';
   const month = gameDateYmd ? parseInt(String(gameDateYmd).slice(5, 7), 10) : 6;
@@ -1121,7 +1126,13 @@ export function predictGameMoneylineCore(input) {
   const homeAdvantageWeightMultiplier = weightMultiplier(evolutionControls, 'home_advantage');
 
   const venueId = game.venue?.id || 0;
-  const sitWeights = situationalWeightAdjustment(parkFactorBaselines, venueId, openerDetected, gameDateYmd);
+  const sitWeights = situationalWeightAdjustment(
+    parkFactorBaselines,
+    venueId,
+    openerDetected,
+    gameDateYmd,
+    homeTeam.id || 0
+  );
 
   // Early-season / high-roster-turnover adjustment: when clubs have traded or
   // rotated players and current-season team sample is small (< 35G), down-weight
@@ -1176,14 +1187,13 @@ export function predictGameMoneylineCore(input) {
   const recordDominated =
     Math.abs(recordContextEdge) > Math.abs(matchupEdge) * 1.25 && Math.abs(matchupEdge) < 0.18;
 
-  const confirmationDirection =
-    Math.abs(lineupComponent) >= 0.03 && Math.sign(lineupComponent) === Math.sign(matchupEdge)
-      ? matchupEdge
-      : matchupEdge;
+  const lineupAgreesWithMatchup =
+    Math.abs(lineupComponent) >= 0.03 && Math.sign(lineupComponent) === Math.sign(matchupEdge);
+  const confirmationMagnitude =
+    Math.abs(matchupEdge) * 0.09 + (lineupAgreesWithMatchup ? Math.abs(lineupComponent) * 0.12 : 0);
   const confirmationEdge = bothConfirmed
     ? clamp(
-        Math.sign(confirmationDirection) *
-          Math.min(Math.abs(matchupEdge) * 0.09 + Math.abs(lineupComponent) * 0.12, 0.055),
+        Math.sign(matchupEdge) * Math.min(confirmationMagnitude, 0.055),
         -0.055,
         0.055
       )

@@ -246,13 +246,16 @@ def _poisson_cdf(expected_total_runs: float, max_runs: int) -> float:
 
 
 def poisson_total_probability(expected_total_runs: float, line: float, side: str = "over") -> float:
-    """Return probability of total going over or under a line."""
+    """Return probability of total going over or under a line (excluding exact pushes)."""
     line_val = safe_float(line)
-    # For integer lines (e.g. 9.0), Under means P(X < 9) = P(X <= 8)
-    # For half-run lines (e.g. 8.5), Under means P(X <= 8)
-    cutoff = math.floor(line_val) - (1 if line_val == math.floor(line_val) else 0)
-    under = _poisson_cdf(expected_total_runs, cutoff)
-    return 1.0 - under if side.lower() == "over" else under
+    # For integer lines (e.g. 9.0): Under is P(X <= 8), Over is P(X >= 10) = 1 - P(X <= 9).
+    # For half-run lines (e.g. 8.5): Under is P(X <= 8), Over is P(X >= 9) = 1 - P(X <= 8).
+    is_integer_line = line_val == math.floor(line_val)
+    over_cutoff = math.floor(line_val)
+    under_cutoff = over_cutoff - 1 if is_integer_line else over_cutoff
+    if side.lower() == "over":
+        return clamp(1.0 - _poisson_cdf(expected_total_runs, over_cutoff), 0.0, 1.0)
+    return _poisson_cdf(expected_total_runs, under_cutoff) if under_cutoff >= 0 else 0.0
 
 
 def negative_binomial_total_probability(
@@ -261,7 +264,7 @@ def negative_binomial_total_probability(
     line: float,
     side: str = "over",
 ) -> float:
-    """Return over/under probability with over-dispersed run scoring."""
+    """Return over/under probability with over-dispersed run scoring (excluding exact pushes)."""
     mean = max(0.01, safe_float(expected_total_runs, 0.01))
     variance_value = safe_float(variance, mean)
     if variance_value <= mean:
@@ -270,7 +273,13 @@ def negative_binomial_total_probability(
     r = mean**2 / (variance_value - mean)
     p = r / (r + mean)
     line_val = safe_float(line)
-    cutoff = math.floor(line_val) - (1 if line_val == math.floor(line_val) else 0)
+    is_integer_line = line_val == math.floor(line_val)
+    over_cutoff = math.floor(line_val)
+    under_cutoff = over_cutoff - 1 if is_integer_line else over_cutoff
+    cutoff = over_cutoff if side.lower() == "over" else under_cutoff
+    if cutoff < 0:
+        return 1.0 if side.lower() == "over" else 0.0
+
     cumulative = 0.0
     for runs in range(cutoff + 1):
         log_prob = (
@@ -281,8 +290,8 @@ def negative_binomial_total_probability(
             + runs * math.log(1.0 - p)
         )
         cumulative += math.exp(log_prob)
-    under = clamp(cumulative, 0.0, 1.0)
-    return 1.0 - under if side.lower() == "over" else under
+    cdf = clamp(cumulative, 0.0, 1.0)
+    return clamp(1.0 - cdf, 0.0, 1.0) if side.lower() == "over" else cdf
 
 
 def calculate_total_edge(model_probability: float, market_probability: float) -> float:

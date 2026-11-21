@@ -1,4 +1,5 @@
-import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { timingSafeEqual } from 'node:crypto';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -10,7 +11,7 @@ import { applyClvGateToPrediction, summarizeClv } from './clv_gate.js';
 import { attachCurrentOdds } from './lineMovement.js';
 import { attachNewsContext, persistNewsFeatureSnapshots } from './news.js';
 import { Storage } from './storage.js';
-import { dateInTimezone, toNumber } from './utils.js';
+import { dateInTimezone, isFiniteNumber, toNumber } from './utils.js';
 
 let config = null;
 let storage = null;
@@ -68,7 +69,11 @@ function isAuthorized(request) {
   if (!expected) return true;
   const authorization = request.headers.authorization || '';
   const [scheme, supplied] = authorization.split(' ');
-  return scheme?.toLowerCase() === 'bearer' && supplied?.trim() === expected;
+  if (scheme?.toLowerCase() !== 'bearer') return false;
+  const token = (supplied || '').trim();
+  const a = Buffer.from(token, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function safeBoolean(value) {
@@ -78,13 +83,24 @@ function safeBoolean(value) {
 function parseBody(request) {
   return new Promise((resolveBody, rejectBody) => {
     let body = '';
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      rejectBody(err);
+    };
+    request.on('error', fail);
     request.on('data', (chunk) => {
+      if (settled) return;
       body += chunk.toString();
       if (body.length > 1024 * 128) {
-        rejectBody(new Error('Request body too large'));
+        fail(new Error('Request body too large'));
+        request.destroy();
       }
     });
     request.on('end', () => {
+      if (settled) return;
+      settled = true;
       if (!body) {
         resolveBody({});
         return;
@@ -202,7 +218,7 @@ async function evaluationReport() {
 
 async function runBacktest(body) {
   const market = body.market === 'moneyline' ? body.market : 'moneyline';
-  const season = Number.isFinite(Number(body.season)) ? String(Number(body.season)) : '2025';
+  const season = isFiniteNumber(body?.season) ? String(Math.trunc(Number(body.season))) : '2025';
   const output = await runPython(['-m', 'src.backtest', '--season', season, '--market', market], {
     timeoutMs: 60000,
   });
@@ -315,8 +331,12 @@ function liveQualityReport(prediction, fetchedAt) {
     ),
     odds: fieldStatus(
       'Market odds',
-      'Unavailable',
-      'Live Odds API is optional; dashboard will not invent market odds.'
+      marketOddsAvailable ? 'Available' : 'Unavailable',
+      marketOddsAvailable
+        ? `Current moneyline: ${prediction.away?.abbreviation || 'Away'} ${
+            prediction.currentOdds?.awayMoneyline ?? 'N/A'
+          } | ${prediction.home?.abbreviation || 'Home'} ${prediction.currentOdds?.homeMoneyline ?? 'N/A'}`
+        : 'Live Odds API is optional; dashboard will not invent market odds.'
     ),
     bullpen: fieldStatus('Bullpen usage', bullpenAvailable ? 'Available' : 'Missing', prediction.bullpenLine || ''),
     park: fieldStatus(
@@ -437,7 +457,33 @@ function summarizeLivePrediction(prediction, meta = {}) {
   };
 }
 
-export async function livePredictions(dateYmd) {
+export function applyNewsRiskVeto(prediction) {
+  const risk = prediction?.newsContext?.newsRisk;
+  if (!risk?.veto || !Array.isArray(risk.vetoReasons) || risk.vetoReasons.length === 0) return prediction;
+  applyMoneylineValueMarket(prediction);
+  const decision = prediction.betDecision;
+  if (!decision) return prediction;
+  const extra = risk.vetoReasons;
+  const reasons = [...new Set([...(decision.reasons || []), ...extra])];
+  if (decision.status === 'VALUE' || decision.status === 'LEAN ONLY') {
+    prediction.betDecision = {
+      ...decision,
+      status: 'NO BET',
+      reason: reasons[0] || extra[0],
+      reasons,
+      newsVeto: true
+    };
+  } else if (decision.status === 'NO BET') {
+    prediction.betDecision = {
+      ...decision,
+      reasons,
+      newsVeto: true
+    };
+  }
+  return prediction;
+}
+
+async function livePredictions(dateYmd) {
   ensureInitialized();
   const predictions = await getMlbPredictions(dateYmd, storage.getMemory());
 
@@ -477,6 +523,9 @@ export async function livePredictions(dateYmd) {
   try {
     await attachNewsContext(config, predictions, storage);
     persistNewsFeatureSnapshots(predictions, storage, dateYmd);
+    for (const prediction of predictions) {
+      applyNewsRiskVeto(prediction);
+    }
   } catch (error) {
     console.warn('Dashboard news context unavailable:', error.message);
   }
@@ -492,6 +541,7 @@ export async function livePredictions(dateYmd) {
 
 function statusPayload() {
   ensureInitialized();
+  storage.refreshState();
   const memory = storage.getMemorySummary();
   const state = storage.state;
   return {
@@ -582,7 +632,14 @@ async function routeApi(request, response, url) {
 }
 
 function serveStatic(request, response, url) {
-  const pathname = decodeURIComponent(url.pathname);
+  let pathname;
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Bad request');
+    return;
+  }
   const relativePath = pathname === '/' ? 'index.html' : pathname.slice(1);
   const filePath = resolve(join(rootDir, relativePath));
 
@@ -593,7 +650,15 @@ function serveStatic(request, response, url) {
     response.end('Not found');
     return;
   }
-  if (!existsSync(filePath)) {
+  let stat;
+  try {
+    stat = statSync(filePath);
+  } catch {
+    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Not found');
+    return;
+  }
+  if (!stat.isFile()) {
     response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     response.end('Not found');
     return;
@@ -603,19 +668,40 @@ function serveStatic(request, response, url) {
   response.writeHead(200, {
     'Content-Type': MIME_TYPES[extension] || 'application/octet-stream',
   });
-  createReadStream(filePath).pipe(response);
+  const stream = createReadStream(filePath);
+  stream.on('error', () => {
+    if (!response.headersSent) {
+      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    }
+    response.end('Read error');
+  });
+  stream.pipe(response);
 }
 
 function createDashboardServer() {
   return createServer(async (request, response) => {
-    const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
-    if (url.pathname.startsWith('/api/')) {
-      const handled = await routeApi(request, response, url);
-      if (!handled) sendError(response, 404, 'Unknown API route');
+    let url;
+    try {
+      url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    } catch {
+      sendError(response, 400, 'Invalid request URL');
       return;
     }
+    try {
+      if (url.pathname.startsWith('/api/')) {
+        const handled = await routeApi(request, response, url);
+        if (!handled) sendError(response, 404, 'Unknown API route');
+        return;
+      }
 
-    serveStatic(request, response, url);
+      serveStatic(request, response, url);
+    } catch (error) {
+      if (!response.headersSent) {
+        sendError(response, 500, 'Internal server error', error.message);
+      } else {
+        response.end();
+      }
+    }
   });
 }
 

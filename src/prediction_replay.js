@@ -143,13 +143,18 @@ export function compareRecomputeToStored(snapshot, recomputed) {
     ['pureAwayProbability', stored.pureAwayProbability, recomputed.pureAwayProbability, DISPLAY_ROUNDING_TOLERANCE]
   ];
   const mismatches = [];
+  let checked = 0;
   for (const [key, expected, actual, tolerance] of [...rawChecks, ...displayChecks]) {
     if (expected == null) continue; // older snapshots may not store raw stages
+    checked += 1;
     const e = Number(expected);
     const a = Number(actual);
     if (!Number.isFinite(e) || !Number.isFinite(a) || Math.abs(e - a) > tolerance) {
       mismatches.push({ key, stored: expected, recomputed: actual, tolerance });
     }
+  }
+  if (checked === 0) {
+    mismatches.push({ key: 'modelInputs', stored: null, recomputed: null, reason: 'no_comparable_fields' });
   }
   return { ok: mismatches.length === 0, mismatches };
 }
@@ -170,6 +175,9 @@ function replayProjection(snapshot) {
 
 function replayPromotionGate(snapshot, parity) {
   const reasons = [];
+  if (!snapshot.firstPitchUtc) {
+    reasons.push('missing_first_pitch');
+  }
   const temporal = assertPregameEligible({
     asOf: snapshot.asOfUtc || snapshot.predictionTimestampUtc,
     firstPitch: snapshot.firstPitchUtc

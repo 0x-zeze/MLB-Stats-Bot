@@ -98,6 +98,20 @@ def decompose_edge(
     }
 
 
+def _american_to_cents(odds: float) -> float:
+    """Map American odds to a continuous cent scale without the ±100 gap."""
+    if odds >= 100.0:
+        return odds - 100.0
+    if odds <= -100.0:
+        return odds + 100.0
+    return odds
+
+
+def _american_cent_delta(opening_odds: float, current_odds: float) -> float:
+    """Return signed line movement in continuous cents (negative = shorter / heavier favorite)."""
+    return _american_to_cents(current_odds) - _american_to_cents(opening_odds)
+
+
 def _market_movement(game_context: dict[str, Any]) -> dict[str, float]:
     """Extract opening vs current market movement."""
     market = game_context.get("market") or game_context.get("odds") or {}
@@ -109,10 +123,15 @@ def _market_movement(game_context: dict[str, Any]) -> dict[str, float]:
     current_total = safe_float(
         market.get("current_total") or market.get("market_total"), 0.0
     )
+    ml_movement = (
+        round(_american_cent_delta(opening_ml, current_ml), 1)
+        if opening_ml != 0 and current_ml != 0
+        else 0.0
+    )
     return {
         "opening_moneyline": opening_ml,
         "current_moneyline": current_ml,
-        "ml_movement": round(current_ml - opening_ml, 1) if opening_ml != 0 else 0.0,
+        "ml_movement": ml_movement,
         "opening_total": opening_total,
         "current_total": current_total,
         "total_movement": round(current_total - opening_total, 1) if opening_total != 0 else 0.0,
@@ -169,7 +188,8 @@ def analyze_market_disagreement(
     # Market movement analysis
     if steam:
         if movement["ml_movement"] != 0:
-            direction = "toward" if movement["ml_movement"] > 0 else "away from"
+            # Lower/more-negative American odds means the price shortened (moved toward the pick)
+            direction = "toward" if movement["ml_movement"] < 0 else "away from"
             reasons.append(
                 f"Steam move detected: moneyline moved {movement['ml_movement']:+.0f}c "
                 f"{direction} the pick"
@@ -213,7 +233,8 @@ def analyze_market_disagreement(
     # Adjust for steam move conflicting with model
     if steam and movement["ml_movement"] != 0:
         model_direction = 1 if safe_float(prediction.get("model_edge"), 0) > 0 else -1
-        market_direction = 1 if movement["ml_movement"] > 0 else -1
+        # Negative ml_movement (shorter price) supports the pick (+1); positive opposes it (-1)
+        market_direction = 1 if movement["ml_movement"] < 0 else -1
         if model_direction != market_direction:
             line_value_score = max(0, line_value_score - 15)
             reasons.append(
@@ -411,7 +432,7 @@ def detect_steam_move(
     magnitude = "none"
 
     if opening_line is not None and current_line is not None:
-        ml_movement = round(current_line - opening_line, 1)
+        ml_movement = round(_american_cent_delta(safe_float(opening_line), safe_float(current_line)), 1)
         if abs(ml_movement) >= 20:
             steam_detected = True
             magnitude = "heavy"

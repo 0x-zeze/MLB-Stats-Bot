@@ -279,7 +279,7 @@ def build_prediction_log_rows_from_sqlite(sqlite_path: str | Path) -> list[dict[
         if has_pick_version:
             join_clause = (
                 """
-                JOIN picks p ON p.rowid = COALESCE(
+                LEFT JOIN picks p ON p.rowid = COALESCE(
                     CASE WHEN b.prediction_run_id IS NOT NULL THEN (
                         SELECT p_exact.rowid FROM picks p_exact
                         WHERE p_exact.prediction_run_id = b.prediction_run_id
@@ -295,7 +295,7 @@ def build_prediction_log_rows_from_sqlite(sqlite_path: str | Path) -> list[dict[
                 """
                 if has_run_fk
                 else """
-                JOIN picks p ON p.rowid = (
+                LEFT JOIN picks p ON p.rowid = (
                     SELECT p_latest.rowid FROM picks p_latest
                     WHERE p_latest.game_pk = b.game_pk
                     ORDER BY p_latest.prediction_version DESC, p_latest.rowid DESC
@@ -305,7 +305,7 @@ def build_prediction_log_rows_from_sqlite(sqlite_path: str | Path) -> list[dict[
             )
         else:
             join_clause = """
-                JOIN picks p ON p.rowid = (
+                LEFT JOIN picks p ON p.rowid = (
                     SELECT p_latest.rowid FROM picks p_latest
                     WHERE p_latest.game_pk = b.game_pk
                     ORDER BY p_latest.rowid DESC
@@ -558,7 +558,7 @@ def market_baselines(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for row in bets:
         fair = _decimal_probability(row.get("fair_prob"))
         model = _decimal_probability(row.get("model_prob"))
-        if fair is None or model is None:
+        if not isinstance(fair, float) or not isinstance(model, float):
             continue
         won = row_won(row)
         # Selected-side market/model probabilities.

@@ -56,14 +56,13 @@ class MarketEfficiencyProfile:
 
 
 def classify_movement(start: float, end: float) -> tuple[float, str]:
-    """Return (cents, direction) for a line movement.
+    """Return (cents, direction) for a line movement on a continuous cents scale.
 
-    Positive cents = line moved toward the favorite (odds became more negative).
+    Positive cents = line moved toward the favorite (shorter price / higher implied prob).
     Negative cents = line moved toward the underdog.
     """
-    # Convert American odds to a cents scale where positive = favorite strength
-    start_cents = abs(start) if start < 0 else -start
-    end_cents = abs(end) if end < 0 else -end
+    start_cents = (abs(start) - 100.0) if start < 0 else (100.0 - start if start > 0 else 0.0)
+    end_cents = (abs(end) - 100.0) if end < 0 else (100.0 - end if end > 0 else 0.0)
     diff = end_cents - start_cents
     if abs(diff) < 3:
         return diff, "stable"

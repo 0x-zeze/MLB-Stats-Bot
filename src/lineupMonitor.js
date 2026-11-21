@@ -53,6 +53,13 @@ function chatLineupAlertsEnabled(chatId) {
   return subscriber?.lineupAlerts?.enabled !== false;
 }
 
+function gameHasStarted(game, nowMs = Date.now()) {
+  const raw = game?.startTime || game?.start || game?.gameDate || game?.gameTime;
+  if (!raw) return false;
+  const startMs = Date.parse(raw);
+  return Number.isFinite(startMs) && startMs <= nowMs;
+}
+
 function isFinalOrLive(status) {
   const value = String(status || '').toLowerCase();
   return (
@@ -185,10 +192,21 @@ async function pollLineupMonitor(key) {
     return;
   }
 
-  const activeGames = monitor.games.filter((game) => !isFinalOrLive(game.status));
+  const nowMs = Date.now();
+  const activeGames = monitor.games.filter((game) => !isFinalOrLive(game.status) && !gameHasStarted(game, nowMs));
   if (activeGames.length === 0) {
     stopMonitor(key);
     return;
+  }
+  // Keep lineupCache bounded to avoid unbounded season-long memory growth.
+  if (lineupCache.size > 400) {
+    const excess = lineupCache.size - 200;
+    let removed = 0;
+    for (const k of lineupCache.keys()) {
+      lineupCache.delete(k);
+      removed += 1;
+      if (removed >= excess) break;
+    }
   }
 
   for (const game of activeGames) {
@@ -323,7 +341,7 @@ export function startLineupMonitor(games, chatId) {
   if (!state.storage) return null;
   if (!isSystemMonitor && !state.bot) return null;
 
-  const activeGames = games.filter((game) => (game.gamePk || game.game_id || game.id) && !isFinalOrLive(game.status));
+  const activeGames = games.filter((game) => (game.gamePk || game.game_id || game.id) && !isFinalOrLive(game.status) && !gameHasStarted(game));
   if (activeGames.length === 0) return null;
 
   const key = monitorKey(activeGames, chatId);
@@ -334,6 +352,8 @@ export function startLineupMonitor(games, chatId) {
     existing.expiresAt = expiresAt;
     return existing;
   }
+  // Prevent overlapping duplicate monitors for the same chat when active game list shrinks.
+  stopLineupMonitorForChat(chatId);
 
   const intervalMs = Math.max(1, intervalMinutes()) * 60 * 1000;
   const monitor = {

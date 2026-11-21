@@ -22,6 +22,15 @@ class LineMovementSignal:
     sharp_money_direction: str = "unknown"  # "with_model", "against_model", "unknown"
 
 
+def _american_to_continuous_cents(odds: float) -> float:
+    """Map American odds to a continuous cents scale with no ±100 jump.
+
+    More negative = stronger favorite / higher implied probability:
+      -150 -> -50, -100 -> 0, +100 -> 0, +150 -> +50.
+    """
+    return odds - 100.0 if odds > 0 else odds + 100.0
+
+
 def detect_sharp_money_signal(
     model_pick: str,
     model_probability: float,
@@ -56,22 +65,15 @@ def detect_sharp_money_signal(
     if opening_line is None or closing_line is None:
         return LineMovementSignal()
 
-    movement = closing_line - opening_line
+    movement = _american_to_continuous_cents(closing_line) - _american_to_continuous_cents(opening_line)
     magnitude = abs(movement)
 
     if magnitude < 3:
         direction = "neutral"
     else:
-        # For American odds, determine if the model pick got stronger or weaker.
-        # Negative odds (favorite): more negative = stronger = probability went UP
-        # Positive odds (underdog): more positive = stronger = probability went UP
-        # opening_line is the model pick's odds (negative = favorite, positive = underdog)
-        if opening_line < 0:
-            # Model pick is favorite: odds going more negative = toward model
-            direction = "toward_model" if movement < 0 else "against_model"
-        else:
-            # Model pick is underdog: odds going more positive = toward model
-            direction = "toward_model" if movement > 0 else "against_model"
+        # On the continuous cents scale, negative movement ALWAYS means shorter
+        # price / higher implied probability (favorite -140->-160 or dog +150->+130).
+        direction = "toward_model" if movement < 0 else "against_model"
 
     rlm = _detect_reverse_line_movement(
         model_pick, direction, public_betting_pct
@@ -140,7 +142,7 @@ def _compute_multi_book_consensus(
         closing = safe_float(book.get("closing", book.get(f"closing_{model_pick}")), None)
         if opening is None or closing is None:
             continue
-        diff = closing - opening
+        diff = _american_to_continuous_cents(closing) - _american_to_continuous_cents(opening)
         if abs(diff) >= 3:
             directions.append(-1 if diff < 0 else 1)
 

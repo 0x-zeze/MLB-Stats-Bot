@@ -61,9 +61,9 @@ def team_recent_form(
         if clean_name(game.home_team) == team_key or clean_name(game.away_team) == team_key
     ]
     if before_date:
-        eligible = [game for game in eligible if game.date < before_date]
+        eligible = [game for game in eligible if game.date and game.date < before_date]
 
-    recent = sorted(eligible, key=lambda game: game.date)[-last_n_games:]
+    recent = sorted(eligible, key=lambda game: game.date)[-last_n_games:] if last_n_games > 0 else []
     wins = 0
     runs_for = 0
     runs_against = 0

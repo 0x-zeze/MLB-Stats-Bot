@@ -2,8 +2,9 @@
 """Edge analysis v2: SQLite-based, deduped to latest pick version per game."""
 import sqlite3, json, statistics as st
 from collections import defaultdict
+from pathlib import Path
 
-DB = "/root/MLB-Stats-Bot/data/state.sqlite"
+DB = str(Path(__file__).resolve().parents[1] / "data" / "state.sqlite")
 con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
 cur = con.cursor()
@@ -23,6 +24,7 @@ WITH ranked AS (
 SELECT * FROM ranked WHERE rn = 1
 ORDER BY date_ymd
 """
+cur.execute(q)
 rows = cur.fetchall()
 print(f"Total deduped picks (latest version, processed): {len(rows)}")
 
@@ -60,7 +62,8 @@ def is_correct(r):
 W = sum(1 for r in settled if is_correct(r))
 L = len(settled) - W
 print(f"\n=== OVERALL (Jul 28 - Aug 17, deduped) ===")
-print(f"W:{W} L:{L}  winrate={W/(W+L)*100:.1f}%")
+wr_str = f"{W/(W+L)*100:.1f}%" if (W + L) else "n/a"
+print(f"W:{W} L:{L}  winrate={wr_str}")
 
 # Daily
 by_day = defaultdict(lambda: [0,0])

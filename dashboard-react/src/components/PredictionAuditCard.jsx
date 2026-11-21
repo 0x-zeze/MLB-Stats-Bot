@@ -1,29 +1,33 @@
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
 import { Badge } from './ui/badge.jsx';
 import { CheckCircle2, AlertTriangle, XCircle, HelpCircle } from 'lucide-react';
+import { isFiniteNum } from '../utils.js';
 
 const NOT_RECORDED = 'Not recorded';
 
 function pct(value, digits = 1) {
+  if (!isFiniteNum(value)) return NOT_RECORDED;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? `${parsed.toFixed(digits)}%` : NOT_RECORDED;
+  const scaled = parsed > 0 && parsed <= 1 ? parsed * 100 : parsed;
+  return `${scaled.toFixed(digits)}%`;
 }
 
 // market_quote_pairs stores probabilities as 0-1 fractions; model rows use 0-100.
 function fracPct(value, digits = 1) {
+  if (!isFiniteNum(value)) return NOT_RECORDED;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(digits)}%` : NOT_RECORDED;
+  return `${(parsed * 100).toFixed(digits)}%`;
 }
 
 function signedPts(value, digits = 2) {
+  if (!isFiniteNum(value)) return '-';
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return '-';
   return `${parsed >= 0 ? '+' : ''}${parsed.toFixed(digits)}`;
 }
 
 function americanOdds(value) {
+  if (!isFiniteNum(value)) return NOT_RECORDED;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return NOT_RECORDED;
   return parsed > 0 ? `+${parsed}` : `${parsed}`;
 }
 
@@ -60,8 +64,9 @@ function qualityIcon(state) {
 
 function ProbabilityBar({ label, home, away, homeLabel, awayLabel, asFraction = false }) {
   const fmt = asFraction ? fracPct : pct;
-  const homeNum = Number(home);
-  const width = Number.isFinite(homeNum) ? (asFraction ? homeNum * 100 : homeNum) : null;
+  const width = isFiniteNum(home)
+    ? (asFraction || (Number(home) > 0 && Number(home) <= 1) ? Number(home) * 100 : Number(home))
+    : null;
   return (
     <div className="py-1.5">
       <div className="mb-1 flex items-baseline justify-between">
@@ -91,8 +96,17 @@ export default function PredictionAuditCard({ audit }) {
   const quote = market?.at_prediction;
   const closing = market?.closing;
 
-  const modelHome = Number(probabilities?.calibrated_home);
-  const marketHome = quote ? Number(quote.home_no_vig_probability) * 100 : NaN;
+  const rawModelHome = isFiniteNum(probabilities?.calibrated_home)
+    ? Number(probabilities.calibrated_home)
+    : isFiniteNum(probabilities?.final_home)
+      ? Number(probabilities.final_home)
+      : NaN;
+  const modelHome = Number.isFinite(rawModelHome) && rawModelHome > 0 && rawModelHome <= 1
+    ? rawModelHome * 100
+    : rawModelHome;
+  const marketHome = quote && isFiniteNum(quote.home_no_vig_probability)
+    ? Number(quote.home_no_vig_probability) * 100
+    : NaN;
   const modelMarketDelta =
     Number.isFinite(modelHome) && Number.isFinite(marketHome) ? modelHome - marketHome : null;
 
@@ -167,12 +181,12 @@ export default function PredictionAuditCard({ audit }) {
               <Badge variant={isBet ? 'value' : 'nobet'}>{isBet ? 'BET' : 'NO BET'}</Badge>
               <span className="text-xs font-semibold text-ink">
                 {decision?.team_name || (decision?.pick_side ? `${decision.pick_side === 'home' ? homeAbbr : awayAbbr}` : '')}
-                {Number.isFinite(Number(decision?.pick_probability)) ? ` @ ${pct(decision.pick_probability)}` : ''}
+                {isFiniteNum(decision?.pick_probability) ? ` @ ${pct(decision.pick_probability)}` : ''}
               </span>
             </div>
-            <Field label="Edge" value={Number.isFinite(Number(decision?.edge)) ? `${signedPts(decision.edge, 1)}%` : null} />
-            <Field label="Odds" value={decision?.odds != null ? `${americanOdds(decision.odds)} (${decision?.bookmaker || 'book?'})` : null} />
-            <Field label="Kelly stake" value={Number.isFinite(Number(decision?.kelly_stake_percent)) ? `${decision.kelly_stake_percent}%` : null} />
+            <Field label="Edge" value={isFiniteNum(decision?.edge) ? `${signedPts(decision.edge, 1)}%` : null} />
+            <Field label="Odds" value={isFiniteNum(decision?.odds) ? `${americanOdds(decision.odds)} (${decision?.bookmaker || 'book?'})` : null} />
+            <Field label="Kelly stake" value={isFiniteNum(decision?.kelly_stake_percent) ? `${decision.kelly_stake_percent}%` : null} />
             {(decision?.reasons?.length > 0 || decision?.reason_codes?.length > 0) ? (
               <div className="mt-2 border-t-2 border-ink/20 pt-2">
                 <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink/50">Why</p>

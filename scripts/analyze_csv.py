@@ -2,11 +2,12 @@
 """Edge analysis from predictions_log_live.csv (settled picks truth source)."""
 import csv, statistics as st
 from collections import defaultdict, Counter
+from pathlib import Path
 
-PATH = "/root/MLB-Stats-Bot/data/predictions_log_live.csv"
+PATH = str(Path(__file__).resolve().parents[1] / "data" / "predictions_log_live.csv")
 
 rows = []
-with open(PATH) as f:
+with open(PATH, encoding="utf-8") as f:
     for r in csv.DictReader(f):
         rows.append(r)
 print(f"TOTAL rows: {len(rows)}")
@@ -23,12 +24,14 @@ print(f"Settled: {len(settled)}  (win={sum(1 for r in settled if r['result']=='w
 
 # dates range
 dates = sorted(set(r["date"] for r in settled))
-print(f"Date range: {dates[0]} -> {dates[-1]}  ({len(dates)} days)")
+if dates:
+    print(f"Date range: {dates[0]} -> {dates[-1]}  ({len(dates)} days)")
 
 # ---- Overall
 W = sum(1 for r in settled if r["result"]=="win")
 L = sum(1 for r in settled if r["result"]=="loss")
-print(f"\n=== OVERALL ===  winrate={W/(W+L)*100:.1f}%  (W{W}/L{L})")
+wr_str = f"{W/(W+L)*100:.1f}%" if (W + L) else "n/a"
+print(f"\n=== OVERALL ===  winrate={wr_str}  (W{W}/L{L})")
 
 # ---- Daily
 by_day = defaultdict(lambda:[0,0,0])
@@ -43,20 +46,23 @@ for d in dates:
     rates.append(rate)
     bar = "#"*int(rate/2)
     print(f"{d}: {w:>2}W {l:>2}L {p:>1}P  {rate:5.1f}%  n={tot:>2} {bar}")
-print(f"\nmean={st.mean(rates):.1f}% median={st.median(rates):.1f}% min={min(rates):.1f}% max={max(rates):.1f}% stdev={st.pstdev(rates):.1f}")
-above=sum(1 for x in rates if x>50); below=sum(1 for x in rates if x<50)
-print(f">50%: {above} days   <50%: {below} days   =50%: {len(rates)-above-below}")
+if rates:
+    print(f"\nmean={st.mean(rates):.1f}% median={st.median(rates):.1f}% min={min(rates):.1f}% max={max(rates):.1f}% stdev={st.pstdev(rates):.1f}")
+    above=sum(1 for x in rates if x>50); below=sum(1 for x in rates if x<50)
+    print(f">50%: {above} days   <50%: {below} days   =50%: {len(rates)-above-below}")
 
 # ---- By market type
 print(f"\n=== BY MARKET TYPE ===")
 by_mkt=defaultdict(lambda:[0,0])
 for r in settled:
-    w = 1 if r["result"]=="win" else 0
-    by_mkt[r["market_type"]][w]+=1
-    by_mkt[r["market_type"]][1]+=0 if r["result"]=="win" else 1
+    if r["result"]=="win":
+        by_mkt[r["market_type"]][0]+=1
+    elif r["result"]=="loss":
+        by_mkt[r["market_type"]][1]+=1
 for m,(w,l) in by_mkt.items():
     tot=w+l
-    print(f"  {m:>12}: {w:>3}W {l:>3}L  {w/tot*100:5.1f}%  (n={tot})")
+    wr = f"{w/tot*100:5.1f}%" if tot else "  n/a"
+    print(f"  {m:>12}: {w:>3}W {l:>3}L  {wr}  (n={tot})")
 
 # ---- By edge bin
 print(f"\n=== BY EDGE BIN ===")

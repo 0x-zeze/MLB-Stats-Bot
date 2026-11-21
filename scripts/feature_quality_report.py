@@ -17,6 +17,7 @@ import os
 import sqlite3
 import sys
 from collections import Counter
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,7 +34,7 @@ def main() -> int:
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
 
-    conn = sqlite3.connect(f"file:{args.sqlite}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"{Path(args.sqlite).resolve().as_uri()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
         report = _build_report(conn)

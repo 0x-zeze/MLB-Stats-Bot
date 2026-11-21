@@ -49,7 +49,9 @@ export function formatLedgerReport(rows, { bankrollUnits = 100, clvGate = null }
     lines.push(uiBullet('—', 'Tidak ada bet terbuka.'));
   } else {
     for (const r of open) {
-      lines.push(uiBullet('•', `${r.team} ${fmtOdds(r.odds)}  |  edge +${num(r.edge).toFixed(1)}%  |  stake ${num(r.units_staked).toFixed(2)}u  (${r.date_ymd})`));
+      const edgeVal = num(r.edge);
+      const edgeSign = edgeVal >= 0 ? '+' : '';
+      lines.push(uiBullet('•', `${r.team || 'TBD'} ${fmtOdds(r.odds)}  |  edge ${edgeSign}${edgeVal.toFixed(1)}%  |  stake ${num(r.units_staked).toFixed(2)}u  (${r.date_ymd})`));
     }
   }
   lines.push('');

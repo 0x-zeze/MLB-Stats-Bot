@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -9,15 +10,20 @@ DEFAULT_CLOCK_SKEW_SECONDS = 120.0
 
 
 def parse_utc(value: Any) -> datetime | None:
-    if value is None or value == "":
+    if value is None or value == "" or isinstance(value, bool):
         return None
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     if isinstance(value, (int, float)):
         ts = float(value)
+        if not math.isfinite(ts):
+            return None
         if ts < 1e12:
             ts *= 1000.0
-        return datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc)
+        try:
+            return datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
     text = str(value).strip()
     if not text:
         return None
@@ -33,7 +39,7 @@ def parse_utc(value: Any) -> datetime | None:
 def check_data_freshness(
     data_timestamp: Any,
     max_age_minutes: int | float,
-    now: datetime | None = None,
+    now: Any = None,
     clock_skew_seconds: float = DEFAULT_CLOCK_SKEW_SECONDS,
 ) -> str:
     """Return fresh, stale, missing, or invalid_future for a timestamp."""
@@ -41,7 +47,9 @@ def check_data_freshness(
     if parsed is None:
         return "missing"
 
-    current = now or datetime.now(timezone.utc)
+    current = parse_utc(now) if now is not None else datetime.now(timezone.utc)
+    if current is None:
+        current = datetime.now(timezone.utc)
     current = current if current.tzinfo else current.replace(tzinfo=timezone.utc)
 
     delta_seconds = (parsed - current).total_seconds()
@@ -68,7 +76,7 @@ def assert_pregame_eligible(
 
     first_pitch_dt = parse_utc(first_pitch)
     if first_pitch_dt is not None:
-        if (as_of_dt - first_pitch_dt).total_seconds() > float(clock_skew_seconds):
+        if as_of_dt >= first_pitch_dt:
             return {"ok": False, "reason": "as_of_after_first_pitch"}
 
     for label, value in (("observed_at", observed_at), ("effective_at", effective_at)):

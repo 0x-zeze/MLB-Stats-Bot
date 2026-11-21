@@ -43,6 +43,9 @@ const HEURISTIC_COMPONENTS = [
 const RECORD_DOMINATED_MULTIPLIER = 0.45;
 
 function num(value) {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') {
+    return null;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -69,7 +72,10 @@ function tableExists(db, name) {
 
 function pct(value, digits = 1) {
   const parsed = num(value);
-  return parsed == null ? NOT_RECORDED : `${parsed.toFixed(digits)}%`;
+  if (parsed == null) return NOT_RECORDED;
+  // Support both 0..100 (heuristic_v1) and 0..1 (shadow challenger) probability scales.
+  const scaled = parsed >= 0 && parsed <= 1 ? parsed * 100 : parsed;
+  return `${scaled.toFixed(digits)}%`;
 }
 
 function fracPct(value, digits = 1) {
@@ -264,15 +270,17 @@ export function assembleAuditCard(db, mp) {
   const outcome = tableExists(db, 'game_outcomes')
     ? db.prepare('SELECT * FROM game_outcomes WHERE game_pk = ?').get(String(mp.game_pk))
     : null;
-  const ledger = tableExists(db, 'bet_ledger')
-    ? db
-        .prepare(
-          `SELECT * FROM bet_ledger
-           WHERE (run_id = ? OR game_pk = ?) AND market = 'moneyline'
-           ORDER BY recommended_at DESC LIMIT 1`
-        )
-        .get(mp.run_id, String(mp.game_pk))
-    : null;
+  const isControlModel = !mp.model_id || mp.model_id === 'heuristic_v1';
+  const ledger =
+    isControlModel && tableExists(db, 'bet_ledger')
+      ? db
+          .prepare(
+            `SELECT * FROM bet_ledger
+             WHERE (run_id = ? OR game_pk = ?) AND market = 'moneyline'
+             ORDER BY recommended_at DESC LIMIT 1`
+          )
+          .get(mp.run_id, String(mp.game_pk))
+      : null;
 
   return {
     mp,
@@ -418,7 +426,8 @@ export function formatAuditCard(card) {
       else if (String(outcome.winner_team_id) === String(away?.id)) winnerSide = 'away';
     }
     if (winnerSide == null && outcome.home_score != null && outcome.away_score != null) {
-      winnerSide = outcome.home_score > outcome.away_score ? 'home' : 'away';
+      if (outcome.home_score > outcome.away_score) winnerSide = 'home';
+      else if (outcome.away_score > outcome.home_score) winnerSide = 'away';
     }
     if (winnerSide && mp.pick_side) {
       lines.push(`• pick model: ${winnerSide === mp.pick_side ? '✅ BENAR' : '❌ SALAH'}`);

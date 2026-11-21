@@ -122,7 +122,7 @@ def discover_gate_commit(repo_root: Path) -> dict[str, object]:
 def connect_readonly(db_path: Path) -> sqlite3.Connection:
     if not db_path.exists():
         raise FileNotFoundError(f"SQLite DB not found: {db_path}")
-    uri = f"file:{db_path.resolve()}?mode=ro"
+    uri = f"{db_path.resolve().as_uri()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn

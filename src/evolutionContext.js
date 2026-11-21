@@ -62,7 +62,7 @@ export function readPredictionOutcomes() {
   const path = resolve(evolutionDataDir(), 'prediction_outcomes.csv');
   if (!existsSync(path)) return [];
   try {
-    const raw = readFileSync(path, 'utf8').split('\n').filter(Boolean);
+    const raw = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
     if (raw.length < 2) return [];
     const header = parseCsvLine(raw[0]);
     const rows = [];
@@ -217,35 +217,46 @@ const FACTOR_KEYWORDS = {
   data_quality: ['quality', 'missing', 'stale', 'unavailable']
 };
 
+function matchesKeywordToken(text, kw) {
+  const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`, 'i').test(text);
+}
+
 function loadFactorReliability(outcomes, losses, rawPatterns) {
   const factorStats = {};
+  const fromAudit = new Set();
 
   // Read factor reliability from audit_memory.json mistake_patterns with reason_quality
   const patterns = rawPatterns || [];
   for (const p of patterns) {
     if (p.reason_quality && p.reason_quality.factor) {
       const rq = p.reason_quality;
+      fromAudit.add(rq.factor);
       factorStats[rq.factor] = {
         factor: rq.factor,
         sampleSize: rq.sample_size || 0,
         wins: rq.wins || 0,
         losses: rq.losses || 0,
         lossMentions: rq.loss_mentions || 0,
-        accuracy: rq.accuracy || 0,
+        accuracy: rq.accuracy ?? 0,
         verdict: rq.verdict || 'unknown'
       };
     }
   }
 
-  // Also extract from outcomes using main_factors if available
+  // Also extract from outcomes using main_factors if not already supplied by audit_memory
   for (const row of outcomes) {
+    if (row.result !== 'win' && row.result !== 'loss') continue;
     const mainFactors = row.evaluation?.main_factors || [];
+    const matchedThisRow = new Set();
     for (const mf of mainFactors) {
       const mfLower = String(mf).toLowerCase();
       for (const [factor, keywords] of Object.entries(FACTOR_KEYWORDS)) {
-        if (keywords.some((kw) => mfLower.includes(kw))) {
+        if (fromAudit.has(factor) || matchedThisRow.has(factor)) continue;
+        if (keywords.some((kw) => matchesKeywordToken(mfLower, kw))) {
+          matchedThisRow.add(factor);
           if (!factorStats[factor]) {
-            factorStats[factor] = { factor, sampleSize: 0, wins: 0, losses: 0, lossMentions: 0, accuracy: 0, verdict: 'unknown' };
+            factorStats[factor] = { factor, sampleSize: 0, wins: 0, losses: 0, lossMentions: 0, accuracy: null, verdict: 'unknown' };
           }
           factorStats[factor].sampleSize += 1;
           if (row.result === 'win') factorStats[factor].wins += 1;
@@ -257,8 +268,10 @@ function loadFactorReliability(outcomes, losses, rawPatterns) {
 
   // Recalculate accuracy for factors derived from outcomes
   for (const f of Object.values(factorStats)) {
-    if (f.sampleSize > 0 && f.accuracy === 0) {
+    if (f.sampleSize > 0 && f.accuracy == null) {
       f.accuracy = Math.round((f.wins / f.sampleSize) * 100 * 10) / 10;
+    } else if (f.accuracy == null) {
+      f.accuracy = 0;
     }
     if (f.verdict === 'unknown' && f.sampleSize >= 3) {
       if (f.accuracy < 45) f.verdict = 'weak_signal';

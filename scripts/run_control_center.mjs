@@ -2,7 +2,7 @@ import { npmSpawnSpec, pythonCommand, resolveSafeApiHost, startProcess, waitForP
 
 const apiHost = resolveSafeApiHost(process.env.DASHBOARD_API_HOST || '0.0.0.0');
 const apiPort = process.env.DASHBOARD_API_PORT || '8010';
-const webHost = process.env.DASHBOARD_WEB_HOST || '0.0.0.0';
+const webHost = resolveSafeApiHost(process.env.DASHBOARD_WEB_HOST || '0.0.0.0');
 const webPort = process.env.DASHBOARD_WEB_PORT || '5173';
 const python = pythonCommand();
 const webSpec = npmSpawnSpec([

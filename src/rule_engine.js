@@ -316,8 +316,9 @@ export const JS_HANDLERS = {
   lineupIncomplete(ctx, params) {
     const minCount = toNumber(params.min_count, 9);
     const strong = toNumber(params.strong_edge, 4.0);
-    const lineups = [ctx.item.lineups?.away, ctx.item.lineups?.home].filter(Boolean);
-    const incomplete = lineups.some((l) => !l.confirmed || toNumber(l.count, 0) < minCount);
+    if (!ctx.item.lineups) return { fired: false };
+    const sides = [ctx.item.lineups.away, ctx.item.lineups.home];
+    const incomplete = sides.some((l) => !l || !l.confirmed || toNumber(l.count, 0) < minCount);
     return { fired: incomplete && ctx.option.edge < strong };
   },
 

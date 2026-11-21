@@ -99,7 +99,12 @@ export async function capturePlatoonForGame(game, boxscore, storage, deps = {}) 
 
   const gamePk = String(game.gamePk || game.game_id || game.id || '');
   if (!gamePk) return null;
-  if (storage.getFeatureSnapshot?.(gamePk, 'platoon')) return null; // already captured
+  const existingSnap = storage.getFeatureSnapshot?.(gamePk, 'platoon');
+  const existingPayload =
+    existingSnap?.payload && typeof existingSnap.payload === 'object' ? existingSnap.payload : null;
+  if (existingPayload && existingPayload.away && existingPayload.home) {
+    return null; // both sides already captured (write-once per side)
+  }
 
   // Away hitters face the HOME starter; home hitters face the AWAY starter.
   const homeStarterHand = game.home?.starter?.pitchHand?.code;
@@ -110,8 +115,10 @@ export async function capturePlatoonForGame(game, boxscore, storage, deps = {}) 
     { side: 'home', boxTeam: boxscore.teams?.home, oppHand: awayStarterHand }
   ];
 
-  const payloadBySide = {};
+  const payloadBySide = existingPayload ? { ...existingPayload } : {};
+  let addedAny = false;
   for (const { side, boxTeam, oppHand } of sides) {
+    if (payloadBySide[side]) continue; // preserve first-write per side
     const splitCode = splitCodeForHand(oppHand);
     const hitters = lineupHitterIds(boxTeam);
     if (!splitCode || hitters.length < 9) continue; // need full lineup + known hand
@@ -122,12 +129,20 @@ export async function capturePlatoonForGame(game, boxscore, storage, deps = {}) 
     }
     if (entries.length) {
       payloadBySide[side] = buildPlatoonPayload(side, oppHand, entries);
+      addedAny = true;
     }
   }
 
-  if (!Object.keys(payloadBySide).length) return null;
+  if (!addedAny) return null;
 
-  const dateYmd = game.dateYmd || game.date || String(game.gameDate || '').slice(0, 10) || '';
-  const written = storage.setFeatureSnapshot(gamePk, 'platoon', dateYmd, payloadBySide);
+  const dateYmd =
+    game.dateYmd ||
+    game.officialDate ||
+    game.date ||
+    String(game.gameDate || '').slice(0, 10) ||
+    (game.startTime ? String(game.startTime).slice(0, 10) : '');
+  const written = storage.setFeatureSnapshot(gamePk, 'platoon', dateYmd, payloadBySide, {
+    overwrite: Boolean(existingPayload)
+  });
   return written ? payloadBySide : null;
 }

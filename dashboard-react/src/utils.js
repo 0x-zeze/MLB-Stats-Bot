@@ -1,16 +1,21 @@
+export function isFiniteNum(value) {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return false;
+  return Number.isFinite(Number(value));
+}
+
 export function number(value, digits = 1, fallback = '-') {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed.toFixed(digits) : fallback;
+  if (!isFiniteNum(value)) return fallback;
+  return Number(value).toFixed(digits);
 }
 
 export function percent(value, digits = 1) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? `${parsed.toFixed(digits)}%` : '-';
+  if (!isFiniteNum(value)) return '-';
+  return `${Number(value).toFixed(digits)}%`;
 }
 
 export function signed(value, suffix = '', digits = 1) {
+  if (!isFiniteNum(value)) return '-';
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return '-';
   return `${parsed >= 0 ? '+' : ''}${parsed.toFixed(digits)}${suffix}`;
 }
 

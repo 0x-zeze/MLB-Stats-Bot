@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -31,19 +32,26 @@ class LocalCache:
 
     def get_json(self, namespace: str, key: str) -> Any | None:
         """Return cached JSON payload when present and fresh."""
+        if self.ttl_seconds == 0:
+            return None
         path = self._path(namespace, key)
         if not path.exists():
             return None
         if self.ttl_seconds > 0 and time.time() - path.stat().st_mtime > self.ttl_seconds:
             return None
-        with path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            return None
 
     def set_json(self, namespace: str, key: str, payload: Any) -> Any:
-        """Write a JSON payload and return it."""
+        """Write a JSON payload atomically and return it."""
         path = self._path(namespace, key)
-        with path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=True, indent=2)
+        tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, indent=2, default=str)
+        os.replace(tmp_path, path)
         return payload
 
     def get_or_set_json(self, namespace: str, key: str, fetcher: Callable[[], Any]) -> Any:

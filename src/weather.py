@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,22 +35,24 @@ def weather_adjustment(weather: WeatherContext | None) -> float:
         return 0.0
 
     roof = weather.roof.strip().lower()
-    roof_multiplier = 0.15 if roof in {"closed", "dome"} else 1.0
+    roof_multiplier = 0.15 if ("closed" in roof or "dome" in roof) else 1.0
 
     temperature_adj = clamp((weather.temperature - 70.0) * 0.018, -0.45, 0.45)
 
     # Granular wind decomposition
     direction = weather.wind_direction.strip().lower()
     speed = weather.wind_speed
+    is_out = bool(re.search(r"\bout\b", direction))
+    is_in = bool(re.search(r"\bin\b", direction))
 
     wind_adj = 0.0
-    if "out" in direction:
+    if is_out:
         # Wind blowing out: boosts fly balls, HR carry
         wind_adj = clamp(speed * 0.035, 0.0, 0.55)
         # Extra boost at high velocity (>15 mph)
         if speed > 15:
             wind_adj += clamp((speed - 15) * 0.015, 0.0, 0.15)
-    elif "in" in direction:
+    elif is_in:
         wind_adj = -clamp(speed * 0.035, 0.0, 0.55)
         if speed > 15:
             wind_adj -= clamp((speed - 15) * 0.012, 0.0, 0.12)
@@ -71,7 +74,7 @@ def weather_adjustment(weather: WeatherContext | None) -> float:
 
     # Temperature × wind interaction: hot + wind out = compound effect
     interaction_adj = 0.0
-    if weather.temperature > 85 and "out" in direction and speed > 10:
+    if weather.temperature > 85 and is_out and speed > 10:
         interaction_adj = clamp((weather.temperature - 85) * speed * 0.0008, 0.0, 0.12)
 
     return (temperature_adj + wind_adj + humidity_adj + pressure_adj + interaction_adj) * roof_multiplier

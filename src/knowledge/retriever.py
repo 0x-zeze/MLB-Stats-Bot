@@ -20,7 +20,11 @@ class KnowledgeChunk:
 
 def tokenize(text: str) -> set[str]:
     """Tokenize text into lowercase search terms."""
-    return {token for token in re.findall(r"[a-zA-Z0-9%+\-.]+", text.lower()) if len(token) > 1}
+    tokens = {
+        token.strip(".-")
+        for token in re.findall(r"[a-zA-Z0-9%+\-.]+", text.lower())
+    }
+    return {token for token in tokens if len(token) > 1}
 
 
 def split_markdown(path: str | Path) -> list[KnowledgeChunk]:
@@ -60,13 +64,16 @@ def load_knowledge_chunks(directory: str | Path | None = None) -> list[Knowledge
 
 def search_chunks(query: str, chunks: list[KnowledgeChunk], limit: int = 4) -> list[KnowledgeChunk]:
     """Return the most relevant chunks using simple token overlap scoring."""
-    query_terms = tokenize(query)
+    normalized_query = str(query or "").strip()
+    if not normalized_query:
+        return []
+    query_terms = tokenize(normalized_query)
     scored: list[tuple[float, KnowledgeChunk]] = []
     for chunk in chunks:
         haystack = f"{chunk.heading}\n{chunk.text}"
         terms = tokenize(haystack)
         overlap = len(query_terms & terms)
-        phrase_bonus = 2 if query.lower() in haystack.lower() else 0
+        phrase_bonus = 2 if normalized_query.lower() in haystack.lower() else 0
         if overlap or phrase_bonus:
             scored.append((overlap + phrase_bonus + min(len(terms), 200) / 1000, chunk))
 

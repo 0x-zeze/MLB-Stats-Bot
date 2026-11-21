@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from sklearn.linear_model import LogisticRegression
+from scipy.optimize import minimize
 
 from src.dataset.build_game_dataset import build_game_dataset, build_folds, DatasetRow
 from src.eval.metrics import model_metrics
@@ -99,28 +99,53 @@ def _market_logit(row: DatasetRow) -> float | None:
     return math.log(p / (1.0 - p))
 
 
+def _fit_offset_logistic(
+    X: np.ndarray, y: np.ndarray, offset: np.ndarray, c: float
+) -> tuple[float, np.ndarray]:
+    """Fit L2-penalized Bernoulli logistic regression with fixed logit offset.
+
+    Minimizes: sum_i [log(1 + exp(z_i)) - y_i * z_i] + (1 / (2 * c)) * ||w||^2
+    where z_i = offset_i + b + X_i @ w. The offset coefficient is fixed at 1.0.
+    """
+    n_features = X.shape[1]
+    reg = 1.0 / max(float(c), 1e-12)
+
+    def obj_and_grad(params: np.ndarray) -> tuple[float, np.ndarray]:
+        b = params[0]
+        w = params[1:]
+        z = offset + b + X @ w
+        # Numerically stable log(1 + exp(z)) - y * z
+        log1p_exp = np.where(z > 0, z + np.log1p(np.exp(-z)), np.log1p(np.exp(z)))
+        loss = float(np.sum(log1p_exp - y * z) + 0.5 * reg * float(np.dot(w, w)))
+        p = _sigmoid(z)
+        diff = p - y
+        grad = np.empty_like(params)
+        grad[0] = float(np.sum(diff))
+        grad[1:] = X.T @ diff + reg * w
+        return loss, grad
+
+    init = np.zeros(n_features + 1, dtype=float)
+    res = minimize(
+        obj_and_grad,
+        init,
+        method="L-BFGS-B",
+        jac=True,
+        options={"maxiter": 500},
+    )
+    params = res.x
+    return float(params[0]), params[1:].astype(float)
+
+
 def _fit_residual_fold(
     train_rows: list[DatasetRow], fold_index: int
 ) -> tuple[ResidualFoldFit | None, str | None]:
     """Fit the residual model on training-fold rows that have market + features.
 
-    The model regresses the home-win indicator on [X_baseball] with the market
-    logit as a FIXED offset (coefficient 1). Equivalently, we fit a logistic
-    regression of y on X_baseball + a constant market-offset feature whose
-    coefficient is frozen at 1. We implement this by offsetting the decision
-    function: z = market_logit + intercept + beta . X_scaled, and fit
-    intercept+beta by providing the market logit as an exposure/offset.
-
-    sklearn LogisticRegression has no native offset, so we fit on the
-    *residualized* target is not valid for Bernoulli. Instead we use the standard
-    trick: include market_logit as a feature but FIX its coefficient by
-    subtracting it from the intercept after fitting a model where market_logit
-    is penalized to 0. Concretely: fit y ~ intercept + beta.X with sample
-    weights, then add market_logit to the linear predictor at predict time.
-
-    Returns (fit, None) or (None, reason).
+    Minimizes exact L2-penalized Bernoulli log-loss with fixed market logit
+    offset (coefficient = 1.0, never fit): z = market_logit + b + beta . X_scaled.
+    Imputation and scaling are fit strictly on inner-train during C selection,
+    then refit on the full training fold.
     """
-    # Keep only rows with market + features + outcome.
     usable = [
         r for r in train_rows
         if _market_logit(r) is not None and r.home_won is not None and _row_features(r) is not None
@@ -135,10 +160,9 @@ def _fit_residual_fold(
     if matrix is None:
         return None, f"fold_{fold_index}_no_feature_vectors"
     X_all, y_all, valid_mask = matrix
-    # _build_matrix already filtered feature-vector presence; all usable rows
-    # are valid here.
     valid_idx = [i for i, m in enumerate(valid_mask) if m]
-    X = X_all[valid_idx]
+    n_feat = len(FEATURE_NAMES)
+    X_raw = X_all[valid_idx, :n_feat].copy()
     y = y_all[valid_idx]
     market_logits = np.array([_market_logit(usable[i]) for i in valid_idx], dtype=float)
 
@@ -150,46 +174,51 @@ def _fit_residual_fold(
             f"_min_{MIN_EVENTS_PER_CLASS}"
         )
 
-    n_feat = len(FEATURE_NAMES)
+    def _fit_transform(X_tr: np.ndarray, X_te: np.ndarray | None = None):
+        imp: dict[str, float] = {}
+        mu_map: dict[str, float] = {}
+        std_map: dict[str, float] = {}
+        tr_out = X_tr.copy()
+        te_out = X_te.copy() if X_te is not None else None
+        for j, name in enumerate(FEATURE_NAMES):
+            col = tr_out[:, j]
+            finite = col[np.isfinite(col)]
+            med = float(np.median(finite)) if finite.size else 0.0
+            imp[name] = med
+            tr_nan = np.isnan(col)
+            if tr_nan.any():
+                tr_out[tr_nan, j] = med
+            mu = float(np.mean(tr_out[:, j]))
+            sigma = float(np.std(tr_out[:, j]))
+            std = sigma if sigma > 1e-9 else 1.0
+            mu_map[name] = mu
+            std_map[name] = std
+            tr_out[:, j] = (tr_out[:, j] - mu) / std
+            if te_out is not None:
+                te_col = te_out[:, j]
+                te_nan = np.isnan(te_col)
+                if te_nan.any():
+                    te_out[te_nan, j] = med
+                te_out[:, j] = (te_out[:, j] - mu) / std
+        return tr_out, te_out, imp, mu_map, std_map
 
-    # Imputation medians from TRAINING fold only.
-    imputation: dict[str, float] = {}
-    for j, name in enumerate(FEATURE_NAMES):
-        col = X[:, j]
-        finite = col[np.isfinite(col)]
-        imputation[name] = float(np.median(finite)) if finite.size else 0.0
-        nan_mask = np.isnan(col)
-        if nan_mask.any():
-            X[nan_mask, j] = imputation[name]
-
-    # Scaling from TRAINING fold only.
-    feature_mean: dict[str, float] = {}
-    feature_std: dict[str, float] = {}
-    for j, name in enumerate(FEATURE_NAMES):
-        col = X[:, j]
-        mu = float(np.mean(col))
-        sigma = float(np.std(col))
-        feature_mean[name] = mu
-        feature_std[name] = sigma if sigma > 1e-9 else 1.0
-        X[:, j] = (col - mu) / feature_std[name]
-
-    # Inner chronological validation for L2 selection. The market logit is a
-    # FIXED offset at predict time; we select C on the offset-adjusted loss.
     order = np.arange(len(y))
     n_val = max(1, int(len(y) * INNER_VAL_FRACTION))
     inner_train_idx = order[:-n_val]
     inner_val_idx = order[-n_val:]
 
+    X_inner_tr, X_inner_val, _, _, _ = _fit_transform(X_raw[inner_train_idx], X_raw[inner_val_idx])
+
     best_c = REGULARIZATION_GRID[0]
     best_val_brier = math.inf
     for c in REGULARIZATION_GRID:
-        clf = LogisticRegression(C=c, solver="lbfgs", max_iter=1000, fit_intercept=True)
         try:
-            clf.fit(X[inner_train_idx], y[inner_train_idx])
+            b_in, w_in = _fit_offset_logistic(
+                X_inner_tr, y[inner_train_idx], market_logits[inner_train_idx], c
+            )
         except (ValueError, np.linalg.LinAlgError):
             continue
-        # Offset-adjusted probabilities on the inner validation set.
-        z = clf.intercept_[0] + clf.coef_[0] @ X[inner_val_idx].T + market_logits[inner_val_idx]
+        z = b_in + X_inner_val @ w_in + market_logits[inner_val_idx]
         val_prob = _sigmoid(z)
         val_brier = float(np.mean((val_prob - y[inner_val_idx]) ** 2))
         if val_brier < best_val_brier:
@@ -197,14 +226,13 @@ def _fit_residual_fold(
             best_c = c
 
     # Refit on the FULL training fold with the selected C.
-    clf = LogisticRegression(C=best_c, solver="lbfgs", max_iter=1000, fit_intercept=True)
-    clf.fit(X, y)
+    X, _, imputation, feature_mean, feature_std = _fit_transform(X_raw)
+    intercept, coefs = _fit_offset_logistic(X, y, market_logits, best_c)
 
-    coefficients = {name: float(clf.coef_[0][j]) for j, name in enumerate(FEATURE_NAMES)}
-    intercept = float(clf.intercept_[0])
+    coefficients = {name: float(coefs[j]) for j, name in enumerate(FEATURE_NAMES)}
 
     # Training metrics (offset-adjusted; audit only, never a selection signal).
-    z_train = clf.intercept_[0] + clf.coef_[0] @ X.T + market_logits
+    z_train = intercept + X @ coefs + market_logits
     train_prob = _sigmoid(z_train)
     train_metrics = model_metrics(
         [float(p) for p in train_prob], [int(v) for v in y]
@@ -332,6 +360,8 @@ def train_market_residual_v2(
 
     oof_probs: list[float] = []
     oof_labels: list[int] = []
+    market_oof_probs: list[float] = []
+    market_oof_labels: list[int] = []
     fold_fits: list[dict[str, Any]] = []
     fold_metrics: list[dict[str, Any]] = []
     insufficient_reasons: list[str] = []
@@ -355,9 +385,12 @@ def train_market_residual_v2(
         probs, valid = _predict_residual_fold(fit, test_rows)
         fold_probs = [p for p, v in zip(probs, valid) if v]
         fold_labels = [1 if r.home_won else 0 for r, v in zip(test_rows, valid) if v]
+        fold_market_probs = [float(r.market_no_vig_home_prob) for r, v in zip(test_rows, valid) if v]
 
         oof_probs.extend(fold_probs)
         oof_labels.extend(fold_labels)
+        market_oof_probs.extend(fold_market_probs)
+        market_oof_labels.extend(fold_labels)
 
         fm = model_metrics(fold_probs, fold_labels) if fold_probs else {}
         fm["fold_index"] = fold["fold_index"]
@@ -396,19 +429,7 @@ def train_market_residual_v2(
     base["oof_metrics"] = oof_metrics
     base["oof_row_count"] = len(oof_probs)
 
-    # Market baseline metrics on the SAME with-market OOF rows for the
-    # incremental-over-market comparison P3 requires.
-    market_oof_probs: list[float] = []
-    market_oof_labels: list[int] = []
-    for fold in test_folds:
-        test_start = fold["start_date"]
-        test_end = fold["end_date"]
-        test_rows = [r for r in clean if test_start <= r.date_ymd < test_end]
-        for r in test_rows:
-            p = _safe_float(r.market_no_vig_home_prob)
-            if p is not None and 0.0 < p < 1.0 and r.home_won is not None:
-                market_oof_probs.append(p)
-                market_oof_labels.append(1 if r.home_won else 0)
+    # Market baseline metrics on the EXACT SAME valid OOF rows evaluated above.
     base["market_oof_metrics"] = model_metrics(market_oof_probs, market_oof_labels) if market_oof_probs else {}
 
     # Final proposal artifact: refit on ALL pre-holdout with-market rows.

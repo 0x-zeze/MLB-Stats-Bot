@@ -209,7 +209,12 @@ def read_jsonl(file_key: str, limit: int | None = None) -> list[dict[str, Any]]:
             text = line.strip()
             if not text:
                 continue
-            rows.append(json.loads(text))
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                rows.append(parsed)
     return rows[-limit:] if limit else rows
 
 
@@ -220,9 +225,13 @@ def read_json(file_key: str) -> dict[str, Any]:
 
 
 def write_json(file_key: str, payload: dict[str, Any]) -> dict[str, Any]:
-    evolution_data_dir().mkdir(parents=True, exist_ok=True)
-    with path_for(file_key).open("w", encoding="utf-8") as handle:
+    root = evolution_data_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    target = path_for(file_key)
+    tmp_path = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True, default=_json_default)
+    os.replace(tmp_path, target)
     return payload
 
 

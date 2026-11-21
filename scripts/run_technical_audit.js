@@ -150,9 +150,10 @@ function collectSchema(db) {
 
   const schema = {};
   for (const table of tables) {
+    const quotedName = `"${String(table.name).replace(/"/g, '""')}"`;
     let columns = [];
     try {
-      columns = db.prepare(`PRAGMA table_info(${table.name})`).all();
+      columns = db.prepare(`PRAGMA table_info(${quotedName})`).all();
     } catch {
       columns = [];
     }
@@ -165,7 +166,7 @@ function collectSchema(db) {
         pk: c.pk === 1,
         dflt_value: c.dflt_value
       })),
-      rowCount: queryCount(db, `SELECT COUNT(*) AS c FROM ${table.name}`)
+      rowCount: queryCount(db, `SELECT COUNT(*) AS c FROM ${quotedName}`)
     };
   }
 
@@ -242,28 +243,68 @@ function collectLedger(db) {
   // Processed pick but open ledger (non-atomic settlement fingerprint).
   let processedOpen = [];
   if (tableExists(db, 'picks')) {
-    processedOpen = db
-      .prepare(
-        `SELECT b.decision_id, b.game_pk, b.date_ymd, b.market, b.team, b.side, b.recommended_at,
-                p.post_game_processed, p.post_game_processed_at
-         FROM bet_ledger b
-         JOIN picks p ON p.game_pk = b.game_pk
-         WHERE b.status = 'open' AND p.post_game_processed = 1
-         ORDER BY b.date_ymd, b.decision_id`
-      )
-      .all();
+    const hasPickProcessing = tableExists(db, 'pick_processing');
+    if (hasPickProcessing) {
+      processedOpen = db
+        .prepare(
+          `SELECT b.decision_id, b.game_pk, b.date_ymd, b.market, b.team, b.side, b.recommended_at,
+                  COALESCE(pp.post_game_processed, 0) AS post_game_processed,
+                  pp.post_game_processed_at
+           FROM bet_ledger b
+           LEFT JOIN pick_processing pp ON pp.game_pk = b.game_pk
+           WHERE b.status = 'open'
+             AND (
+               pp.post_game_processed = 1
+               OR EXISTS (SELECT 1 FROM picks p WHERE p.game_pk = b.game_pk AND p.post_game_processed = 1)
+             )
+           ORDER BY b.date_ymd, b.decision_id`
+        )
+        .all();
+    } else {
+      processedOpen = db
+        .prepare(
+          `SELECT b.decision_id, b.game_pk, b.date_ymd, b.market, b.team, b.side, b.recommended_at,
+                  p.post_game_processed, p.post_game_processed_at
+           FROM bet_ledger b
+           JOIN picks p ON p.game_pk = b.game_pk
+           WHERE b.status = 'open' AND p.post_game_processed = 1
+           ORDER BY b.date_ymd, b.decision_id`
+        )
+        .all();
+    }
   }
 
-  // Side/payload mismatches between immutable-ish ledger and mutable pick payload.
+  // Side/payload mismatches between immutable-ish ledger and pick payload.
+  // Join the exact prediction_run_id (or latest version) to avoid N× multiplication on append-only picks.
   let sideMismatches = [];
   let pickVsValueDivergences = [];
   if (tableExists(db, 'picks')) {
+    const pickCols = new Set(db.prepare('PRAGMA table_info(picks)').all().map((c) => c.name));
+    const ledgerCols = new Set(db.prepare('PRAGMA table_info(bet_ledger)').all().map((c) => c.name));
+    const hasRunId = pickCols.has('prediction_run_id') && ledgerCols.has('prediction_run_id');
+    const hasVersion = pickCols.has('prediction_version');
+    const pickJoinSql = hasRunId && hasVersion
+      ? `JOIN picks p ON p.rowid = COALESCE(
+           CASE WHEN b.prediction_run_id IS NOT NULL THEN (
+             SELECT p_exact.rowid FROM picks p_exact WHERE p_exact.prediction_run_id = b.prediction_run_id LIMIT 1
+           ) END,
+           (
+             SELECT p_latest.rowid FROM picks p_latest WHERE p_latest.game_pk = b.game_pk
+             ORDER BY p_latest.prediction_version DESC, p_latest.rowid DESC LIMIT 1
+           )
+         )`
+      : hasVersion
+        ? `JOIN picks p ON p.rowid = (
+             SELECT p_latest.rowid FROM picks p_latest WHERE p_latest.game_pk = b.game_pk
+             ORDER BY p_latest.prediction_version DESC, p_latest.rowid DESC LIMIT 1
+           )`
+        : 'JOIN picks p ON p.game_pk = b.game_pk';
     const joined = db
       .prepare(
         `SELECT b.game_pk, b.date_ymd, b.market, b.side AS ledger_side, b.team AS ledger_team,
                 b.result, b.units_pl, b.clv, b.status, p.payload
          FROM bet_ledger b
-         JOIN picks p ON p.game_pk = b.game_pk
+         ${pickJoinSql}
          WHERE b.market = 'moneyline'`
       )
       .all();
@@ -350,11 +391,18 @@ function collectLedger(db) {
 function collectPicks(db) {
   if (!tableExists(db, 'picks')) return { available: false };
 
-  const processed = db
-    .prepare(
-      'SELECT post_game_processed, COUNT(*) AS c FROM picks GROUP BY post_game_processed'
-    )
-    .all();
+  const hasPickProcessing = tableExists(db, 'pick_processing');
+  const processed = hasPickProcessing
+    ? db
+        .prepare(
+          'SELECT post_game_processed, COUNT(*) AS c FROM pick_processing GROUP BY post_game_processed'
+        )
+        .all()
+    : db
+        .prepare(
+          'SELECT post_game_processed, COUNT(*) AS c FROM picks GROUP BY post_game_processed'
+        )
+        .all();
   const dateRange = db
     .prepare('SELECT MIN(date_ymd) AS min_date, MAX(date_ymd) AS max_date FROM picks')
     .get();

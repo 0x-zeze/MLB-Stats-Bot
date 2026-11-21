@@ -46,11 +46,19 @@ def load_team_rows(sqlite_path: Path, outcomes_csv: Path) -> list[dict[str, Any]
     conn = sqlite3.connect(str(sqlite_path))
     conn.row_factory = sqlite3.Row
     try:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(picks)")}
+        order_col = "prediction_version DESC, rowid DESC" if "prediction_version" in cols else "rowid DESC"
         picks = list(
             conn.execute(
-                """
+                f"""
+                WITH ranked AS (
+                    SELECT game_pk, date_ymd, payload,
+                           ROW_NUMBER() OVER (PARTITION BY game_pk ORDER BY {order_col}) AS rn
+                    FROM picks
+                )
                 SELECT game_pk, date_ymd, payload
-                FROM picks
+                FROM ranked
+                WHERE rn = 1
                 ORDER BY date_ymd, game_pk
                 """
             )
@@ -110,12 +118,19 @@ def load_team_rows(sqlite_path: Path, outcomes_csv: Path) -> list[dict[str, Any]
         market_home = implied_home / (implied_home + implied_away)
 
         predicted_winner = str(outcome.get("prediction") or "")
+        outcome_result = str(outcome.get("result") or "").lower()
         home_name = str((payload.get("home") or {}).get("name") or "")
         away_name = str((payload.get("away") or {}).get("name") or "")
         if predicted_winner.lower() == home_name.lower():
-            home_won = 1
+            picked_home = True
         elif predicted_winner.lower() == away_name.lower():
-            home_won = 0
+            picked_home = False
+        else:
+            continue
+        if outcome_result == "win":
+            home_won = 1 if picked_home else 0
+        elif outcome_result == "loss":
+            home_won = 0 if picked_home else 1
         else:
             continue
 

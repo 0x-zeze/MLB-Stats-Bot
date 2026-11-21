@@ -58,9 +58,13 @@ def tag_game_segments(game: dict[str, Any]) -> dict[str, str]:
         tags["venue"] = "unknown"
 
     prob = safe_float(game.get("win_probability", game.get("home_win_probability")), 0.5)
+    if prob > 1.0:
+        prob /= 100.0
     market_implied = safe_float(game.get("market_implied_probability"), None)
+    if market_implied is not None and market_implied > 1.0:
+        market_implied /= 100.0
     if market_implied is not None:
-        tags["role"] = "favorite" if prob >= 0.5 else "underdog"
+        tags["role"] = "favorite" if market_implied >= 0.5 else "underdog"
     else:
         tags["role"] = "favorite" if prob >= 0.55 else "underdog"
 
@@ -95,6 +99,8 @@ def tag_game_segments(game: dict[str, Any]) -> dict[str, str]:
         tags["confidence"] = "unknown"
 
     edge = abs(safe_float(game.get("model_edge", 0), 0))
+    if edge > 1.0:
+        edge /= 100.0
     if edge >= 0.07:
         tags["edge_size"] = "large_7_plus"
     elif edge >= 0.04:
@@ -133,9 +139,13 @@ def tag_game_segments(game: dict[str, Any]) -> dict[str, str]:
     # Divisional rivalry
     if home and away:
         pick_team = pick if pick else home
-        tags["rivalry"] = "divisional" if _get_division(pick_team) == _get_division(
-            away if pick.upper() == home.upper() else home
-        ) else "non_divisional"
+        opp_team = away if pick_team.upper() == home.upper() else home
+        div_pick = _get_division(pick_team)
+        div_opp = _get_division(opp_team)
+        if div_pick == "unknown" or div_opp == "unknown":
+            tags["rivalry"] = "unknown"
+        else:
+            tags["rivalry"] = "divisional" if div_pick == div_opp else "non_divisional"
     else:
         tags["rivalry"] = "unknown"
 

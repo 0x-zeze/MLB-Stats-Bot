@@ -56,11 +56,19 @@ def load_joined_rows(sqlite_path: Path, outcomes_csv: Path) -> list[dict[str, An
     conn = sqlite3.connect(str(sqlite_path))
     conn.row_factory = sqlite3.Row
     try:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(picks)")}
+        order_col = "prediction_version DESC, rowid DESC" if "prediction_version" in cols else "rowid DESC"
         picks = list(
             conn.execute(
-                """
+                f"""
+                WITH ranked AS (
+                    SELECT game_pk, date_ymd, payload,
+                           ROW_NUMBER() OVER (PARTITION BY game_pk ORDER BY {order_col}) AS rn
+                    FROM picks
+                )
                 SELECT game_pk, date_ymd, payload
-                FROM picks
+                FROM ranked
+                WHERE rn = 1
                 ORDER BY date_ymd, game_pk
                 """
             )
@@ -120,12 +128,19 @@ def load_joined_rows(sqlite_path: Path, outcomes_csv: Path) -> list[dict[str, An
         market_home = implied_home / (implied_home + implied_away)
 
         predicted_winner = str(outcome.get("prediction") or "")
+        outcome_result = str(outcome.get("result") or "").lower()
         home_name = str((payload.get("home") or {}).get("name") or "")
         away_name = str((payload.get("away") or {}).get("name") or "")
         if predicted_winner.lower() == home_name.lower():
-            home_won = 1
+            picked_home = True
         elif predicted_winner.lower() == away_name.lower():
-            home_won = 0
+            picked_home = False
+        else:
+            continue
+        if outcome_result == "win":
+            home_won = 1 if picked_home else 0
+        elif outcome_result == "loss":
+            home_won = 0 if picked_home else 1
         else:
             continue
 
@@ -357,10 +372,10 @@ def fit_banded_shrink(rows: list[dict[str, Any]], n_splits: int = 4) -> dict[str
     combined_raw_b = combined_shrunk_b = 0.0
     tot = 0
     all_factors: dict[str, float] = {}
-    for i in range(n_splits):
+    for i in range(1, n_splits):
         start = i * size
         end = n if i == n_splits - 1 else (i + 1) * size
-        train = rows[:start] if i > 0 else rows[:size]
+        train = rows[:start]
         test = rows[start:end]
         if not train or not test:
             continue
@@ -456,10 +471,10 @@ def analyze(*, sqlite_path: Path, outcomes_csv: Path, n_splits: int) -> dict[str
     combined_rows: list[dict[str, Any]] = []
     combined_probs: list[float] = []
     weights: list[float] = []
-    for idx in range(n_splits):
+    for idx in range(1, n_splits):
         start = idx * split_size
         end = n if idx == n_splits - 1 else (idx + 1) * split_size
-        train = rows[:start] if idx > 0 else rows[:split_size]
+        train = rows[:start]
         test = rows[start:end]
         if not train or not test:
             continue

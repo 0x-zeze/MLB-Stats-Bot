@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { isFiniteNum } from '../utils.js';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
 import { Badge } from './ui/badge.jsx';
 import EmptyState from './EmptyState.jsx';
@@ -113,7 +114,9 @@ export default function AuditSection() {
                       </td>
                       <td className="px-3 py-2 text-xs uppercase text-ink/70">{row.pick_side || '-'}</td>
                       <td className="px-3 py-2 text-xs text-ink/70">
-                        {Number.isFinite(Number(row.pick_probability)) ? `${Number(row.pick_probability).toFixed(1)}%` : '-'}
+                        {isFiniteNum(row.pick_probability)
+                          ? `${(Number(row.pick_probability) <= 1 ? Number(row.pick_probability) * 100 : Number(row.pick_probability)).toFixed(1)}%`
+                          : '-'}
                       </td>
                       <td className="px-3 py-2">
                         <Badge variant={String(row.status || '').toUpperCase() === 'VALUE' ? 'value' : 'nobet'}>

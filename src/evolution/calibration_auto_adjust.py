@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..utils import clamp, safe_float
@@ -27,7 +27,9 @@ def detect_persistent_miscalibration(
     if not calibration_history:
         return None
 
-    now = _parse_date(current_date) if current_date else datetime.now()
+    now = _parse_date(current_date) if current_date else datetime.now(timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=lookback_days)
 
     relevant = [
@@ -129,10 +131,11 @@ def find_miscalibrated_buckets(
 
 def _parse_date(value: Any) -> datetime | None:
     if isinstance(value, datetime):
-        return value
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return None

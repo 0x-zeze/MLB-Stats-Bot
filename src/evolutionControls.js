@@ -46,9 +46,10 @@ function normalizeRules(approvedRules) {
     const key = candidate.rule_key || candidate.candidate_id;
     if (!key) continue;
     const decisionStatus = String(entry?.decision?.status || '').toLowerCase();
-    // Skip guardrails that have been released by the calibration-driven removal mechanism
-    if (decisionStatus === 'released' || decisionStatus === 'removed') continue;
+    // Skip guardrails that have been released, disabled, or revoked
+    if (['released', 'removed', 'disabled', 'revoked', 'rejected'].includes(decisionStatus)) continue;
     const status = String(candidate.status || decisionStatus || 'active').toLowerCase();
+    if (['released', 'removed', 'disabled', 'revoked', 'rejected', 'inactive'].includes(status)) continue;
     const productionAllowed = candidate.production_update_allowed !== false;
     const isApproved = status === 'active' || status === 'approved' || String(candidate.promotion_status || '').startsWith('approved');
     if (productionAllowed && isApproved) {
@@ -120,9 +121,12 @@ export function getCalibrationPenalty(probability, controls) {
     const low = Number(match[1]);
     const high = Number(match[2]);
     if (probability >= low && probability < high) {
-      const accuracy = Number(segment.accuracy || pattern.reason_quality?.accuracy || 100);
-      if (accuracy < 45) penalty -= 2;
-      else if (accuracy < 50) penalty -= 1;
+      const rawAcc = segment.accuracy ?? pattern.reason_quality?.accuracy ?? 100;
+      const accuracy = Number(rawAcc);
+      if (Number.isFinite(accuracy)) {
+        if (accuracy < 45) penalty -= 2;
+        else if (accuracy < 50) penalty -= 1;
+      }
     }
   }
 

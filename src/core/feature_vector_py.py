@@ -41,17 +41,23 @@ def _num(value: Any, fallback: Any = None) -> Any:
 
 
 def _gp(stat: dict | None) -> float:
-    if not stat:
+    if not isinstance(stat, dict):
         return 1.0
-    games = stat.get("gamesPlayed", stat.get("hitting", {}).get("gamesPlayed")) if isinstance(stat, dict) else None
+    hitting = stat.get("hitting") if isinstance(stat.get("hitting"), dict) else {}
+    games = stat.get("gamesPlayed")
+    if games is None:
+        games = hitting.get("gamesPlayed")
     n = _num(games, 1.0)
     return max(1.0, n)
 
 
 def _rpg(stat: dict | None) -> float | None:
-    if not stat:
+    if not isinstance(stat, dict):
         return None
-    runs = stat.get("runs", stat.get("hitting", {}).get("runs")) if isinstance(stat, dict) else None
+    hitting = stat.get("hitting") if isinstance(stat.get("hitting"), dict) else {}
+    runs = stat.get("runs")
+    if runs is None:
+        runs = hitting.get("runs")
     runs = _num(runs, None)
     if runs is None:
         return None
@@ -59,25 +65,37 @@ def _rpg(stat: dict | None) -> float | None:
 
 
 def _ops(stat: dict | None) -> float | None:
-    if not stat:
+    if not isinstance(stat, dict):
         return None
-    return _num(stat.get("ops", stat.get("hitting", {}).get("ops")), None) if isinstance(stat, dict) else None
+    hitting = stat.get("hitting") if isinstance(stat.get("hitting"), dict) else {}
+    val = stat.get("ops")
+    if val is None:
+        val = hitting.get("ops")
+    return _num(val, None)
 
 
 def _era(stat: dict | None) -> float | None:
-    if not stat:
+    if not isinstance(stat, dict):
         return None
-    return _num(stat.get("era", stat.get("pitching", {}).get("era")), None) if isinstance(stat, dict) else None
+    pitching = stat.get("pitching") if isinstance(stat.get("pitching"), dict) else {}
+    val = stat.get("era")
+    if val is None:
+        val = pitching.get("era")
+    return _num(val, None)
 
 
 def _whip(stat: dict | None) -> float | None:
-    if not stat:
+    if not isinstance(stat, dict):
         return None
-    return _num(stat.get("whip", stat.get("pitching", {}).get("whip")), None) if isinstance(stat, dict) else None
+    pitching = stat.get("pitching") if isinstance(stat.get("pitching"), dict) else {}
+    val = stat.get("whip")
+    if val is None:
+        val = pitching.get("whip")
+    return _num(val, None)
 
 
 def _record_pct(record: dict | None) -> float | None:
-    if not record:
+    if not isinstance(record, dict):
         return None
     if record.get("pct") is not None:
         return _num(record["pct"], None)
@@ -88,12 +106,13 @@ def _record_pct(record: dict | None) -> float | None:
 
 
 def _split_pct(standing: dict | None, stype: str) -> float | None:
-    if not standing:
+    if not isinstance(standing, dict):
         return None
-    splits = standing.get("records", {}).get("splitRecords") if isinstance(standing, dict) else None
+    records = standing.get("records") if isinstance(standing.get("records"), dict) else {}
+    splits = records.get("splitRecords")
     if not splits:
         return None
-    rec = next((r for r in splits if r.get("type") == stype), None)
+    rec = next((r for r in splits if isinstance(r, dict) and r.get("type") == stype), None)
     return _record_pct(rec) if rec else None
 
 
@@ -132,7 +151,11 @@ def buildFeatureVector(coreInputs: dict) -> dict:
     home_id = home_team.get("id")
 
     def at(obj, idx):
-        return obj.get(str(idx)) if (obj and idx is not None) else None
+        if not isinstance(obj, dict) or idx is None:
+            return None
+        if idx in obj:
+            return obj[idx]
+        return obj.get(str(idx))
 
     away_stats = at(raw.get("teamStats"), away_id)
     home_stats = at(raw.get("teamStats"), home_id)
@@ -141,8 +164,10 @@ def buildFeatureVector(coreInputs: dict) -> dict:
     away_rolling = at(raw.get("rollingTeamStats"), away_id)
     home_rolling = at(raw.get("rollingTeamStats"), home_id)
 
-    away_pitcher_id = (teams.get("away") or {}).get("probablePitcher", {}).get("id")
-    home_pitcher_id = (teams.get("home") or {}).get("probablePitcher", {}).get("id")
+    away_probable = (teams.get("away") or {}).get("probablePitcher") or {}
+    home_probable = (teams.get("home") or {}).get("probablePitcher") or {}
+    away_pitcher_id = away_probable.get("id")
+    home_pitcher_id = home_probable.get("id")
     away_pitcher = at(raw.get("pitcherStats"), away_pitcher_id)
     home_pitcher = at(raw.get("pitcherStats"), home_pitcher_id)
     away_pitcher_recent = at(raw.get("pitcherRecentStarts"), away_pitcher_id)
@@ -163,13 +188,15 @@ def buildFeatureVector(coreInputs: dict) -> dict:
     weather = game.get("weather") or {}
     temp_num = _num(weather.get("temp"), None)
     wind = weather.get("wind")
-    wind_match = re.match(r"([\d.]+)\s*mph", wind, re.I) if isinstance(wind, str) else None
+    wind_match = re.search(r"([\d.]+)\s*mph", wind, re.I) if isinstance(wind, str) else None
     wind_speed = _num(wind_match.group(1), None) if wind_match else None
     wind_out = bool(re.search(r"out|cf|lf|rf", wind, re.I)) if isinstance(wind, str) else None
     wind_in = bool(re.search(r"\bin\b", wind, re.I)) if isinstance(wind, str) else None
 
-    away_starter_hand = (teams.get("away") or {}).get("probablePitcher", {}).get("pitchHand", {}).get("code")
-    home_starter_hand = (teams.get("home") or {}).get("probablePitcher", {}).get("pitchHand", {}).get("code")
+    away_starter_hand = (away_probable.get("pitchHand") or {}).get("code")
+    home_starter_hand = (home_probable.get("pitchHand") or {}).get("code")
+    h2h_games = _num(h2h.get("games"), None) if isinstance(h2h, dict) else None
+    h2h_prob = _num(h2h.get("homeProbability"), None) if isinstance(h2h, dict) else None
 
     vector: dict[str, Any] = {
         "schemaVersion": FEATURE_VECTOR_SCHEMA_VERSION,
@@ -177,7 +204,7 @@ def buildFeatureVector(coreInputs: dict) -> dict:
         "gamePk": str(game.get("gamePk", "")),
         "awayTeamId": str(away_id) if away_id is not None else None,
         "homeTeamId": str(home_id) if home_id is not None else None,
-        "venueId": _num(game.get("venue", {}).get("id"), None) if game.get("venue") else None,
+        "venueId": _num((game.get("venue") or {}).get("id"), None) if isinstance(game.get("venue"), dict) else None,
         "officialDate": game.get("officialDate"),
 
         "awayRpg": _with_missing(_rpg(away_stats)),
@@ -206,10 +233,10 @@ def buildFeatureVector(coreInputs: dict) -> dict:
         "awayRunDiffPerGame": _with_missing(_run_diff_per_game(away_standing)),
         "homeRunDiffPerGame": _with_missing(_run_diff_per_game(home_standing)),
         "awayVsStarterHandPct": _with_missing(
-            _split_pct(away_standing, "left") if home_starter_hand == "L" else _split_pct(away_standing, "right")
+            _split_pct(away_standing, "left") if home_starter_hand == "L" else (_split_pct(away_standing, "right") if home_starter_hand == "R" else None)
         ),
         "homeVsStarterHandPct": _with_missing(
-            _split_pct(home_standing, "left") if away_starter_hand == "L" else _split_pct(home_standing, "right")
+            _split_pct(home_standing, "left") if away_starter_hand == "L" else (_split_pct(home_standing, "right") if away_starter_hand == "R" else None)
         ),
 
         "awayStarterEra": _with_missing(_era(away_pitcher)),
@@ -254,10 +281,10 @@ def buildFeatureVector(coreInputs: dict) -> dict:
         "awayInjuryCount": _with_missing(len(away_injuries) if isinstance(away_injuries, list) else None),
         "homeInjuryCount": _with_missing(len(home_injuries) if isinstance(home_injuries, list) else None),
 
-        "h2hGames": _with_missing(_num(h2h.get("games"), None) if h2h else None),
+        "h2hGames": _with_missing(h2h_games if (h2h_games is not None and h2h_games > 0) else None),
         "h2hHomeWinPct": _with_missing(
-            (_num(h2h.get("homeProbability"), None) / 100.0)
-            if (h2h and h2h.get("games", 0) and h2h.get("homeProbability") is not None)
+            (h2h_prob / 100.0)
+            if (h2h_games is not None and h2h_games > 0 and h2h_prob is not None)
             else None
         ),
 

@@ -55,15 +55,27 @@ export class TelegramBot {
     this.baseUrl = `https://api.telegram.org/bot${token}`;
   }
 
-  async request(method, payload = {}) {
-    const response = await fetch(`${this.baseUrl}/${method}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'mlb-alert-telegram-agent/0.1'
-      },
-      body: JSON.stringify(payload)
-    });
+  async request(method, payload = {}, { timeoutMs = 45000 } = {}) {
+    const effectiveTimeout =
+      method === 'getUpdates' && Number.isFinite(Number(payload?.timeout))
+        ? Math.max(timeoutMs, (Number(payload.timeout) + 15) * 1000)
+        : timeoutMs;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), effectiveTimeout);
+    let response;
+    try {
+      response = await fetch(`${this.baseUrl}/${method}`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'mlb-alert-telegram-agent/0.1'
+        },
+        body: JSON.stringify(payload)
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const data = await response.json().catch(() => null);
     if (!response.ok || !data?.ok) {
@@ -133,50 +145,69 @@ export async function setupWebhook(
   const publicWebhookUrl = normalizeWebhookUrl(webhookUrl);
   const webhookPath = new URL(publicWebhookUrl).pathname || DEFAULT_WEBHOOK_PATH;
 
+  if (process.env.NODE_ENV === 'production' && !String(secret || '').trim()) {
+    throw new Error('TELEGRAM_WEBHOOK_SECRET wajib diisi saat TELEGRAM_WEBHOOK_MODE=true di production.');
+  }
+
   const server = createServer(async (request, response) => {
-    if (request.method === 'GET' && request.url === '/health') {
-      response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ ok: true, mode: 'telegram-webhook' }));
-      return;
-    }
-
-    const requestUrl = new URL(request.url || '/', 'http://localhost');
-    if (request.method !== 'POST' || requestUrl.pathname !== webhookPath) {
-      response.writeHead(404, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ ok: false, error: 'not_found' }));
-      return;
-    }
-
-    if (secret) {
-      const token = request.headers['x-telegram-bot-api-secret-token'];
-      // Use timing-safe comparison to avoid leaking the secret via timing.
-      const tokenBuf = Buffer.from(String(token || ''));
-      const secretBuf = Buffer.from(String(secret));
-      const matches =
-        tokenBuf.length === secretBuf.length
-        && (tokenBuf.length === 0 || timingSafeEqual(tokenBuf, secretBuf));
-      if (!matches) {
-        response.writeHead(403, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ ok: false, error: 'invalid_secret_token' }));
+    try {
+      if (request.method === 'GET' && request.url === '/health') {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ ok: true, mode: 'telegram-webhook' }));
         return;
       }
-    }
 
-    let update;
-    try {
-      update = await readJsonBody(request);
+      let requestUrl;
+      try {
+        requestUrl = new URL(request.url || '/', 'http://localhost');
+      } catch {
+        response.writeHead(400, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ ok: false, error: 'invalid_url' }));
+        return;
+      }
+      if (request.method !== 'POST' || requestUrl.pathname !== webhookPath) {
+        response.writeHead(404, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ ok: false, error: 'not_found' }));
+        return;
+      }
+
+      if (secret) {
+        const token = request.headers['x-telegram-bot-api-secret-token'];
+        // Use timing-safe comparison to avoid leaking the secret via timing.
+        const tokenBuf = Buffer.from(String(token || ''));
+        const secretBuf = Buffer.from(String(secret));
+        const matches =
+          tokenBuf.length === secretBuf.length
+          && (tokenBuf.length === 0 || timingSafeEqual(tokenBuf, secretBuf));
+        if (!matches) {
+          response.writeHead(403, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ ok: false, error: 'invalid_secret_token' }));
+          return;
+        }
+      }
+
+      let update;
+      try {
+        update = await readJsonBody(request);
+      } catch (error) {
+        response.writeHead(400, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ ok: false, error: error.message }));
+        return;
+      }
+
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+
+      Promise.resolve(onUpdate(update)).catch((error) => {
+        console.error('Webhook update error:', error);
+      });
     } catch (error) {
-      response.writeHead(400, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ ok: false, error: error.message }));
-      return;
+      if (!response.headersSent) {
+        response.writeHead(500, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ ok: false, error: 'internal_error' }));
+      }
+      console.error('Webhook server error:', error);
     }
-
-    response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ ok: true }));
-
-    Promise.resolve(onUpdate(update)).catch((error) => {
-      console.error('Webhook update error:', error);
-    });
   });
 
   await new Promise((resolve, reject) => {

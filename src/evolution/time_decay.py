@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..utils import safe_float
@@ -28,11 +28,11 @@ def decay_lesson_weight(
         return 0.5
 
     if current_date is None:
-        current_dt = datetime.now()
+        current_dt = datetime.now(timezone.utc)
     else:
         current_dt = _parse_date(current_date)
         if current_dt is None:
-            current_dt = datetime.now()
+            current_dt = datetime.now(timezone.utc)
 
     days_old = max(0.0, (current_dt - lesson_dt).total_seconds() / 86400.0)
 
@@ -117,10 +117,11 @@ def decay_row_weight(
 
 def _parse_date(value: Any) -> datetime | None:
     if isinstance(value, datetime):
-        return value
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return None

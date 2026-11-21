@@ -71,23 +71,22 @@ def remaining_innings_expected_runs(
     total_innings = 9
     current_inning = clamp(state.inning, 1, 20)
 
-    if state.is_top:
-        away_half_remaining = 1.0 - state.outs / 3.0
-        home_innings_remaining = max(0, total_innings - current_inning)
-        away_innings_remaining = max(0, total_innings - current_inning) + away_half_remaining
-    else:
-        home_half_remaining = 1.0 - state.outs / 3.0
-        away_innings_remaining = max(0, total_innings - current_inning)
-        home_innings_remaining = max(0, total_innings - current_inning - 1) + home_half_remaining
-
     current_half_runs = inning_run_expectancy(state)
 
     if state.is_top:
-        away_expected = away_innings_remaining * avg_runs_per_inning + current_half_runs
-        home_expected = home_innings_remaining * avg_runs_per_inning
+        # Current top half-inning is represented by current_half_runs; do not
+        # double-count it in away_innings_remaining. Home still bats in the
+        # bottom of current_inning plus any remaining full innings.
+        away_full_remaining = max(0, total_innings - current_inning)
+        home_full_remaining = max(0, total_innings - current_inning + 1)
+        away_expected = away_full_remaining * avg_runs_per_inning + current_half_runs
+        home_expected = home_full_remaining * avg_runs_per_inning
     else:
-        away_expected = away_innings_remaining * avg_runs_per_inning
-        home_expected = home_innings_remaining * avg_runs_per_inning + current_half_runs
+        # Current bottom half-inning is represented by current_half_runs.
+        away_full_remaining = max(0, total_innings - current_inning)
+        home_full_remaining = max(0, total_innings - current_inning)
+        away_expected = away_full_remaining * avg_runs_per_inning
+        home_expected = home_full_remaining * avg_runs_per_inning + current_half_runs
 
     return away_expected, home_expected
 

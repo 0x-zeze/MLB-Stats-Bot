@@ -115,9 +115,13 @@ def monte_carlo_total_probability(
     r_away = away_mean ** 2 / max(var / 2.0 - away_mean, 0.01)
     p_away = r_away / (r_away + away_mean)
 
+    if iterations <= 0:
+        return 0.0
+
     rng = random.Random(seed)
     over_count = 0
-    cutoff = math.floor(safe_float(line))
+    under_count = 0
+    line_val = safe_float(line)
 
     for _ in range(iterations):
         try:
@@ -128,11 +132,12 @@ def monte_carlo_total_probability(
             away_runs = rng.randint(2, 7)
 
         total = home_runs + away_runs
-        if total > cutoff:
+        if total > line_val:
             over_count += 1
+        elif total < line_val:
+            under_count += 1
 
-    over_prob = over_count / iterations
-    return over_prob if side.lower() == "over" else 1.0 - over_prob
+    return (over_count / iterations) if side.lower() == "over" else (under_count / iterations)
 
 
 def _sample_negative_binomial(r: float, p: float, rng: random.Random) -> int:

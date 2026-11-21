@@ -115,6 +115,7 @@ def _edge_floor(state, ctx, params, rule) -> None:
     threshold = ctx.get("edge_threshold")
     if (
         edge_value is not None
+        and threshold is not None
         and abs(edge_value) < threshold
     ):
         state["no_bet"] = True
@@ -124,7 +125,7 @@ def _edge_floor(state, ctx, params, rule) -> None:
 
 
 def _data_quality_floor(state, ctx, params, rule) -> None:
-    if int(ctx.get("score", 0)) < params.get("min_score", 60):
+    if int(ctx.get("score") or 0) < params.get("min_score", 60):
         state["no_bet"] = True
         state["reasons"].append(rule["message"])
 
@@ -170,7 +171,7 @@ def _pitcher_projected_cap(state, ctx, params, rule) -> None:
 
 
 def _score_band_cap(state, ctx, params, rule) -> None:
-    score = int(ctx.get("score", 0))
+    score = int(ctx.get("score") or 0)
     for band in params.get("bands", []):
         if band["min"] <= score < band["max"]:
             if band.get("requires_calibration"):
@@ -217,7 +218,11 @@ def evaluate_moneyline(ctx: dict[str, Any]) -> dict[str, Any]:
     exactly as the old inline middle block did.
     """
     rules = sorted(
-        (rule for rule in load_moneyline_rules()["rules"] if "py" in rule["engines"]),
+        (
+            rule
+            for rule in load_moneyline_rules()["rules"]
+            if "py" in rule["engines"] and rule.get("enabled", True) is not False
+        ),
         key=lambda rule: rule["order"],
     )
 

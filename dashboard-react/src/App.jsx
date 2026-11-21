@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import Layout from './components/Layout.jsx';
 import HeroSection from './components/HeroSection.jsx';
@@ -20,7 +20,11 @@ import LoginPage from './LoginPage.jsx';
 import { useAuth } from './useAuth.js';
 
 function todayDate() {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 export default function App() {
@@ -34,6 +38,7 @@ export default function App() {
   const [initialLoad, setInitialLoad] = useState(true);
   const [error, setError] = useState(null);
   const [authRequired, setAuthRequired] = useState(false);
+  const requestSeqRef = useRef(0);
 
   useEffect(() => {
     fetchToday();
@@ -69,13 +74,16 @@ export default function App() {
   }
 
   async function fetchToday() {
+    const seq = ++requestSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const data = await api.today({ date, source: 'live' });
+      if (seq !== requestSeqRef.current) return;
       setTodayData(data);
       setAuthRequired(false);
     } catch (err) {
+      if (seq !== requestSeqRef.current) return;
       if (isAuthError(err)) {
         auth.logout();
         setAuthRequired(true);
@@ -85,20 +93,25 @@ export default function App() {
       }
       try {
         const data = await api.today({ date, source: 'sample' });
+        if (seq !== requestSeqRef.current) return;
         setTodayData(data);
       } catch (sampleError) {
+        if (seq !== requestSeqRef.current) return;
         let healthError = null;
         try {
           await api.health();
         } catch (healthCheckError) {
           healthError = healthCheckError;
         }
+        if (seq !== requestSeqRef.current) return;
         setTodayData({ games: [], summary: {} });
         setError(formatLoadError(err, sampleError, healthError));
       }
     } finally {
-      setLoading(false);
-      setInitialLoad(false);
+      if (seq === requestSeqRef.current) {
+        setLoading(false);
+        setInitialLoad(false);
+      }
     }
   }
 
@@ -119,6 +132,7 @@ export default function App() {
 
   const games = todayData?.games || [];
   const summary = todayData?.summary || {};
+  const slateError = error || (todayData?.status === 'unavailable' ? (todayData?.warning || todayData?.reason || 'Live data unavailable.') : null);
 
   return (
     <Layout
@@ -139,7 +153,7 @@ export default function App() {
           <TodaySlate
             games={games}
             loading={loading}
-            error={error}
+            error={slateError}
             onSelectGame={setSelectedGame}
           />
           {selectedGame && <PredictionDetail game={selectedGame} onClose={() => setSelectedGame(null)} />}
@@ -152,7 +166,7 @@ export default function App() {
       {activeTab === 'games' && (
         <div className="space-y-6 animate-fade-in">
           <h2 className="text-xl font-black uppercase tracking-tight text-ink">Today's Games</h2>
-          <TodaySlate games={games} loading={loading} error={error} onSelectGame={setSelectedGame} />
+          <TodaySlate games={games} loading={loading} error={slateError} onSelectGame={setSelectedGame} />
           {selectedGame && <PredictionDetail game={selectedGame} onClose={() => setSelectedGame(null)} />}
           <TeamAnalytics game={selectedGame} />
         </div>

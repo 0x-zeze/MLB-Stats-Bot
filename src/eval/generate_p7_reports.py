@@ -360,13 +360,13 @@ def _write_accuracy_coverage(rows, folds, output_dir, common) -> str:
 
     md.append("## Accuracy at fixed coverage levels")
     md.append("")
-    md.append("Coverage = fraction of predictions with `abs(p - 0.5) >= threshold`. "
+    md.append("Coverage = fraction of predictions with `max(p, 1 - p) >= threshold` (favored-side probability). "
               "Accuracy computed on that subset (predict home when p >= 0.5).")
     md.append("")
     md.append("| threshold | coverage % | n | accuracy | Brier |")
     md.append("|---|---|---|---|---|")
     for level in COVERAGE_LEVELS:
-        subset = [(p, o) for p, o in pooled if abs(p - 0.5) >= level]
+        subset = [(p, o) for p, o in pooled if max(p, 1.0 - p) >= level]
         if not subset:
             md.append(f"| {level:.2f} | 0.00% | 0 | — | — |")
             continue
@@ -494,8 +494,15 @@ def _write_edge_buckets(rows, folds, output_dir, common) -> str:
                     continue
                 # Edge on the picked side: if pick=home, edge = cp - mp; if away,
                 # edge = (1-cp) - (1-mp) = mp - cp.
-                edge = (cp - mp) if pick == "home" else (mp - cp)
-                pooled.append((edge, int(o), pick))
+                if pick == "home":
+                    edge = cp - mp
+                    picked_prob = cp
+                    picked_won = int(o)
+                else:
+                    edge = mp - cp
+                    picked_prob = 1.0 - cp
+                    picked_won = 1 - int(o)
+                pooled.append((edge, picked_won, picked_prob))
     md.append(f"- With-market + pick OOF rows: {len(pooled)}")
     if not pooled:
         md.append("")
@@ -511,19 +518,16 @@ def _write_edge_buckets(rows, folds, output_dir, common) -> str:
     md.append("")
     md.append("| bucket | n | win rate | Brier (picked prob) |")
     md.append("|---|---|---|---|")
-    import numpy as np
-    edges = np.array([abs(e) for e, _, _ in pooled])
     bins = [0.0, 0.02, 0.05, 0.08, 0.12, 0.20, 1.0]
     for i in range(len(bins) - 1):
         lo, hi = bins[i], bins[i + 1]
-        subset = [(e, o, pick) for e, o, pick in pooled if lo <= abs(e) < hi]
+        subset = [(e, won, prob) for e, won, prob in pooled if lo <= abs(e) < hi]
         if not subset:
             md.append(f"| [{lo:.2f}, {hi:.2f}) | 0 | — | — |")
             continue
-        wr = sum(o for _, o, _ in subset) / len(subset)
-        # picked probability = 0.5 + edge (proxy for Brier on picked side)
-        picked_probs = [0.5 + abs(e) for e, _, _ in subset]
-        outs = [o for _, o, _ in subset]
+        wr = sum(won for _, won, _ in subset) / len(subset)
+        picked_probs = [prob for _, _, prob in subset]
+        outs = [won for _, won, _ in subset]
         brier = model_metrics(picked_probs, outs).get("brier")
         md.append(f"| [{lo:.2f}, {hi:.2f}) | {len(subset)} | {wr:.4f} | {_f(brier)} |")
     md.append("")

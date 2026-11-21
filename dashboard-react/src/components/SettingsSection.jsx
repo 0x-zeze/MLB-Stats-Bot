@@ -99,8 +99,8 @@ export default function SettingsSection() {
             </CardTitle>
             <p className="mt-1 text-xs font-semibold text-ink/70">Configuration and integration status.</p>
           </div>
-          <Button size="sm" variant={saved ? 'success' : 'secondary'} onClick={handleSave}>
-            {saved ? <><Check className="h-3 w-3" /> Saved</> : <><Save className="h-3 w-3" /> Save Changes</>}
+          <Button size="sm" variant={saved ? 'success' : 'secondary'} onClick={handleSave} disabled={loading || saving}>
+            {saving ? 'Saving...' : saved ? <><Check className="h-3 w-3" /> Saved</> : <><Save className="h-3 w-3" /> Save Changes</>}
           </Button>
         </div>
       </CardHeader>
@@ -250,12 +250,7 @@ export default function SettingsSection() {
                   </div>
                   <span className="text-sm text-ink">Dashboard API Token</span>
                 </div>
-                <input
-                  type="password"
-                  value={settings.dashboardToken}
-                  onChange={(e) => update('dashboardToken', e.target.value)}
-                  className="glass-input px-3 py-1.5 text-xs w-32 text-right"
-                />
+                <span className="text-xs font-semibold text-ink/60">Managed via .env (read-only)</span>
               </div>
             </div>
           </div>

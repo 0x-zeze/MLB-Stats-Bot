@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Wallet, TrendingUp, TrendingDown } from 'lucide-react';
 import { api } from '../api.js';
-import { number, percent, signed } from '../utils.js';
+import { isFiniteNum, number, percent, signed } from '../utils.js';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
 
 function fmtOdds(value) {
+  if (!isFiniteNum(value)) return '-';
   const n = Number(value);
-  if (!Number.isFinite(n)) return '-';
   return `${n > 0 ? '+' : ''}${Math.round(n)}`;
 }
 

@@ -75,6 +75,9 @@ def main():
         pairs.append((prob, outcome))
 
     print(f"Training samples: {len(pairs)}")
+    if not pairs:
+        print("No training samples found; skipping calibration map update.")
+        return
 
     # Bin into 0.03 buckets for stability (254 samples needs wider bins)
     BUCKET = 0.03
@@ -138,7 +141,7 @@ def main():
     # Write calibration_meta.json
     meta = {
         "version": 1,
-        "source": "SQLite picks+game_outcomes (all-game ML, 254 samples, 0.01 buckets)",
+        "source": f"SQLite picks+game_outcomes (all-game ML, {len(pairs)} samples, {BUCKET:.2f} buckets)",
         "calibrated_markets": ["moneyline"],
         "markets": {
             "moneyline": {
@@ -183,10 +186,11 @@ def main():
 
     raw_brier = sum((p - o) ** 2 for p, o in pairs) / len(pairs)
     cal_brier = sum((calibrate(p) - o) ** 2 for p, o in pairs) / len(pairs)
+    improvement = ((1 - cal_brier / raw_brier) * 100) if raw_brier > 0 else 0.0
     print(f"\nValidation:")
     print(f"  Raw Brier:   {raw_brier:.4f}")
     print(f"  Cal Brier:   {cal_brier:.4f}")
-    print(f"  Improvement: {(1 - cal_brier/raw_brier)*100:+.1f}%")
+    print(f"  Improvement: {improvement:+.1f}%")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import math
 import os
 import sqlite3
 import subprocess
@@ -17,6 +18,7 @@ from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .evaluate import (
     calculate_metrics,
@@ -57,8 +59,16 @@ _ROOT_DIR = Path(__file__).resolve().parents[1]
 _SETTINGS_PATH = data_path("dashboard_settings.json")
 _MOCK_PATH = data_path("dashboard_mock.json")
 _TELEGRAM_STATE_PATH = data_path("state.json")
-_SQLITE_PATH = data_path("state.sqlite")
+_DEFAULT_SQLITE_PATH = data_path("state.sqlite")
+_SQLITE_PATH = _DEFAULT_SQLITE_PATH
 _CACHE_DIR = data_path("cache")
+
+
+def _active_sqlite_path() -> Path:
+    if _SQLITE_PATH != _DEFAULT_SQLITE_PATH:
+        return _SQLITE_PATH
+    override = os.environ.get("MLB_STORAGE_DB_PATH", "").strip()
+    return Path(override) if override else _SQLITE_PATH
 
 
 def now_iso() -> str:
@@ -84,44 +94,45 @@ def _latest_mtime(patterns: list[str]) -> str | None:
 
 
 def _storage_status() -> dict[str, Any]:
-    sqlite_exists = _SQLITE_PATH.exists()
+    sqlite_path = _active_sqlite_path()
+    sqlite_exists = sqlite_path.exists()
     json_exists = _TELEGRAM_STATE_PATH.exists()
     status = "ok" if sqlite_exists or json_exists else "missing"
     detail = "SQLite state available" if sqlite_exists else "state.json available" if json_exists else "No persisted state file found"
 
     if sqlite_exists:
         try:
-            conn = sqlite3.connect(str(_SQLITE_PATH))
+            conn = sqlite3.connect(str(sqlite_path))
             try:
                 conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
             finally:
                 conn.close()
-        except sqlite3.Error as exc:
+        except sqlite3.Error:
             status = "error"
-            detail = f"SQLite read failed: {exc}"
+            detail = "SQLite state check failed"
 
     return {
         "status": status,
         "detail": detail,
-        "sqlite_path": str(_SQLITE_PATH),
-        "json_path": str(_TELEGRAM_STATE_PATH),
-        "last_state_write": _mtime_iso(_SQLITE_PATH) or _mtime_iso(_TELEGRAM_STATE_PATH),
+        "last_state_write": _mtime_iso(sqlite_path) or _mtime_iso(_TELEGRAM_STATE_PATH),
     }
 
 
 def get_health_status() -> dict[str, Any]:
-    """Return operational status without exposing secrets."""
+    """Return operational status without exposing secrets or host paths."""
     prediction_log = data_path("predictions_log.csv")
     evolution_log = data_path("evolution/evolution_log.jsonl")
     last_prediction = _mtime_iso(prediction_log) or _mtime_iso(evolution_log)
+    storage = _storage_status()
+    overall_status = "degraded" if storage.get("status") == "error" else "ok"
     return {
-        "status": "ok",
+        "status": overall_status,
         "app": "mlb-stats-bot-dashboard-api",
         "timestamp": now_iso(),
         "last_successful_mlb_data_fetch": _latest_mtime(["*mlb*", "*statsapi*", "*schedule*"]),
         "last_odds_fetch": _latest_mtime(["*odds*", "*market*"]),
         "last_prediction_run": last_prediction,
-        "storage": _storage_status(),
+        "storage": storage,
         "bot": {
             "status": "configured" if os.environ.get("TELEGRAM_BOT_TOKEN") else "not_configured",
             "auto_alerts": os.environ.get("AUTO_ALERTS", "").lower() in {"1", "true", "yes", "on"},
@@ -149,11 +160,12 @@ def _read_telegram_state_from_sqlite() -> dict[str, Any] | None:
     functions (history, performance, calibration) work unchanged.
     Returns None if the database is missing or unreadable.
     """
-    if not _SQLITE_PATH.exists():
+    sqlite_path = _active_sqlite_path()
+    if not sqlite_path.exists():
         return None
 
     try:
-        conn = sqlite3.connect(str(_SQLITE_PATH))
+        conn = sqlite3.connect(str(sqlite_path))
         conn.row_factory = sqlite3.Row
         try:
             state: dict[str, Any] = {}
@@ -219,24 +231,40 @@ def load_dashboard_settings() -> dict[str, Any]:
 
 
 def save_dashboard_settings(settings: dict[str, Any]) -> dict[str, Any]:
-    """Persist dashboard threshold settings."""
+    """Persist dashboard threshold settings atomically with type validation."""
+    if not isinstance(settings, dict):
+        raise ValueError("settings payload must be a JSON object")
     current = load_dashboard_settings()
     for key, default in DEFAULT_DASHBOARD_SETTINGS.items():
         if key not in settings:
             continue
         value = settings[key]
+        if value is None:
+            raise ValueError(f"Setting '{key}' cannot be null")
         if isinstance(default, bool):
             current[key] = bool(value)
         elif isinstance(default, int):
-            current[key] = int(value)
+            if isinstance(value, bool):
+                raise ValueError(f"Setting '{key}' must be an integer")
+            parsed_int = int(value)
+            if parsed_int < 0:
+                raise ValueError(f"Setting '{key}' must be non-negative")
+            current[key] = parsed_int
         elif isinstance(default, float):
-            current[key] = float(value)
+            if isinstance(value, bool):
+                raise ValueError(f"Setting '{key}' must be a number")
+            parsed_float = float(value)
+            if not math.isfinite(parsed_float):
+                raise ValueError(f"Setting '{key}' must be finite")
+            current[key] = parsed_float
         else:
-            current[key] = value
+            current[key] = str(value)
 
     _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with _SETTINGS_PATH.open("w", encoding="utf-8") as handle:
+    tmp_path = _SETTINGS_PATH.with_name(f".{_SETTINGS_PATH.name}.{os.getpid()}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as handle:
         json.dump(current, handle, indent=2, sort_keys=True)
+    os.replace(tmp_path, _SETTINGS_PATH)
     return current
 
 
@@ -244,16 +272,35 @@ def _as_percent(value: Any) -> float | None:
     """Normalize decimal or percent probability to 0-100 scale."""
     if value in (None, ""):
         return None
-    parsed = safe_float(value, 0.0)
+    parsed = safe_float(value, None)
+    if parsed is None or not math.isfinite(parsed):
+        return None
     return round(parsed * 100.0 if abs(parsed) <= 1.0 else parsed, 1)
+
+
+def _as_ratio_pct(value: Any) -> float | None:
+    """Convert a decimal ratio (e.g., 0.05 -> 5.0%, 1.0 -> 100.0%) to percentage points."""
+    if value in (None, ""):
+        return None
+    parsed = safe_float(value, None)
+    if parsed is None or not math.isfinite(parsed):
+        return None
+    return round(parsed * 100.0, 1)
+
+
+def _as_pp(value: Any) -> float | None:
+    """Keep a value already expressed in percentage points without 100x scaling."""
+    if value in (None, ""):
+        return None
+    parsed = safe_float(value, None)
+    if parsed is None or not math.isfinite(parsed):
+        return None
+    return round(parsed, 1)
 
 
 def _as_edge_pct(value: Any) -> float | None:
-    """Normalize decimal or percentage-point edge to displayed percentage points."""
-    if value in (None, ""):
-        return None
-    parsed = safe_float(value, 0.0)
-    return round(parsed * 100.0 if abs(parsed) <= 1.0 else parsed, 1)
+    """Return a percentage-point edge/CLV value without distorting values in [-1, 1]."""
+    return _as_pp(value)
 
 
 def _status(value: Any, fallback: str = "Missing") -> str:
@@ -367,12 +414,13 @@ def _mock_today(settings: dict[str, Any], warning: str | None = None) -> dict[st
 def _quality_from_live(game: dict[str, Any]) -> dict[str, Any]:
     quality = game.get("quality") or {}
     fields = quality.get("fields") or {}
+    odds_field = fields.get("marketOdds") or fields.get("odds") or {}
     return {
         "score": quality.get("score", 0),
         "probable_pitchers": fields.get("probablePitchers", {}).get("status", "Missing"),
         "lineup": fields.get("lineup", {}).get("status", "Missing"),
         "weather": fields.get("weather", {}).get("status", "Missing"),
-        "odds": fields.get("odds", {}).get("status", "Unavailable"),
+        "odds": odds_field.get("status", "Unavailable"),
         "bullpen_usage": fields.get("bullpen", {}).get("status", "Missing"),
         "park_factor": fields.get("park", {}).get("status", "Missing"),
         "injury_news": "Available" if "injury context" not in quality.get("missingFields", []) else "Missing",
@@ -391,6 +439,8 @@ def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> d
     moneyline_edge = value.get("edge")
     if moneyline_edge is None:
         moneyline_edge = totals.get("modelEdge") if isinstance(totals, dict) else None
+    formatted_odds = _format_odds(value.get("odds")) if isinstance(value, dict) else ""
+    market_implied = _as_percent(value.get("impliedProbability")) if isinstance(value, dict) else None
     dashboard_game = {
         "id": game.get("game_id") or game.get("gamePk") or game.get("id"),
         "date": game.get("date"),
@@ -417,9 +467,9 @@ def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> d
             "away_probability": _as_percent(game.get("probabilities", {}).get("away") if isinstance(game.get("probabilities"), dict) else (game.get("away") or {}).get("winProbability")),
             "home_probability": _as_percent(game.get("probabilities", {}).get("home") if isinstance(game.get("probabilities"), dict) else (game.get("home") or {}).get("winProbability")),
             "model_probability": _as_percent(game.get("pick", {}).get("probability") or game.get("pick", {}).get("winProbability")),
-            "market_implied_probability": None,
-            "edge": _as_edge_pct(moneyline_edge),
-            "current_odds": "Unavailable",
+            "market_implied_probability": market_implied,
+            "edge": _as_pp(moneyline_edge),
+            "current_odds": formatted_odds or "Unavailable",
             "confidence": _status(game.get("pick", {}).get("confidence"), "Low").title(),
         },
         "data_quality": quality,
@@ -436,12 +486,16 @@ def _live_game_to_dashboard(game: dict[str, Any], settings: dict[str, Any]) -> d
     value = game.get("value") or None
     if value:
         decision = _decision_from_value(value)
+        dashboard_game["value"] = value
         dashboard_game["confidence_band"] = value.get("confidenceBand")
         dashboard_game["kelly_stake_percent"] = safe_float(value.get("kellyStakePercent"), None)
         dashboard_game["value_status"] = value.get("status")
         dashboard_game["value_reason"] = value.get("reason") or ""
-        kelly = dashboard_game["kelly_stake_percent"]
-        dashboard_game["moneyline"]["edge"] = _as_edge_pct(value.get("edge"))
+        dashboard_game["moneyline"]["edge"] = _as_pp(value.get("edge"))
+        if formatted_odds:
+            dashboard_game["moneyline"]["current_odds"] = formatted_odds
+        if market_implied is not None:
+            dashboard_game["moneyline"]["market_implied_probability"] = market_implied
         dashboard_game["moneyline"]["confidence"] = str(value.get("confidenceBand") or dashboard_game["moneyline"]["confidence"]).title()
         dashboard_game["decision"] = decision
         dashboard_game["no_bet_reason"] = value.get("reason") or "" if decision == "NO BET" else ""
@@ -540,7 +594,7 @@ def _sample_game_to_dashboard(game_id: int, pipeline: dict[str, Any], settings: 
             "home_probability": _as_percent(moneyline.get("home_win_probability")),
             "model_probability": _as_percent(max(moneyline.get("away_win_probability", 0), moneyline.get("home_win_probability", 0))),
             "market_implied_probability": _as_percent(moneyline.get("home_market_implied_probability")),
-            "edge": _as_edge_pct(moneyline.get("model_edge")),
+            "edge": _as_ratio_pct(moneyline.get("model_edge")),
             "current_odds": market.get("home_moneyline") or "Unavailable",
             "confidence": str(moneyline.get("confidence", "Low")).title(),
         },
@@ -609,7 +663,14 @@ def get_today_dashboard(date_ymd: str | None = None, source: str = "live") -> di
     """
     settings = load_dashboard_settings()
     source = (source or "live").lower()
-    target_date = date_ymd or datetime.now().date().isoformat()
+    if date_ymd:
+        target_date = date_ymd
+    else:
+        tz_name = str(settings.get("timezone") or "America/New_York")
+        try:
+            target_date = datetime.now(ZoneInfo(tz_name)).date().isoformat()
+        except (ZoneInfoNotFoundError, ValueError):
+            target_date = datetime.now(timezone.utc).date().isoformat()
     if source == "mock":
         return _mock_today(settings)
     if source == "sample":
@@ -800,7 +861,7 @@ def _scored_ledger_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row for row in rows if str(row.get("result") or "").lower() in {"win", "loss"}]
 
 
-def _ledger_financial_metrics(rows: list[dict[str, Any]]) -> dict[str, float]:
+def _ledger_financial_metrics(rows: list[dict[str, Any]]) -> dict[str, float | None]:
     staked = sum(safe_float(row.get("units_staked"), 0.0) for row in rows)
     units_pl = sum(safe_float(row.get("units_pl"), 0.0) for row in rows)
     clv_values = [safe_float(row.get("clv"), 0.0) for row in rows if row.get("clv") not in (None, "")]
@@ -814,12 +875,12 @@ def _ledger_financial_metrics(rows: list[dict[str, Any]]) -> dict[str, float]:
     probabilities = [probability for probability, _ in probability_pairs]
     outcomes = [outcome for _, outcome in probability_pairs]
     return {
-        "roi": round((units_pl / staked) * 100.0, 1) if staked > 0 else 0.0,
-        "average_edge": round(sum(edges) / len(edges), 3) if edges else 0.0,
-        "average_clv": round(sum(clv_values) / len(clv_values), 3) if clv_values else 0.0,
-        "clv_hit_rate": round((sum(1 for value in clv_values if value > 0) / len(clv_values)) * 100.0, 1) if clv_values else 0.0,
-        "brier_score": round(brier_score(probabilities, outcomes), 4) if probability_pairs else 0.0,
-        "log_loss": round(log_loss(probabilities, outcomes), 4) if probability_pairs else 0.0,
+        "roi": round((units_pl / staked) * 100.0, 1) if staked > 0 else None,
+        "average_edge": round(sum(edges) / len(edges), 3) if edges else None,
+        "average_clv": round(sum(clv_values) / len(clv_values), 3) if clv_values else None,
+        "clv_hit_rate": round((sum(1 for value in clv_values if value > 0) / len(clv_values)) * 100.0, 1) if clv_values else None,
+        "brier_score": round(brier_score(probabilities, outcomes), 4) if probability_pairs else None,
+        "log_loss": round(log_loss(probabilities, outcomes), 4) if probability_pairs else None,
     }
 
 
@@ -905,15 +966,16 @@ def get_bet_ledger() -> dict[str, Any]:
         },
         "by_market": [],
     }
-    if not _SQLITE_PATH.exists():
+    sqlite_path = _active_sqlite_path()
+    if not sqlite_path.exists():
         return empty
 
     try:
-        conn = sqlite3.connect(str(_SQLITE_PATH))
+        conn = sqlite3.connect(str(sqlite_path))
         conn.row_factory = sqlite3.Row
         try:
             rows = [dict(row) for row in conn.execute(
-                "SELECT * FROM bet_ledger ORDER BY date_ymd ASC, decision_id ASC"
+                "SELECT * FROM bet_ledger WHERE market = 'moneyline' ORDER BY date_ymd ASC, decision_id ASC"
             )]
         finally:
             conn.close()
@@ -1024,18 +1086,18 @@ def get_model_performance() -> dict[str, Any]:
             "total_predictions": len(rows),
             "bets_taken": metrics.get("bets", 0),
             "win_rate": _as_percent(metrics.get("win_rate")) or 0.0,
-            "roi": _as_edge_pct(metrics.get("roi")) or 0.0,
-            "average_edge": _as_edge_pct(metrics.get("average_edge")) or 0.0,
+            "roi": _as_ratio_pct(metrics.get("roi")) or 0.0,
+            "average_edge": _as_ratio_pct(metrics.get("average_edge")) or 0.0,
             "average_clv": metrics.get("average_clv", 0.0),
             "brier_score": metrics.get("brier_score", 0.0),
             "log_loss": metrics.get("log_loss", 0.0),
             "clv_hit_rate": 0.0,
         },
         "by_market": [
-            {"market": "moneyline", "bets": metrics.get("bets", 0), "win_rate": _as_percent(metrics.get("win_rate")) or 0.0, "roi": _as_edge_pct(metrics.get("roi")) or 0.0},
+            {"market": "moneyline", "bets": metrics.get("bets", 0), "win_rate": _as_percent(metrics.get("win_rate")) or 0.0, "roi": _as_ratio_pct(metrics.get("roi")) or 0.0},
                     ],
         "by_total_range": [
-            {"range": key, "bets": value.get("bets", 0), "win_rate": _as_percent(value.get("win_rate")) or 0.0, "roi": _as_edge_pct(value.get("roi")) or 0.0}
+            {"range": key, "bets": value.get("bets", 0), "win_rate": _as_percent(value.get("win_rate")) or 0.0, "roi": _as_ratio_pct(value.get("roi")) or 0.0}
             for key, value in by_total_range.items()
         ],
         "calibration": [
@@ -1105,6 +1167,8 @@ def _history_backtest_rows(params: dict[str, Any], market: str) -> list[dict[str
     """
     from .evolution.memory_store import read_prediction_outcomes
 
+    season = params.get("season")
+    season_prefix = f"{int(season)}-" if season not in (None, "") else None
     start_date = params.get("start_date") or None
     end_date = params.get("end_date") or None
 
@@ -1113,6 +1177,8 @@ def _history_backtest_rows(params: dict[str, Any], market: str) -> list[dict[str
         if str(outcome.get("market") or "").lower() != market:
             continue
         date = str(outcome.get("date") or "")
+        if season_prefix and not date.startswith(season_prefix):
+            continue
         if start_date and date < start_date:
             continue
         if end_date and date > end_date:
@@ -1190,8 +1256,8 @@ def _camel_backtest_summary(metrics: dict[str, Any]) -> dict[str, Any]:
     return {
         "totalBets": metrics.get("bets", 0),
         "winRate": round(_as_percent(metrics.get("win_rate")) or 0.0, 1),
-        "roi": round(_as_edge_pct(metrics.get("roi")) or 0.0, 1),
-        "clv": round(_as_edge_pct(metrics.get("average_clv")) or 0.0, 1),
+        "roi": round(_as_ratio_pct(metrics.get("roi")) or 0.0, 1),
+        "clv": round(_as_pp(metrics.get("average_clv")) or 0.0, 1),
         "brier": round(safe_float(metrics.get("brier_score"), 0.0), 3),
     }
 
@@ -1255,7 +1321,7 @@ def run_dashboard_backtest(params: dict[str, Any]) -> dict[str, Any]:
                 "market": market.title(),
                 "bets": market_metrics.get("bets", 0),
                 "winRate": round(_as_percent(market_metrics.get("win_rate")) or 0.0, 1),
-                "roi": round(_as_edge_pct(market_metrics.get("roi")) or 0.0, 1),
+                "roi": round(_as_ratio_pct(market_metrics.get("roi")) or 0.0, 1),
             }
         )
 
@@ -1272,8 +1338,8 @@ def run_dashboard_backtest(params: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "bets_taken": metrics.get("bets", 0),
         "win_rate": _as_percent(metrics.get("win_rate")) or 0.0,
-        "roi": _as_edge_pct(metrics.get("roi")) or 0.0,
-        "average_edge": _as_edge_pct(metrics.get("average_edge")) or 0.0,
+        "roi": _as_ratio_pct(metrics.get("roi")) or 0.0,
+        "average_edge": _as_pp(metrics.get("average_edge")) or 0.0,
         "average_clv": metrics.get("average_clv", 0.0),
         "best_segment": "See performance by market total",
         "weakest_segment": "See performance by market total",
@@ -1293,7 +1359,7 @@ def run_dashboard_backtest(params: dict[str, Any]) -> dict[str, Any]:
                 "market": row.get("dashboard_market"),
                 "lean": row.get("final_lean"),
                 "result": row.get("result"),
-                "edge": _as_edge_pct(row.get("model_edge")),
+                "edge": _as_pp(row.get("model_edge")),
                 "profit_loss": row.get("profit_loss"),
             }
             for row in tagged_rows
@@ -1306,8 +1372,22 @@ def get_mock_backtest() -> dict[str, Any]:
     return load_mock_dashboard().get("backtest", {})
 
 
+def _sanitize_csv_cell(value: Any) -> Any:
+    if not isinstance(value, str) or not value:
+        return value
+    if value[0] in ("=", "@", "\t", "\r"):
+        return f"'{value}"
+    if value[0] in ("+", "-"):
+        try:
+            float(value)
+            return value
+        except ValueError:
+            return f"'{value}"
+    return value
+
+
 def rows_to_csv(rows: list[dict[str, Any]]) -> str:
-    """Serialize dictionaries to CSV text."""
+    """Serialize dictionaries to CSV text with spreadsheet formula protection."""
     if not rows:
         return ""
     fieldnames = sorted({key for row in rows for key in row.keys()})
@@ -1315,5 +1395,5 @@ def rows_to_csv(rows: list[dict[str, Any]]) -> str:
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
     for row in rows:
-        writer.writerow(row)
+        writer.writerow({key: _sanitize_csv_cell(val) for key, val in row.items()})
     return output.getvalue()

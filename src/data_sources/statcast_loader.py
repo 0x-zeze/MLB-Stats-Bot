@@ -70,13 +70,19 @@ def filter_statcast_rows(
     if pitcher_id is not None:
         filtered = [row for row in filtered if str(row.get("pitcher")) == str(pitcher_id)]
     if before_date:
-        filtered = [row for row in filtered if str(row.get("game_date", "")) < before_date]
+        filtered = [
+            row
+            for row in filtered
+            if str(row.get("game_date") or "").strip() and str(row.get("game_date", "")).strip() < before_date
+        ]
     return filtered
 
 
 def summarize_statcast(rows: list[dict[str, str]]) -> dict[str, Any]:
     """Summarize pitch-level and batted-ball Statcast rows."""
-    batted_ball_rows = [row for row in rows if row.get("launch_speed")]
+    batted_ball_rows = [
+        row for row in rows if safe_float(row.get("launch_speed"), None) is not None
+    ]
     hard_hit_count = sum(safe_float(row.get("launch_speed"), 0.0) >= 95.0 for row in batted_ball_rows)
     barrel_count = sum(_barrel_like(row) for row in batted_ball_rows)
     pitch_types = Counter(row.get("pitch_type", "UNK") or "UNK" for row in rows)

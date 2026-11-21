@@ -24,6 +24,7 @@ import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Iterable
 
 from src.walk_forward_backtest import generate_walk_forward_dates
@@ -212,9 +213,13 @@ def select_main_cohort_row(
     return row, reason
 
 
+def _ro_uri(db_path: str) -> str:
+    return f"{Path(db_path).resolve().as_uri()}?mode=ro"
+
+
 def _load_runs(db_path: str, model_id: str | None = None) -> dict[str, list[dict[str, Any]]]:
     """Load prediction runs joined with model_predictions, grouped by game_pk."""
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(_ro_uri(db_path), uri=True)
     conn.row_factory = sqlite3.Row
     try:
         where = "WHERE mp.model_id = ?" if model_id else ""
@@ -253,7 +258,7 @@ def _load_runs(db_path: str, model_id: str | None = None) -> dict[str, list[dict
 
 
 def _load_outcomes(db_path: str) -> dict[str, dict[str, Any]]:
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(_ro_uri(db_path), uri=True)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -267,13 +272,13 @@ def _load_outcomes(db_path: str) -> dict[str, dict[str, Any]]:
 
 def _load_quotes(db_path: str) -> dict[str, dict[str, dict[str, Any]]]:
     """Load eligible quote pairs, indexed [game_pk][as_of_utc] -> latest pair."""
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(_ro_uri(db_path), uri=True)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
             "SELECT quote_pair_id, game_pk, bookmaker, market, home_no_vig_prob, "
             "away_no_vig_prob, fetched_at_utc, is_opening, is_closing "
-            "FROM market_quote_pairs WHERE is_eligible = 1"
+            "FROM market_quote_pairs WHERE is_eligible = 1 AND market = 'moneyline'"
         ).fetchall()
     finally:
         conn.close()
@@ -293,9 +298,16 @@ def _pair_quote_for_run(
 ) -> dict[str, Any] | None:
     if not game_pk or not as_of_utc:
         return None
+    as_of_ts = _parse_ts(as_of_utc)
+    if as_of_ts is None:
+        return None
     pairs = quotes_by_game.get(game_pk, {})
-    # Latest pair with fetched_at <= as_of.
-    eligible = [(ts, p) for ts, p in pairs.items() if ts and ts <= as_of_utc]
+    # Latest pair with parsed fetched_at <= parsed as_of.
+    eligible: list[tuple[float, dict[str, Any]]] = []
+    for ts, p in pairs.items():
+        parsed_ts = _parse_ts(ts)
+        if parsed_ts is not None and parsed_ts <= as_of_ts:
+            eligible.append((parsed_ts, p))
     if not eligible:
         return None
     eligible.sort(key=lambda x: x[0])
@@ -411,6 +423,7 @@ def build_folds(
         })
         fold_index += 1
 
+    pre_holdout_end = dates[holdout_start_idx - 1] if holdout_start_idx > 0 else start
     holdout_rows = [r for r in rows if r.date_ymd >= holdout_start]
     folds.append({
         "fold_index": fold_index,
@@ -418,7 +431,7 @@ def build_folds(
         "start_date": holdout_start,
         "end_date": end,
         "train_start_date": start,
-        "train_end_date": (folds[-1]["end_date"] if folds else holdout_start),
+        "train_end_date": pre_holdout_end,
         "game_count": len(holdout_rows),
         "date_count": len({r.date_ymd for r in holdout_rows}),
         "train_game_count": len([r for r in rows if r.date_ymd < holdout_start]),

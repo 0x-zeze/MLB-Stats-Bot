@@ -63,14 +63,16 @@ def list_games() -> dict[str, Any]:
 
 def game_menu(game_id: str) -> dict[str, Any]:
     context = get_game_context(game_id)
-    pitchers = context["probable_pitchers"]
+    pitchers = context.get("probable_pitchers") or {}
+    away_sp = (pitchers.get("away") or {}).get("pitcher") or "TBD"
+    home_sp = (pitchers.get("home") or {}).get("pitcher") or "TBD"
     text = "\n".join(
         [
             "MLB Agent Tools",
             context["matchup"],
             f"Date: {context['date']}",
-            f"Park: {context['park'].get('park', '-')}",
-            f"SP: {pitchers['away']['pitcher']} vs {pitchers['home']['pitcher']}",
+            f"Park: {(context.get('park') or {}).get('park', '-')}",
+            f"SP: {away_sp} vs {home_sp}",
             "",
             "Pilih action:",
         ]
@@ -157,20 +159,23 @@ def main(argv: list[str] | None = None) -> None:
     action = args[0] if args else "games"
     value = args[1] if len(args) > 1 else "0"
 
-    if action == "games":
-        _json(list_games())
-    elif action == "game":
-        _json(game_menu(value))
-    elif action == "moneyline":
-        _json(moneyline(value))
-    elif action == "context":
-        _json(context(value))
-    elif action == "full":
-        _json(full(value))
-    elif action == "knowledge":
-        _json(knowledge(" ".join(args[1:]) or "wrc"))
-    else:
-        _json({"text": "Action tidak dikenal."})
+    try:
+        if action == "games":
+            _json(list_games())
+        elif action == "game":
+            _json(game_menu(value))
+        elif action == "moneyline":
+            _json(moneyline(value))
+        elif action == "context":
+            _json(context(value))
+        elif action == "full":
+            _json(full(value))
+        elif action == "knowledge":
+            _json(knowledge(" ".join(args[1:]) or "wrc"))
+        else:
+            _json({"text": "Action tidak dikenal."})
+    except Exception as exc:
+        _json({"error": str(exc), "text": f"Gagal memproses action '{action}': {exc}"})
 
 
 if __name__ == "__main__":

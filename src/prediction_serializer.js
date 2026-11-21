@@ -11,15 +11,20 @@ import {
 } from './prediction_snapshot.js';
 
 function stableStringify(value, space = 0) {
+  if (value === undefined) {
+    return 'null';
+  }
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    const items = value.map((item) => stableStringify(item, space));
+    const items = value.map((item) => (item === undefined ? 'null' : stableStringify(item, space)));
     if (!space) return `[${items.join(',')}]`;
     return `[\n${items.map((item) => `${' '.repeat(space)}${item}`).join(',\n')}\n]`;
   }
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value)
+    .filter((key) => value[key] !== undefined)
+    .sort();
   if (!space) {
     return `{${keys
       .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key], 0)}`)

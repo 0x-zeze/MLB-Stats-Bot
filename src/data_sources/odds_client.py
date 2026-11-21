@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -43,15 +44,22 @@ class OddsApiClient:
     def _get(self, path: str, params: dict[str, Any]) -> Any:
         if not self.configured:
             return []
+        safe_query = urllib.parse.urlencode(params)
+        cache_key = f"{self.base_url}{path}?{safe_query}"
         query = urllib.parse.urlencode({**params, "apiKey": self.api_key})
         url = f"{self.base_url}{path}?{query}"
 
         def fetch() -> Any:
             request = urllib.request.Request(url, headers={"User-Agent": "mlb-stats-bot/odds"})
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(f"Odds API HTTP {exc.code} for {path}") from None
+            except urllib.error.URLError as exc:
+                raise RuntimeError(f"Odds API request failed for {path}: {exc.reason}") from None
 
-        return self.cache.get_or_set_json("the_odds_api", url, fetch)
+        return self.cache.get_or_set_json("the_odds_api", cache_key, fetch)
 
     def get_mlb_odds(
         self,
@@ -77,8 +85,9 @@ class OddsApiClient:
         odds_format: str = "american",
     ) -> dict[str, Any] | list[Any]:
         """Return odds for a single Odds API event id."""
+        safe_event_id = urllib.parse.quote(str(event_id), safe="")
         return self._get(
-            f"/sports/baseball_mlb/events/{event_id}/odds",
+            f"/sports/baseball_mlb/events/{safe_event_id}/odds",
             {
                 "regions": regions,
                 "markets": markets,

@@ -64,20 +64,28 @@ function main() {
       `
         : 'SELECT 0 AS c';
 
+    const ledgerCols = new Set(
+      db.prepare('PRAGMA table_info(bet_ledger)').all().map((col) => col.name)
+    );
+    const hasDecisionHash = ledgerCols.has('decision_hash');
+
     const issues = [];
     const checks = {
       openProcessed: db.prepare(openProcessedSql).get().c,
       missingDate: db.prepare("SELECT COUNT(*) AS c FROM bet_ledger WHERE date_ymd IS NULL OR date_ymd = ''").get().c,
       invalidStatus: db.prepare("SELECT COUNT(*) AS c FROM bet_ledger WHERE status NOT IN ('open', 'settled', 'void')").get().c,
-      invalidStake: db.prepare("SELECT COUNT(*) AS c FROM bet_ledger WHERE units_staked IS NULL OR units_staked < 0").get().c,
-      settledMissingPnl: db.prepare("SELECT COUNT(*) AS c FROM bet_ledger WHERE status = 'settled' AND units_pl IS NULL").get().c,
-      duplicateDecisionHash: db.prepare(`
-        SELECT COUNT(*) AS c FROM (
-          SELECT decision_hash FROM bet_ledger
-          WHERE decision_hash IS NOT NULL AND decision_hash <> ''
-          GROUP BY decision_hash HAVING COUNT(*) > 1
-        )
-      `).get().c
+      invalidStake: db.prepare("SELECT COUNT(*) AS c FROM bet_ledger WHERE units_staked IS NULL OR units_staked <= 0").get().c,
+      invalidOdds: db.prepare("SELECT COUNT(*) AS c FROM bet_ledger WHERE odds IS NULL OR odds = 0 OR (odds > -100 AND odds < 100)").get().c,
+      settledMissingPnl: db.prepare("SELECT COUNT(*) AS c FROM bet_ledger WHERE status = 'settled' AND (units_pl IS NULL OR ABS(units_pl) > 1e12)").get().c,
+      duplicateDecisionHash: hasDecisionHash
+        ? db.prepare(`
+            SELECT COUNT(*) AS c FROM (
+              SELECT decision_hash FROM bet_ledger
+              WHERE decision_hash IS NOT NULL AND decision_hash <> ''
+              GROUP BY decision_hash HAVING COUNT(*) > 1
+            )
+          `).get().c
+        : 0
     };
 
     for (const [name, count] of Object.entries(checks)) {

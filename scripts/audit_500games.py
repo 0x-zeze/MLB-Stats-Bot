@@ -71,12 +71,28 @@ def pct(numerator, denominator):
     return round(100 * numerator / denominator, 1)
 
 
+def _normalize_prob(raw_val):
+    prob = safe_float(raw_val, None)
+    if prob is None:
+        return None
+    if prob > 1.0:
+        prob = prob / 100.0
+    if not (0.0 <= prob <= 1.0):
+        return None
+    return prob
+
+
 def brier_score(rows):
     """Lower is better. 0.25 = random, <0.20 decent, <0.15 good."""
     scores = []
     for r in rows:
-        prob = safe_float(r.get("home_win_probability", 50)) / 100
-        outcome = 1 if r.get("result", "").upper() in ("WIN", "CORRECT", "HOME") else 0
+        res = r.get("result", "").strip().upper()
+        if res not in ("WIN", "CORRECT", "HOME", "LOSS", "WRONG", "INCORRECT", "AWAY"):
+            continue
+        prob = _normalize_prob(r.get("home_win_probability"))
+        if prob is None:
+            continue
+        outcome = 1 if res in ("WIN", "CORRECT", "HOME") else 0
         if r.get("predicted_winner", "").lower() in (
             r.get("away_team", "x").lower(), "away"
         ):
@@ -91,8 +107,13 @@ def log_loss_score(rows):
     eps = 1e-9
     losses = []
     for r in rows:
-        prob = safe_float(r.get("home_win_probability", 50)) / 100
-        outcome = 1 if r.get("result", "").upper() in ("WIN", "CORRECT", "HOME") else 0
+        res = r.get("result", "").strip().upper()
+        if res not in ("WIN", "CORRECT", "HOME", "LOSS", "WRONG", "INCORRECT", "AWAY"):
+            continue
+        prob = _normalize_prob(r.get("home_win_probability"))
+        if prob is None:
+            continue
+        outcome = 1 if res in ("WIN", "CORRECT", "HOME") else 0
         if r.get("predicted_winner", "").lower() in (
             r.get("away_team", "x").lower(), "away"
         ):
@@ -105,8 +126,12 @@ def log_loss_score(rows):
 
 
 def win_rate_group(rows):
-    wins = sum(1 for r in rows if r.get("result", "").upper() in ("WIN", "CORRECT"))
-    total = len(rows)
+    decided = [
+        r for r in rows
+        if r.get("result", "").strip().upper() in ("WIN", "CORRECT", "LOSS", "WRONG", "INCORRECT")
+    ]
+    wins = sum(1 for r in decided if r.get("result", "").strip().upper() in ("WIN", "CORRECT"))
+    total = len(decided)
     return wins, total, pct(wins, total)
 
 

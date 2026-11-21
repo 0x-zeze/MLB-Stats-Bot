@@ -157,7 +157,7 @@ def build(db_path: Path) -> dict[str, Any]:
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-    uri = f"file:{db_path}?mode=ro"
+    uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     try:
         ledger_rows = _rows(conn, "bet_ledger")

@@ -33,7 +33,11 @@ function useChatCompletions(config) {
 function extractJson(text) {
   if (!text) return null;
 
-  const cleaned = text
+  const withoutThink = String(text)
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '');
+
+  const cleaned = withoutThink
     .trim()
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/i, '')
@@ -43,14 +47,25 @@ function extractJson(text) {
   try {
     return JSON.parse(cleaned);
   } catch {
-    const start = cleaned.indexOf('{');
-    const end = cleaned.lastIndexOf('}');
-    if (start === -1 || end === -1 || end <= start) return null;
-    try {
-      return JSON.parse(cleaned.slice(start, end + 1));
-    } catch {
-      return null;
+    const objStart = cleaned.indexOf('{');
+    const objEnd = cleaned.lastIndexOf('}');
+    if (objStart !== -1 && objEnd > objStart) {
+      try {
+        return JSON.parse(cleaned.slice(objStart, objEnd + 1));
+      } catch {
+        // Fall through to array extraction
+      }
     }
+    const arrStart = cleaned.indexOf('[');
+    const arrEnd = cleaned.lastIndexOf(']');
+    if (arrStart !== -1 && arrEnd > arrStart) {
+      try {
+        return JSON.parse(cleaned.slice(arrStart, arrEnd + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
 }
 

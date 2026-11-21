@@ -58,7 +58,10 @@ class WeatherApiClient:
         points_url = f"{NWS_BASE_URL}/points/{latitude:.4f},{longitude:.4f}"
         points = self._fetch_json(points_url, "nws")
         forecast_url = points.get("properties", {}).get("forecast")
-        if not forecast_url:
+        if not forecast_url or not isinstance(forecast_url, str):
+            return {}
+        parsed = urllib.parse.urlparse(forecast_url)
+        if parsed.scheme != "https" or parsed.netloc.lower() != "api.weather.gov":
             return {}
         forecast = self._fetch_json(forecast_url, "nws")
         periods = forecast.get("properties", {}).get("periods", [])

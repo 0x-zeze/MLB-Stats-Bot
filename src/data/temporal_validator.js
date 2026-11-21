@@ -64,7 +64,8 @@ export function classifyFeatureProvenance(feature, predictionTimestamp, opts = {
     return { status: 'invalid', liveSafe: false, promotionSafe: false, code: TEMPORAL_CODES.MISSING_TIMESTAMP };
   }
 
-  const availableMs = ms(feature?.availableAt ?? feature?.fetchedAt ?? feature?.observedAt);
+  const explicitAvailableMs = ms(feature?.availableAt);
+  const availableMs = explicitAvailableMs ?? ms(feature?.fetchedAt) ?? ms(feature?.observedAt);
   const observedMs = ms(feature?.observedAt);
   const fetchedMs = ms(feature?.fetchedAt);
   const hasAnyTimestamp = availableMs != null || observedMs != null || fetchedMs != null;
@@ -79,7 +80,11 @@ export function classifyFeatureProvenance(feature, predictionTimestamp, opts = {
   }
 
   const effectiveAvailable = availableMs ?? observedMs ?? fetchedMs;
-  if (effectiveAvailable - predMs > skew) {
+  const futureAvailable = effectiveAvailable - predMs > skew;
+  const futureObserved = observedMs != null && observedMs - predMs > skew;
+  const futureFetchedWithoutExplicit =
+    explicitAvailableMs == null && fetchedMs != null && fetchedMs - predMs > skew;
+  if (futureAvailable || futureObserved || futureFetchedWithoutExplicit) {
     return {
       status: 'future',
       liveSafe: false,
@@ -133,13 +138,27 @@ export function validateTemporalSnapshot(snapshot, predictionTimestamp = null, o
     return { ok: false, liveSafe: false, promotionEligible: false, errors, issues };
   }
 
+  let liveSafe = true;
+  let promotionEligible = true;
+
   const firstPitchMs = ms(snapshot?.firstPitchUtc);
   if (firstPitchMs != null && predMs - firstPitchMs > (opts.clockSkewMs ?? TEMPORAL_CLOCK_SKEW_MS)) {
-    issues.push({
+    const postPitchEntry = {
       code: TEMPORAL_CODES.AS_OF_AFTER_FIRST_PITCH,
       feature: null,
       message: 'prediction timestamp is after first pitch'
-    });
+    };
+    if (opts.strict) {
+      throw new TemporalLeakageError(postPitchEntry.message, {
+        code: TEMPORAL_CODES.AS_OF_AFTER_FIRST_PITCH,
+        feature: null,
+        predictionTimestamp: new Date(predMs).toISOString()
+      });
+    }
+    errors.push(postPitchEntry);
+    issues.push(postPitchEntry);
+    liveSafe = false;
+    promotionEligible = false;
   }
 
   // Gather features: snapshot.features can be a map of name -> provenance
@@ -162,9 +181,6 @@ export function validateTemporalSnapshot(snapshot, predictionTimestamp = null, o
     }
   };
   collect(snapshot?.features, 'features');
-
-  let liveSafe = true;
-  let promotionEligible = true;
 
   for (const { path, feature } of featureSources) {
     const result = classifyFeatureProvenance(feature, predTs, opts);

@@ -84,14 +84,12 @@ def _transition(base_state: int, outcome: str) -> tuple[int, float]:
 
     if outcome == "single":
         runs = 1.0 if third else 0.0
-        # Runner on second often scores on single, runner on first to second/third
+        # Runner on second often scores on single, runner on first advances to second
         if second:
             runs += 0.6
         new_first = True
         new_second = first
         new_third = False
-        if second and not first:
-            new_second = False
         new_state = (1 if new_first else 0) + (2 if new_second else 0) + (4 if new_third else 0)
         return new_state, runs
 
@@ -105,7 +103,8 @@ def _transition(base_state: int, outcome: str) -> tuple[int, float]:
         return new_state, runs
 
     if outcome == "triple":
-        runs = 1.0 + (1 if first else 0) + (1 if second else 0) + (1 if third else 0)
+        # All existing baserunners score; the batter stops on third base.
+        runs = float((1 if first else 0) + (1 if second else 0) + (1 if third else 0))
         return 4, runs  # runner on third only
 
     return base_state, 0.0

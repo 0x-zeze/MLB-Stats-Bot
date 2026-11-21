@@ -1,4 +1,4 @@
-import { uiBullet, uiKV, uiSection, uiTitle } from './telegramFormat.js';
+import { uiBullet, uiCommand, uiKV, uiSection, uiTitle } from './telegramFormat.js';
 
 export const ANALYST_SKILL_VERSION = 'mlb-analyst-v2.0';
 

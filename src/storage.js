@@ -831,7 +831,11 @@ export class Storage {
   replaceAllFromState(state) {
     const normalized = normalizeState(state);
     const replace = this.db.transaction(() => {
-      // yrfi_results table removed; nothing to delete for YRFI.
+      try {
+        this.db.prepare('DELETE FROM yrfi_results').run();
+      } catch {
+        // table may not exist on partial fixtures
+      }
       this.db.prepare('DELETE FROM bet_ledger').run();
       this.db.prepare('DELETE FROM shadow_ledger').run();
       this.db.prepare('DELETE FROM pick_processing').run();
@@ -847,7 +851,7 @@ export class Storage {
       }
 
       for (const prediction of Object.values(normalized.predictions || {})) {
-        this.writePredictionRow(prediction);
+        this.writePredictionRow(prediction, { preserveProcessed: true });
       }
     });
 
@@ -1050,7 +1054,7 @@ export class Storage {
     };
   }
 
-  writePredictionRow(prediction) {
+  writePredictionRow(prediction, { preserveProcessed = false } = {}) {
     const gamePk = String(prediction.gamePk);
     const now = new Date().toISOString();
     const fallback = normalizeFeatureFallbacks(prediction.featureFallbacks);
@@ -1059,12 +1063,14 @@ export class Storage {
       .prepare('SELECT COALESCE(MAX(prediction_version), 0) AS value FROM picks WHERE game_pk = ?')
       .get(gamePk)?.value;
     const predictionVersion = Number(latestVersion || 0) + 1;
+    const processedFlag = preserveProcessed && Boolean(prediction.postGameProcessed) ? 1 : 0;
+    const processedAt = processedFlag ? (prediction.postGameProcessedAt || now) : null;
     const normalizedPrediction = {
       ...prediction,
       predictionRunId,
       predictionVersion,
-      postGameProcessed: false,
-      postGameProcessedAt: null
+      postGameProcessed: Boolean(processedFlag),
+      postGameProcessedAt: processedAt
     };
     const hashPayload = toJson(normalizedPrediction);
     const payloadHash = createHash('sha256').update(hashPayload).digest('hex');
@@ -1112,13 +1118,13 @@ export class Storage {
       .prepare(
         `INSERT INTO pick_processing (
           game_pk, prediction_run_id, post_game_processed, post_game_processed_at, updated_at
-        ) VALUES (?, ?, 0, NULL, ?)
+        ) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(game_pk) DO UPDATE SET
           prediction_run_id = excluded.prediction_run_id,
           updated_at = excluded.updated_at
         WHERE pick_processing.post_game_processed = 0`
       )
-      .run(gamePk, predictionRunId, now);
+      .run(gamePk, predictionRunId, processedFlag, processedAt, now);
 
     // YRFI/NRFI market removed — yrfi_results table retained for historical data but no longer written to or read. See migration note.
 
@@ -1291,6 +1297,10 @@ export class Storage {
         const stored = parseJson(existingFeature.payload, {});
         if (stored.snapshotHash) {
           prediction.snapshotHash = stored.snapshotHash;
+          prediction.runId =
+            stored.runId ||
+            prediction.runId ||
+            `run-${prediction.gamePk}-${String(stored.snapshotHash).slice(0, 16)}`;
           prediction.asOfUtc = stored.asOfUtc || prediction.asOfUtc || null;
           prediction.predictionTimestampUtc =
             stored.predictionTimestampUtc || prediction.predictionTimestampUtc || prediction.asOfUtc || null;
@@ -1484,7 +1494,7 @@ export class Storage {
           snapshot.predictionQuality?.status !== 'INELIGIBLE_TEMPORAL';
         const promotionReasons = promotionEligible
           ? null
-          : JSON.stringify({ informationState, quality: snapshot.predictionQuality?.status || null });
+          : JSON.stringify({ informationState: infoState, quality: snapshot.predictionQuality?.status || null });
         const rawHome = snapshot.modelInputs?.rawHomeProbability ?? null;
         const rawAway = snapshot.modelInputs?.rawAwayProbability ?? null;
         const calHome = snapshot.modelInputs?.pureHomeProbability ?? null;
@@ -1492,12 +1502,18 @@ export class Storage {
         const dispHome = snapshot.modelInputs?.displayHomeProbability ?? null;
         const dispAway = snapshot.modelInputs?.displayAwayProbability ?? null;
         const pickSide =
-          Number(calHome) >= Number(calAway) ? 'home' : 'away';
+          calHome == null && calAway == null
+            ? null
+            : Number(calHome) >= Number(calAway)
+              ? 'home'
+              : 'away';
         const pickTeamId =
           pickSide === 'home'
             ? String(prediction.home?.id ?? '')
-            : String(prediction.away?.id ?? '');
-        const pickProb = pickSide === 'home' ? calHome : calAway;
+            : pickSide === 'away'
+              ? String(prediction.away?.id ?? '')
+              : null;
+        const pickProb = pickSide === 'home' ? calHome : pickSide === 'away' ? calAway : null;
 
         this.recordModelPrediction({
           runId: prediction.runId,
@@ -1582,37 +1598,38 @@ export class Storage {
   }
 
   savePredictions(dateYmd, predictions) {
-    // Persist candidate feature snapshots (roster/trades, bullpen 14d quality,
-    // enriched starting lineup) for season-2 ML/backtest dataset completeness.
-    try {
-      const ts = prediction.asOfUtc || new Date().toISOString();
-      if (prediction.rosterContext && (prediction.rosterContext.away || prediction.rosterContext.home)) {
-        this.setFeatureSnapshot(key, 'roster_transactions', dateYmd, prediction.rosterContext, {
-          overwrite: true,
-          timestamp: ts
-        });
-      }
-      if (prediction.bullpen && (prediction.bullpen.away?.reliefEra != null || prediction.bullpen.home?.reliefEra != null)) {
-        this.setFeatureSnapshot(key, 'bullpen_quality', dateYmd, prediction.bullpen, {
-          overwrite: true,
-          timestamp: ts
-        });
-      }
-      if (prediction.lineups?.away?.confirmed && prediction.lineups?.home?.confirmed) {
-        this.setFeatureSnapshot(key, 'confirmed_lineup_profile', dateYmd, prediction.lineups, {
-          overwrite: false,
-          timestamp: ts
-        });
-      }
-    } catch {
-      // candidate snapshots are non-blocking
-    }
-
     const saveRows = this.db.transaction(() => {
       for (const prediction of predictions) {
         if (String(prediction.status).toLowerCase().includes('final')) continue;
 
         const key = String(prediction.gamePk);
+
+        // Persist candidate feature snapshots (roster/trades, bullpen 14d quality,
+        // enriched starting lineup) for season-2 ML/backtest dataset completeness.
+        try {
+          const ts = prediction.asOfUtc || new Date().toISOString();
+          if (prediction.rosterContext && (prediction.rosterContext.away || prediction.rosterContext.home)) {
+            this.setFeatureSnapshot(key, 'roster_transactions', dateYmd, prediction.rosterContext, {
+              overwrite: true,
+              timestamp: ts
+            });
+          }
+          if (prediction.bullpen && (prediction.bullpen.away?.reliefEra != null || prediction.bullpen.home?.reliefEra != null)) {
+            this.setFeatureSnapshot(key, 'bullpen_quality', dateYmd, prediction.bullpen, {
+              overwrite: true,
+              timestamp: ts
+            });
+          }
+          if (prediction.lineups?.away?.confirmed && prediction.lineups?.home?.confirmed) {
+            this.setFeatureSnapshot(key, 'confirmed_lineup_profile', dateYmd, prediction.lineups, {
+              overwrite: false,
+              timestamp: ts
+            });
+          }
+        } catch {
+          // candidate snapshots are non-blocking
+        }
+
         const existing = this.getPrediction(key) || {};
         prediction.predictionRunId = randomUUID();
         // Freeze decision inputs before compacting mutable display fields.
@@ -1927,7 +1944,13 @@ export class Storage {
     if (!key) return false;
 
     const cutoff = new Date(Date.now() - Math.max(1, Number(ttlHours) || 18) * 60 * 60 * 1000).toISOString();
-    this.db.prepare('DELETE FROM line_alerts WHERE timestamp < ?').run(cutoff);
+    const marketName = String(movement?.storageMarket || movement?.market || '');
+    const isLineupKey = key.startsWith('lineup-');
+    if (isLineupKey) {
+      this.db.prepare("DELETE FROM line_alerts WHERE timestamp < ? AND alert_key LIKE 'lineup-%'").run(cutoff);
+    } else {
+      this.db.prepare("DELETE FROM line_alerts WHERE timestamp < ? AND alert_key NOT LIKE 'lineup-%'").run(cutoff);
+    }
 
     const result = this.db
       .prepare(
@@ -1937,7 +1960,7 @@ export class Storage {
       .run(
         key,
         String(movement?.gamePk || ''),
-        String(movement?.storageMarket || movement?.market || ''),
+        marketName,
         String(chatId || ''),
         toJson(movement || {}),
         timestamp
@@ -1970,7 +1993,7 @@ export class Storage {
       .prepare(
         `SELECT DISTINCT p.date_ymd
          FROM picks p
-         JOIN pick_processing pp ON pp.game_pk = p.game_pk
+         JOIN pick_processing pp ON pp.prediction_run_id = p.prediction_run_id
          WHERE pp.post_game_processed = 0 AND p.date_ymd <> ''
          UNION
          SELECT DISTINCT date_ymd FROM shadow_ledger
@@ -2332,6 +2355,7 @@ export class Storage {
     } else if (String(row.selected_team_id) === String(winnerId)) {
       outcome = 'win';
       const odds = Number(row.odds);
+      if (!Number.isFinite(odds) || Math.abs(odds) < 100) return false;
       const profitMultiple = odds > 0 ? odds / 100 : 100 / Math.abs(odds);
       unitsPl = Number(row.simulated_units_staked) * profitMultiple;
     }
@@ -2365,6 +2389,8 @@ export class Storage {
     if (!decision || decision.status !== 'VALUE') return null;
     if (Array.isArray(decision.reasons) && decision.reasons.length > 0) return null;
     if (!value || !(Number(value.kellyStakePercent) > 0)) return null;
+    const numericOdds = Number(value.odds);
+    if (!Number.isFinite(numericOdds) || Math.abs(numericOdds) < 100) return null;
 
     const gamePk = String(prediction.gamePk || '');
     const market = 'moneyline';
@@ -2555,9 +2581,13 @@ export class Storage {
     if (winnerId == null) {
       outcome = 'push';
       unitsPl = 0;
-    } else if (stakedTeamId != null && String(stakedTeamId) === String(winnerId)) {
+    } else if (stakedTeamId == null) {
+      // Cannot determine whether the bet won or lost without selected_team_id/side.
+      return false;
+    } else if (String(stakedTeamId) === String(winnerId)) {
       outcome = 'win';
       const odds = Number(row.odds);
+      if (!Number.isFinite(odds) || Math.abs(odds) < 100) return false;
       const profitMultiple = odds > 0 ? odds / 100 : 100 / Math.abs(odds);
       unitsPl = row.units_staked * profitMultiple;
     }
@@ -2655,24 +2685,26 @@ export class Storage {
           this.recordGameOutcome({
             gamePk,
             dateYmd: prediction?.dateYmd || existing?.dateYmd || null,
-            home: { id: prediction?.home?.id ?? existing?.home?.id },
-            away: { id: prediction?.away?.id ?? existing?.away?.id },
+            home: { id: prediction?.home?.id ?? existing?.home?.id ?? result?.home?.id },
+            away: { id: prediction?.away?.id ?? existing?.away?.id ?? result?.away?.id },
             homeScore: result?.homeScore ?? result?.home?.score,
             awayScore: result?.awayScore ?? result?.away?.score,
             status: result?.status || null,
-            firstInningAnyRun: result?.firstInningAnyRun ?? null
+            firstInningAnyRun: result?.firstInningAnyRun ?? result?.firstInning?.anyRun ?? null
           });
           this.markClosingQuotePairs(gamePk);
         } catch {
           // all-game outcome recording must never block bet settlement
         }
 
+        let memoryRecorded = false;
         if (!existing?.postGameProcessed) {
-          // Only record memory/outcome when there is a real bet to settle
-          // OR the pick was explicitly processed. Shadow-only settlement is
-          // paper-only and must not increment model memory.
-          if (openReal) {
-            this.recordOutcomeWithoutProcessedMark(prediction, result, { enabled });
+          // Record memory/outcome for real bets AND normal non-shadow predictions.
+          // Shadow-only settlement (openShadow && !openReal) is paper-only and
+          // must not increment model memory or trigger evolution.
+          if (openReal || !openShadow) {
+            const memRes = this.recordOutcomeWithoutProcessedMark(prediction, result, { enabled });
+            memoryRecorded = Boolean(memRes && !memRes.skipped);
           }
         }
 
@@ -2709,10 +2741,10 @@ export class Storage {
                VALUES (?, ?, ?, ?, ?, ?)`
             )
             .run(
-              `postgame-${gamePk}-${Date.now()}`,
+              `postgame-${gamePk}-${randomUUID()}`,
               'postgame_processed',
               gamePk,
-              toJson({ gamePk, settled, shadowSettled, clv, shadowClv }),
+              toJson({ gamePk, settled, shadowSettled, memoryRecorded, clv, shadowClv }),
               now,
               now
             );
@@ -2723,6 +2755,7 @@ export class Storage {
         return {
           settled,
           shadowSettled,
+          memoryRecorded,
           processed: true,
           retriedStranded: Boolean(existing?.postGameProcessed && (openReal || openShadow))
         };
@@ -2756,7 +2789,12 @@ export class Storage {
         return { skipped: true };
       }
 
-      const correct = prediction.pick.id === result.winner.id;
+      if (!result?.winner || result.winner.id == null || !prediction?.pick || prediction.pick.id == null) {
+        // Tie / suspended / push games without a clear winner must not corrupt memory or fail push settlement.
+        return { skipped: true };
+      }
+
+      const correct = String(prediction.pick.id) === String(result.winner.id);
       const actualFirstInningRun = result.firstInning?.anyRun;
 
       memory.totalPicks += 1;
@@ -2869,9 +2907,10 @@ export class Storage {
       } catch {
         // optional table
       }
+      return { skipped: false };
     });
 
-    updateOutcome();
+    return updateOutcome();
   }
 
 
@@ -3204,10 +3243,10 @@ export class Storage {
                  AND (earlier.bookmaker = ? OR (earlier.bookmaker IS NULL AND ? IS NULL))
                  AND earlier.market = ?
                  AND earlier.is_eligible = 1
-                 AND earlier.created_at < ?
+                 AND earlier.is_opening = 1
              )`
         )
-        .run(pairHash, String(gamePk), bookmaker, bookmaker, market, now);
+        .run(pairHash, String(gamePk), bookmaker, bookmaker, market);
     } catch {
       // non-fatal
     }
@@ -3221,28 +3260,37 @@ export class Storage {
    */
   markClosingQuotePairs(gamePk) {
     try {
-      this.db
-        .prepare(
-          `UPDATE market_quote_pairs
-           SET is_closing = 1
-           WHERE quote_pair_id IN (
-             SELECT quote_pair_id FROM market_quote_pairs qp
-             WHERE qp.game_pk = ?
-               AND qp.is_eligible = 1
-               AND qp.first_pitch_utc IS NOT NULL
-               AND qp.quote_pair_id = (
-                 SELECT qp2.quote_pair_id FROM market_quote_pairs qp2
-                 WHERE qp2.game_pk = qp.game_pk
-                   AND qp2.bookmaker = qp.bookmaker
-                   AND qp2.market = qp.market
-                   AND qp2.is_eligible = 1
-                   AND qp2.first_pitch_utc = qp.first_pitch_utc
-                 ORDER BY qp2.fetched_at_utc DESC
-                 LIMIT 1
-               )
-           )`
-        )
-        .run(String(gamePk));
+      const mark = this.db.transaction(() => {
+        this.db
+          .prepare('UPDATE market_quote_pairs SET is_closing = 0 WHERE game_pk = ?')
+          .run(String(gamePk));
+        this.db
+          .prepare(
+            `UPDATE market_quote_pairs
+             SET is_closing = 1
+             WHERE quote_pair_id IN (
+               SELECT quote_pair_id FROM market_quote_pairs qp
+               WHERE qp.game_pk = ?
+                 AND qp.is_eligible = 1
+                 AND qp.first_pitch_utc IS NOT NULL
+                 AND qp.fetched_at_utc IS NOT NULL
+                 AND qp.fetched_at_utc < qp.first_pitch_utc
+                 AND qp.quote_pair_id = (
+                   SELECT qp2.quote_pair_id FROM market_quote_pairs qp2
+                   WHERE qp2.game_pk = qp.game_pk
+                     AND (qp2.bookmaker = qp.bookmaker OR (qp2.bookmaker IS NULL AND qp.bookmaker IS NULL))
+                     AND qp2.market = qp.market
+                     AND qp2.is_eligible = 1
+                     AND qp2.fetched_at_utc IS NOT NULL
+                     AND qp2.fetched_at_utc < qp2.first_pitch_utc
+                   ORDER BY qp2.fetched_at_utc DESC
+                   LIMIT 1
+                 )
+             )`
+          )
+          .run(String(gamePk));
+      });
+      mark();
     } catch {
       // non-fatal
     }
@@ -3323,7 +3371,10 @@ export class Storage {
             awayScore,
             winnerTeamId,
             loserTeamId,
-            status: game.status?.detailedState || null
+            status:
+              typeof game.status === 'string'
+                ? game.status
+                : game.status?.detailedState || null
           }),
           now
         );

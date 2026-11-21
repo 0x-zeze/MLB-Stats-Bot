@@ -13,7 +13,7 @@ services:
     volumes:
       - ./data:/app/data
     ports:
-      - "127.0.0.1:${TELEGRAM_WEBHOOK_PORT:-8443}:8443"
+      - "127.0.0.1:${TELEGRAM_WEBHOOK_PORT:-8443}:${TELEGRAM_WEBHOOK_PORT:-8443}"
 
   dashboard-api:
     build:

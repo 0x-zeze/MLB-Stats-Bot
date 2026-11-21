@@ -2,6 +2,7 @@ import {
   clamp,
   dateInTimezone,
   formatGameTime,
+  isFiniteNumber,
   percent,
   safeFixed,
   sigmoid,
@@ -586,7 +587,7 @@ function moneylineValueOption(item, side) {
   const sameBookConsensus = item.currentOdds?.sameBookFair;
   const consensusSideFair =
     sameBookConsensus &&
-    Number.isFinite(Number(sameBookConsensus[side])) &&
+    isFiniteNumber(sameBookConsensus[side]) &&
     Number(sameBookConsensus[side]) > 0
       ? Number(sameBookConsensus[side])
       : null;
@@ -619,10 +620,11 @@ function moneylineValueOption(item, side) {
 
   // Disagreement sizing boost: when model picks away but market favors home
   // (the validated asymmetric edge), bump the Kelly stake by a validated factor.
-  // Walk-forward validated: model-away vs market-home shows 81-97% WR.
+  // fairProbability belongs to `side`, so convert to home-side probability.
   const modelHomeProb = pureModelProbabilityForSide(item, 'home');
   const modelAwayProb = 100 - modelHomeProb;
-  const marketHomeProb = toNumber(fairProbability, 50);
+  const sideFair = toNumber(fairProbability, 50);
+  const marketHomeProb = side === 'home' ? sideFair : 100 - sideFair;
   const marketAwayProb = 100 - marketHomeProb;
   const isDisagreement = modelAwayProb > modelHomeProb && marketHomeProb > marketAwayProb;
   const disagreementBoost = isDisagreement && side === 'away' ? 1.5 : 1.0;
@@ -727,10 +729,12 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
     // the validated asymmetric edge (scripts/model_edge_validation.py). The host
     // uses this flag to relax edge/conviction floors for this specific case.
     disagreementAwayBypass: (() => {
+      if (option.side !== 'away') return false;
       const modelHomeProb = pureModelProbabilityForSide(item, 'home');
       const modelAwayProb = 100 - modelHomeProb;
-      const marketHomeProb = toNumber(option.fairProbability ?? option.impliedProbability, 50);
-      const marketAwayProb = 100 - marketHomeProb;
+      const sideFair = toNumber(option.fairProbability ?? option.impliedProbability, 50);
+      const marketHomeProb = 100 - sideFair;
+      const marketAwayProb = sideFair;
       return modelAwayProb > modelHomeProb && marketHomeProb > marketAwayProb;
     })()
   };
@@ -1229,13 +1233,16 @@ function pitcherStartRatio(stats) {
   return clamp(gamesStarted / appearances, 0, 1);
 }
 
+const NON_PITCHER_OPENER_RE = /\b(home|season|series|road|spring|exhibition|day)\s+opener\b/i;
+
 function detectOpenerSituation(game, side, pitcher, stats) {
   const teamEntry = game?.teams?.[side] || {};
   const noteText = [
-    ...collectOpenerNoteText(game),
     ...collectOpenerNoteText(teamEntry),
     ...collectOpenerNoteText(pitcher)
-  ].join(' ');
+  ]
+    .filter((line) => !NON_PITCHER_OPENER_RE.test(line))
+    .join(' ');
   const noteMatch = OPENER_KEYWORD_RE.test(noteText);
   const startRatio = pitcherStartRatio(stats);
   const appearances = toNumber(stats?.gamesPitched ?? stats?.appearances ?? stats?.games, 0);
@@ -1430,7 +1437,7 @@ function blendedTeamPreventionEdge(seasonHome, seasonAway, rollingHome, rollingA
   const rollingEdge =
     (statEra(awayPitch) - statEra(homePitch)) / 1.8 +
     (statWhip(awayPitch) - statWhip(homePitch)) / 0.55 +
-    (toNumber(homePitch.homeRunsPer9, DEFAULTS.hr9) - toNumber(awayPitch.homeRunsPer9, DEFAULTS.hr9)) / 1.2 +
+    (toNumber(awayPitch.homeRunsPer9, DEFAULTS.hr9) - toNumber(homePitch.homeRunsPer9, DEFAULTS.hr9)) / 1.2 +
     (toNumber(homePitch.strikeoutWalkRatio, 2.2) - toNumber(awayPitch.strikeoutWalkRatio, 2.2)) / 4.0;
   const sample = Math.min(homeGames, awayGames);
   const rollingWeight = clamp((sample - 7) / 12, 0, 0.4);
@@ -1819,7 +1826,7 @@ function extractLineupProfile(boxTeam, options = {}) {
   orderedHitters.forEach((hitter, index) => {
     const split = getPlatoon(hitter);
     const baseOps = hitterScores[index]?.ops ?? DEFAULTS.ops;
-    if (!split || !Number.isFinite(Number(split.ops))) return;
+    if (!split || !isFiniteNumber(split.ops)) return;
     const ab = Math.max(0, toNumber(split.atBats, 0));
     const wSplit = clamp(ab / (ab + 45), 0, 0.85);
     const shrunkSplitOps = wSplit * Number(split.ops) + (1 - wSplit) * baseOps;
@@ -1888,20 +1895,23 @@ async function fetchHitterSeasonStats(personId, season, asOfDateYmd = null) {
   let totalPa = 0;
   let totalAb = 0;
   let totalHr = 0;
+  let totalWeight = 0;
   let weightedObp = 0;
   let weightedSlg = 0;
   for (const s of splits) {
     const st = s?.stat || {};
-    const pa = Math.max(1, toNumber(st.plateAppearances ?? st.atBats, 0));
+    const pa = toNumber(st.plateAppearances ?? st.atBats, 0);
     totalPa += toNumber(st.plateAppearances, 0);
     totalAb += toNumber(st.atBats, 0);
     totalHr += toNumber(st.homeRuns, 0);
-    weightedObp += toNumber(st.obp ?? st.onBasePercentage, 0.32) * pa;
-    weightedSlg += toNumber(st.slg ?? st.sluggingPercentage, 0.4) * pa;
+    if (pa > 0) {
+      totalWeight += pa;
+      weightedObp += toNumber(st.obp ?? st.onBasePercentage, 0.32) * pa;
+      weightedSlg += toNumber(st.slg ?? st.sluggingPercentage, 0.4) * pa;
+    }
   }
-  const denom = Math.max(1, totalPa || totalAb);
-  const obp = weightedObp / denom;
-  const slg = weightedSlg / denom;
+  const obp = totalWeight > 0 ? weightedObp / totalWeight : 0.32;
+  const slg = totalWeight > 0 ? weightedSlg / totalWeight : 0.4;
   return {
     plateAppearances: totalPa,
     atBats: totalAb,
@@ -2696,6 +2706,7 @@ function combinePitcherStatSplits(splits) {
   let gs = 0;
   let gp = 0;
   let weightedKMinusBb = 0;
+  let kMinusBbWeight = 0;
   for (const s of splits) {
     const st = s?.stat || {};
     const ip = parseInnings(st.inningsPitched);
@@ -2707,7 +2718,10 @@ function combinePitcherStatSplits(splits) {
     hr += toNumber(st.homeRuns, 0);
     gs += toNumber(st.gamesStarted, 0);
     gp += toNumber(st.gamesPitched ?? st.appearances, 0);
-    weightedKMinusBb += toNumber(st.strikeoutsMinusWalksPercentage, DEFAULTS.kMinusBb) * Math.max(0.5, ip);
+    if (ip > 0) {
+      kMinusBbWeight += ip;
+      weightedKMinusBb += toNumber(st.strikeoutsMinusWalksPercentage, DEFAULTS.kMinusBb) * ip;
+    }
   }
   const ip = outs / 3;
   const whole = Math.floor(outs / 3);
@@ -2724,7 +2738,7 @@ function combinePitcherStatSplits(splits) {
     gamesStarted: gs,
     gamesPitched: gp,
     homeRunsPer9: ip > 0 ? (hr * 9) / ip : DEFAULTS.hr9,
-    strikeoutsMinusWalksPercentage: ip > 0 ? weightedKMinusBb / ip : DEFAULTS.kMinusBb
+    strikeoutsMinusWalksPercentage: kMinusBbWeight > 0 ? weightedKMinusBb / kMinusBbWeight : DEFAULTS.kMinusBb
   };
 }
 
@@ -3346,8 +3360,8 @@ function weatherRunAdjustment(weather) {
   return clamp((tempAdj + windAdj) * roofMultiplier, -0.55, 0.55);
 }
 
-function parkFactorContext(venueId, venueName = null) {
-  const baseline = PARK_FACTOR_BASELINES.get(venueId) || {
+function parkFactorContext(venueId, venueName = null, homeTeamId = null) {
+  const baseline = PARK_FACTOR_BASELINES.get(venueId) || PARK_FACTOR_BASELINES.get(homeTeamId) || {
     runFactor: 1,
     homeRunFactor: 1,
     label: venueName || 'Neutral park'
@@ -3612,7 +3626,7 @@ function lineupStatusLine(team, lineup) {
   if (lineup.confirmed) {
     const topNames = lineup.topFive?.slice(0, 3) || [];
     const top = topNames.length ? ` top: ${topNames.join(', ')}` : '';
-    const platoon = Number.isFinite(Number(lineup.platoonOps))
+    const platoon = isFiniteNumber(lineup.platoonOps)
       ? ` | split OPS ${Number(lineup.platoonOps).toFixed(3)}`
       : '';
     const additions =
@@ -3834,7 +3848,7 @@ function predictGame(
     // dashboard quality report can honestly reflect which inputs were present
     // (previously it read weather_detail/park_detail, fields that never existed).
     weather: game.weather || null,
-    parkFactor: parkFactorContext(game.venue?.id, game.venue?.name),
+    parkFactor: parkFactorContext(game.venue?.id, game.venue?.name, home?.id),
     away,
     home,
     contextLine: `${standingContext(away, awayStanding, 'away')} | ${standingContext(home, homeStanding, 'home')}`,
@@ -4042,12 +4056,12 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
   // Early-season continuity: when any active club has < 35 games played in the
   // new season, pull completed `season - 1` baselines and blend inversely with
   // offseason/in-season roster turnover (`turnoverScore`).
-  const needsPriorTeamBlend = teamIds.some(
-    (teamId) => toNumber(rawTeamStats.get(teamId)?.hitting?.gamesPlayed, 0) < 35
-  );
-  const needsPriorStandingsBlend = teamIds.some(
-    (teamId) => toNumber(rawStandings.get(teamId)?.gamesPlayed, 0) < 30
-  );
+  const needsPriorTeamBlend =
+    collectorProvenance.teamStats?.status !== 'fetch_failed' &&
+    teamIds.some((teamId) => toNumber(rawTeamStats.get(teamId)?.hitting?.gamesPlayed, 0) < 35);
+  const needsPriorStandingsBlend =
+    collectorProvenance.standings?.status !== 'fetch_failed' &&
+    teamIds.some((teamId) => toNumber(rawStandings.get(teamId)?.gamesPlayed, 0) < 30);
   const [priorTeamStats, priorStandings] = await Promise.all([
     needsPriorTeamBlend ? fetchTeamStats(season - 1, null).catch(() => new Map()) : Promise.resolve(new Map()),
     needsPriorStandingsBlend ? fetchStandings(season - 1, null).catch(() => new Map()) : Promise.resolve(new Map())
@@ -4229,6 +4243,7 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       predictionTimestampUtc,
       rosterProfiles
     );
+    prediction.dateYmd = game.officialDate || dateYmd;
     prediction.rosterContext = {
       away: rosterProfiles.get(awayTeamId) || null,
       home: rosterProfiles.get(homeTeamId) || null

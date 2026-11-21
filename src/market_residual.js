@@ -1,4 +1,4 @@
-import { clamp, toNumber } from './utils.js';
+import { clamp, isFiniteNumber, toNumber } from './utils.js';
 import { loadConfig } from './config.js';
 
 const DEFAULT_MARKET_RESIDUAL_WEIGHT = 0.0;
@@ -7,7 +7,7 @@ const MAX_MARKET_PROBABILITY = 0.97;
 
 function americanImpliedProbability(odds) {
   const parsed = toNumber(odds, Number.NaN);
-  if (!Number.isFinite(parsed) || parsed === 0) return null;
+  if (!Number.isFinite(parsed) || Math.abs(parsed) < 100) return null;
   return parsed > 0 ? 100 / (parsed + 100) : Math.abs(parsed) / (Math.abs(parsed) + 100);
 }
 
@@ -42,7 +42,7 @@ export function marketAnchoredProbabilities({
   if (!market) return null;
   const w = clamp(toNumber(weight, 0), 0, 0.5);
   if (!(w > 0)) return null;
-  if (!Number.isFinite(Number(modelHomeProbability)) || !Number.isFinite(Number(modelAwayProbability))) {
+  if (!isFiniteNumber(modelHomeProbability) || !isFiniteNumber(modelAwayProbability)) {
     return null;
   }
   const home = clamp(

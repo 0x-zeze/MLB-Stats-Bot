@@ -189,7 +189,8 @@ def _fit_fold(
             f"fold_{fold_index}_insufficient_train_rows_{len(valid_idx)}"
             f"_below_{MIN_TRAIN_ROWS_PER_FOLD}"
         )
-    X = X_all[valid_idx]
+    n_feat = len(FEATURE_NAMES)
+    X_raw = X_all[valid_idx, :n_feat].copy()
     y = y_all[valid_idx]
 
     pos = int(np.sum(y == 1.0))
@@ -200,37 +201,43 @@ def _fit_fold(
             f"_min_{MIN_EVENTS_PER_CLASS}"
         )
 
-    n_feat = len(FEATURE_NAMES)
-
-    # Imputation medians from TRAINING fold only.
-    imputation: dict[str, float] = {}
-    for j, name in enumerate(FEATURE_NAMES):
-        col = X[:, j]
-        finite = col[np.isfinite(col)]
-        imputation[name] = float(np.median(finite)) if finite.size else 0.0
-        # Apply imputation: NaN -> median.
-        nan_mask = np.isnan(col)
-        if nan_mask.any():
-            X[nan_mask, j] = imputation[name]
-
-    # Scaling (mean/std) from TRAINING fold only. Guard zero-std.
-    feature_mean: dict[str, float] = {}
-    feature_std: dict[str, float] = {}
-    for j, name in enumerate(FEATURE_NAMES):
-        col = X[:, j]
-        mu = float(np.mean(col))
-        sigma = float(np.std(col))
-        feature_mean[name] = mu
-        feature_std[name] = sigma if sigma > 1e-9 else 1.0
-        X[:, j] = (col - mu) / feature_std[name]
+    def _fit_transform(X_tr: np.ndarray, X_te: np.ndarray | None = None):
+        imp: dict[str, float] = {}
+        mu_map: dict[str, float] = {}
+        std_map: dict[str, float] = {}
+        tr_out = X_tr.copy()
+        te_out = X_te.copy() if X_te is not None else None
+        for j, name in enumerate(FEATURE_NAMES):
+            col = tr_out[:, j]
+            finite = col[np.isfinite(col)]
+            med = float(np.median(finite)) if finite.size else 0.0
+            imp[name] = med
+            tr_nan = np.isnan(col)
+            if tr_nan.any():
+                tr_out[tr_nan, j] = med
+            mu = float(np.mean(tr_out[:, j]))
+            sigma = float(np.std(tr_out[:, j]))
+            std = sigma if sigma > 1e-9 else 1.0
+            mu_map[name] = mu
+            std_map[name] = std
+            tr_out[:, j] = (tr_out[:, j] - mu) / std
+            if te_out is not None:
+                te_col = te_out[:, j]
+                te_nan = np.isnan(te_col)
+                if te_nan.any():
+                    te_out[te_nan, j] = med
+                te_out[:, j] = (te_out[:, j] - mu) / std
+        return tr_out, te_out, imp, mu_map, std_map
 
     # Inner chronological validation: hold out the last INNER_VAL_FRACTION of
-    # the training fold (latest games) to select L2 strength. Never touches the
-    # outer test fold or holdout.
+    # the training fold (latest games) to select L2 strength. Fit imputation and
+    # scaling strictly on inner_train_idx (no inner validation leakage).
     order = np.arange(len(y))
     n_val = max(1, int(len(y) * INNER_VAL_FRACTION))
     inner_train_idx = order[:-n_val]
     inner_val_idx = order[-n_val:]
+
+    X_inner_tr, X_inner_val, _, _, _ = _fit_transform(X_raw[inner_train_idx], X_raw[inner_val_idx])
 
     best_c = REGULARIZATION_GRID[0]
     best_val_brier = math.inf
@@ -240,16 +247,17 @@ def _fit_fold(
             fit_intercept=True,
         )
         try:
-            clf.fit(X[inner_train_idx], y[inner_train_idx])
+            clf.fit(X_inner_tr, y[inner_train_idx])
         except (ValueError, np.linalg.LinAlgError):
             continue
-        val_prob = clf.predict_proba(X[inner_val_idx])[:, 1]
+        val_prob = clf.predict_proba(X_inner_val)[:, 1]
         val_brier = float(np.mean((val_prob - y[inner_val_idx]) ** 2))
         if val_brier < best_val_brier:
             best_val_brier = val_brier
             best_c = c
 
-    # Refit on the FULL training fold with the selected C.
+    # Refit imputation/scaling/weights on the FULL training fold with the selected C.
+    X, _, imputation, feature_mean, feature_std = _fit_transform(X_raw)
     clf = LogisticRegression(
         C=best_c, solver="lbfgs", max_iter=1000,
         fit_intercept=True,

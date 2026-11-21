@@ -62,7 +62,10 @@ for (const command of candidateCommands()) {
     console.error(`${command} failed: ${result.error.message}`);
     process.exit(1);
   }
-  process.exit(result.code ?? 0);
+  if (result.code === null || result.code === undefined) {
+    process.exit(1);
+  }
+  process.exit(result.code);
 }
 
 console.error(

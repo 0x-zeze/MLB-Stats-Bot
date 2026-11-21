@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { ANALYST_SKILL_VERSION, buildAnalystSkillSummary } from './analystSkill.js';
 import { calibratePercent, hasCalibrationMap, resetCalibrationCache } from './calibration.js';
+import { guardFavoredCalibrationPercent } from './core/prediction_core.js';
 import { buildEvolutionContext } from './evolutionContext.js';
 import { loadEvolutionControls, moneylineWeightMultiplier } from './evolutionControls.js';
 import {
@@ -240,11 +241,14 @@ async function buildAlertPayload(dateYmd, options = {}) {
 
 function dateForPrediction(prediction) {
   if (prediction?.dateYmd && isValidDateYmd(prediction.dateYmd)) return prediction.dateYmd;
+  if (prediction?.officialDate && isValidDateYmd(prediction.officialDate)) return prediction.officialDate;
   if (prediction?.startTime) {
     const parsed = new Date(prediction.startTime);
-    if (!Number.isNaN(parsed.getTime())) return dateInTimezone(config.timezone, parsed);
+    // MLB official schedule dates follow US Eastern time, not Asia/Jakarta (UTC+7),
+    // which would shift evening MLB games to officialDate + 1.
+    if (!Number.isNaN(parsed.getTime())) return dateInTimezone('America/New_York', parsed);
   }
-  return dateInTimezone(config.timezone);
+  return dateInTimezone('America/New_York');
 }
 
 async function sendBothLineupsPregameAlert(bot, chatId, game, awayLineup, homeLineup) {
@@ -399,13 +403,26 @@ async function attachMarketContext(predictions) {
         if (Number.isFinite(rawHome) && Number.isFinite(rawAway)) {
           const blendedHome = rawHome * (1 - w) + homeNorm * w;
           const blendedAway = rawAway * (1 - w) + awayNorm * w;
-          // Re-calibrate the blended probabilities. Keep winProbabilityRaw anchored
-          // to the original model so repeated /picks calls do not compound-blend.
+          // Re-calibrate the favored side (>= 50%) with guardFavoredCalibrationPercent,
+          // mirroring prediction_core.js so calibration never inverts favorites or
+          // flattens away favorites to the lower knot of the map.
           const calibrated = hasCalibrationMap('moneyline');
-          const newHome = calibrated
-            ? Math.round(Math.max(30, Math.min(70, calibratePercent(blendedHome, 'moneyline'))))
-            : Math.round(Math.max(30, Math.min(70, blendedHome)));
-          const newAway = 100 - newHome;
+          let newHome;
+          let newAway;
+          if (calibrated) {
+            if (blendedHome >= 50) {
+              const calRaw = calibratePercent(blendedHome, 'moneyline');
+              newHome = Math.round(Math.max(30, Math.min(70, guardFavoredCalibrationPercent(blendedHome, calRaw))));
+              newAway = 100 - newHome;
+            } else {
+              const calRaw = calibratePercent(blendedAway, 'moneyline');
+              newAway = Math.round(Math.max(30, Math.min(70, guardFavoredCalibrationPercent(blendedAway, calRaw))));
+              newHome = 100 - newAway;
+            }
+          } else {
+            newHome = Math.round(Math.max(30, Math.min(70, blendedHome)));
+            newAway = 100 - newHome;
+          }
           prediction.home.marketInformedProbability = newHome;
           prediction.away.marketInformedProbability = newAway;
           prediction.home.displayProbability = newHome;
@@ -518,10 +535,13 @@ function targetAutoUpdateChats() {
 
   if (config.autoAlerts) {
     for (const chatId of targetChatIds()) {
-      if (!targets.has(String(chatId))) {
-        targets.set(String(chatId), {
-          chatId: String(chatId),
-          title: String(chatId),
+      const id = String(chatId);
+      const subscriber = storage.getSubscriber?.(id);
+      if (subscriber?.autoUpdate?.enabled === false) continue;
+      if (!targets.has(id)) {
+        targets.set(id, {
+          chatId: id,
+          title: id,
           dailyTime: config.dailyAlertTime,
           lastSentDate: storage.getLastAutoAlertDate(),
           legacyEnv: true
@@ -669,7 +689,7 @@ function fetchKnowledgeContext(question) {
   return new Promise((resolve) => {
     const child = spawn(config.pythonExecutable, [
       '-c',
-      'import json, sys; from src.knowledge.baseball_knowledge import BaseballKnowledgeBase; kb = BaseballKnowledgeBase(); print(json.dumps(kb.search(sys.argv[1], limit=3), default=str))',
+      'import dataclasses, json, sys; from src.knowledge.baseball_knowledge import BaseballKnowledgeBase; kb = BaseballKnowledgeBase(); chunks = kb.search(sys.argv[1], limit=3); print(json.dumps([dataclasses.asdict(c) if dataclasses.is_dataclass(c) else c for c in chunks], default=str))',
       question
     ], {
       cwd: process.cwd(),
@@ -887,6 +907,7 @@ async function handleEvolve(bot, chatId) {
     timeoutMs: 120_000
   }).catch((error) => JSON.stringify({ error: error.message }));
   const audit = parseJsonOutput(auditOutput);
+  resetCalibrationCache();
 
   await bot.sendMessage(chatId, formatEvolveResult({ postgame, cycle, audit }));
 }
@@ -1609,12 +1630,18 @@ function computeClvFromOdds(openingLine, closingLine) {
   return Math.round((closingImplied - openingImplied) * 1000) / 10;
 }
 
-function computeMoneylineClv(prediction, gamePk, side) {
+function computeMoneylineClv(prediction, gamePk, side, openBet = null) {
   if (side !== 'home' && side !== 'away') return null;
-  const openingOdds = prediction.openingOdds;
-  if (!openingOdds) return null;
   const closingLine = resolveClosingLine(gamePk, side);
   if (!Number.isFinite(closingLine)) return null;
+  // Prefer the actual recorded bet entry odds when an open real bet exists;
+  // fall back to frozen openingOdds for non-bet games.
+  const betOdds = openBet && openBet.side === side ? Number(openBet.odds) : Number.NaN;
+  if (Number.isFinite(betOdds) && Math.abs(betOdds) >= 100) {
+    return computeClvFromOdds(betOdds, closingLine);
+  }
+  const openingOdds = prediction.openingOdds;
+  if (!openingOdds) return null;
   const openingLine = side === 'home' ? openingOdds.homeMoneyline : openingOdds.awayMoneyline;
   return computeClvFromOdds(openingLine, closingLine);
 }
@@ -1655,9 +1682,12 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
       continue;
     }
 
-    const correct = prediction.pick.id === result.winner.id;
+    const correct =
+      result?.winner?.id != null &&
+      prediction?.pick?.id != null &&
+      String(prediction.pick.id) === String(result.winner.id);
     const clvSide = resolveClvSide(prediction, storage);
-    const clv = computeMoneylineClv(prediction, result.gamePk, clvSide);
+    const clv = computeMoneylineClv(prediction, result.gamePk, clvSide, openBet);
     const shadowClose = computeShadowMoneylineClv(openShadowBet, result.gamePk);
 
     const shouldProcess =
@@ -1675,7 +1705,7 @@ async function evaluatePostGames(dateYmd, { markProcessed = true, includeProcess
       // evolution triggers. Shadow settlement is paper-only and must never
       // independently drive evolution, auto-retrain, or guardrail reopening.
       learned =
-        Boolean(outcome.processed) ||
+        Boolean(outcome.memoryRecorded) ||
         Boolean(outcome.settled);
       if (outcome.error) {
         console.error('processPostGameOutcome failed:', outcome.error);
@@ -2247,6 +2277,7 @@ async function processPendingPostGames(bot) {
           timeoutMessage: 'Auto audit timeout. Skipped.',
           timeoutMs: 120_000
         });
+        resetCalibrationCache();
         console.log('Auto evolution cycle + audit completed.');
       } catch (error) {
         console.error('Auto evolution cycle after post-game failed:', error.message);
@@ -2383,11 +2414,11 @@ function computeWeeklyStats() {
     const predictions = storage.listPredictionsByDate(dateYmd);
     for (const prediction of predictions) {
       if (!prediction.postGameProcessed) continue;
-      totalPicks += 1;
       const log = (storage.state?.memory?.learningLog || []).find(
         (entry) => String(entry.gamePk) === String(prediction.gamePk)
       );
       if (!log) continue;
+      totalPicks += 1;
 
       if (log.correct) {
         correct += 1;

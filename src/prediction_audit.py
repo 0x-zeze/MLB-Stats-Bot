@@ -57,13 +57,14 @@ _RECORD_DOMINATED_MULTIPLIER = 0.45
 
 
 def _connect(db_path: Path) -> sqlite3.Connection | None:
-    if not Path(db_path).exists():
+    resolved = Path(db_path).resolve()
+    if not resolved.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)
     except sqlite3.Error:
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = sqlite3.connect(str(resolved))
         except sqlite3.Error:
             return None
     conn.row_factory = sqlite3.Row
@@ -366,16 +367,28 @@ def list_audit_predictions(
         has_picks = _table_exists(conn, "picks")
         has_outcomes = _table_exists(conn, "game_outcomes")
         query = f"""
-            SELECT mp.prediction_id, mp.run_id, mp.game_pk, mp.date_ymd,
-                   mp.model_id, mp.model_impl_version, mp.status, mp.pick_side,
-                   mp.pick_team_id, mp.pick_probability, mp.as_of_utc,
-                   mp.information_state, mp.promotion_eligible, mp.created_at
-                   {', (SELECT p.matchup FROM picks p WHERE p.run_id = mp.run_id ORDER BY p.saved_at DESC LIMIT 1) AS matchup' if has_picks else ", NULL AS matchup"}
+            WITH ranked AS (
+                SELECT mp.prediction_id, mp.run_id, mp.game_pk, mp.date_ymd,
+                       mp.model_id, mp.model_impl_version, mp.status, mp.pick_side,
+                       mp.pick_team_id, mp.pick_probability, mp.as_of_utc,
+                       mp.information_state, mp.promotion_eligible, mp.created_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY mp.game_pk, mp.model_id
+                           ORDER BY mp.created_at DESC, mp.rowid DESC
+                       ) AS rn
+                FROM model_predictions mp
+                WHERE (? IS NULL OR mp.date_ymd = ?)
+            )
+            SELECT r.prediction_id, r.run_id, r.game_pk, r.date_ymd,
+                   r.model_id, r.model_impl_version, r.status, r.pick_side,
+                   r.pick_team_id, r.pick_probability, r.as_of_utc,
+                   r.information_state, r.promotion_eligible, r.created_at
+                   {', (SELECT p.matchup FROM picks p WHERE p.run_id = r.run_id ORDER BY p.saved_at DESC LIMIT 1) AS matchup' if has_picks else ", NULL AS matchup"}
                    {', o.game_pk IS NOT NULL AS has_result' if has_outcomes else ", 0 AS has_result"}
-            FROM model_predictions mp
-            {'LEFT JOIN game_outcomes o ON o.game_pk = mp.game_pk' if has_outcomes else ''}
-            WHERE (? IS NULL OR mp.date_ymd = ?)
-            ORDER BY mp.date_ymd DESC, mp.created_at DESC
+            FROM ranked r
+            {'LEFT JOIN game_outcomes o ON o.game_pk = r.game_pk' if has_outcomes else ''}
+            WHERE r.rn = 1
+            ORDER BY r.date_ymd DESC, r.created_at DESC
             LIMIT ?
         """
         rows = conn.execute(query, (date_ymd, date_ymd, limit)).fetchall()
@@ -438,8 +451,10 @@ def get_prediction_audit(
         run_payload = _loads(run["payload"]) if run is not None else None
         pick_payload = _loads(pick["payload"]) if pick is not None else None
 
+        is_control_model = str(mp["model_id"] or "") == "heuristic_v1"
+
         breakdown = mp_payload.get("modelBreakdown")
-        if not isinstance(breakdown, dict) and isinstance(pick_payload, dict):
+        if is_control_model and not isinstance(breakdown, dict) and isinstance(pick_payload, dict):
             breakdown = pick_payload.get("modelBreakdown")
 
         availability = mp_payload.get("featureAvailability")
@@ -470,12 +485,14 @@ def get_prediction_audit(
 
         # Decision detail: model_predictions status/reason_codes are canonical
         # for the research row; the richer betDecision (odds, book, kelly,
-        # human-readable reasons) comes from the pick payload when recorded.
+        # human-readable reasons) comes from the pick payload ONLY for the
+        # control model (shadow challengers never place control bets).
         bet_decision = None
-        if isinstance(pick_payload, dict) and isinstance(pick_payload.get("betDecision"), dict):
-            bet_decision = pick_payload["betDecision"]
-        elif isinstance(run_payload, dict) and isinstance(run_payload.get("betDecision"), dict):
-            bet_decision = run_payload["betDecision"]
+        if is_control_model:
+            if isinstance(pick_payload, dict) and isinstance(pick_payload.get("betDecision"), dict):
+                bet_decision = pick_payload["betDecision"]
+            elif isinstance(run_payload, dict) and isinstance(run_payload.get("betDecision"), dict):
+                bet_decision = run_payload["betDecision"]
 
         reason_codes = _loads(mp["reason_codes"])
         decision_status = mp["status"]
@@ -529,7 +546,10 @@ def get_prediction_audit(
                 elif str(outcome["winner_team_id"]) == str(teams["away"]["id"]):
                     winner_side = "away"
             if winner_side is None and outcome["home_score"] is not None and outcome["away_score"] is not None:
-                winner_side = "home" if outcome["home_score"] > outcome["away_score"] else "away"
+                if outcome["home_score"] > outcome["away_score"]:
+                    winner_side = "home"
+                elif outcome["away_score"] > outcome["home_score"]:
+                    winner_side = "away"
             result = {
                 "recorded": True,
                 "home_score": outcome["home_score"],
@@ -543,7 +563,7 @@ def get_prediction_audit(
             }
 
         ledger = None
-        if _table_exists(conn, "bet_ledger"):
+        if is_control_model and _table_exists(conn, "bet_ledger"):
             ledger_row = conn.execute(
                 """
                 SELECT decision_id, team, side, odds, edge, units_staked, status,

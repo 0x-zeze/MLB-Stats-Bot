@@ -75,7 +75,7 @@ def tto_penalty(tto_woba: float | None) -> float:
 
     deviation = tto_woba - 0.340
     if deviation <= 0:
-        return clamp(deviation * 0.3, -0.10, 0.0)
+        return 0.0
 
     return clamp(-deviation * 0.8, -0.25, 0.0)
 

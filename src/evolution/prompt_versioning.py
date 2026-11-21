@@ -15,10 +15,11 @@ def get_prompt_versions() -> dict[str, Any]:
 def get_active_prompt_version() -> dict[str, Any]:
     payload = get_prompt_versions()
     active = payload.get("active_version")
-    for version in payload.get("versions", []):
+    versions = payload.get("versions") or []
+    for version in versions:
         if version.get("version") == active:
             return version
-    return payload.get("versions", [{}])[0]
+    return versions[0] if versions else {}
 
 
 def _next_version(current: str) -> str:

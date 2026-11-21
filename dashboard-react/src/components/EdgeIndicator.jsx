@@ -1,8 +1,9 @@
-import { signed } from '../utils.js';
+import { isFiniteNum, signed } from '../utils.js';
 
 export default function EdgeIndicator({ value, suffix = '%' }) {
-  const parsed = Number(value);
-  const color = !Number.isFinite(parsed)
+  const valid = isFiniteNum(value);
+  const parsed = valid ? Number(value) : NaN;
+  const color = !valid
     ? 'text-slate-500'
     : parsed >= 4
       ? 'text-accent-green'
@@ -11,5 +12,5 @@ export default function EdgeIndicator({ value, suffix = '%' }) {
         : parsed <= -1
           ? 'text-accent-red'
           : 'text-slate-400';
-  return <span className={`font-semibold ${color}`}>{Number.isFinite(parsed) ? signed(parsed, suffix) : '-'}</span>;
+  return <span className={`font-semibold ${color}`}>{valid ? signed(parsed, suffix) : '-'}</span>;
 }

@@ -28,6 +28,17 @@ class BacktestWindow:
     segments: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
+def _parse_iso_date(value: str | date) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    return datetime.fromisoformat(text).date()
+
+
 def run_rolling_backtest(
     prediction_log: list[dict[str, Any]],
     lookback_days: int = 14,
@@ -36,10 +47,8 @@ def run_rolling_backtest(
     """Run backtest over the last N days with full segment breakdown."""
     if end_date is None:
         target_end = date.today()
-    elif isinstance(end_date, str):
-        target_end = datetime.fromisoformat(end_date).date()
     else:
-        target_end = end_date
+        target_end = _parse_iso_date(end_date)
 
     target_start = target_end - timedelta(days=lookback_days)
 
@@ -49,7 +58,7 @@ def run_rolling_backtest(
         if not row_date_str:
             continue
         try:
-            row_date = datetime.fromisoformat(str(row_date_str)).date()
+            row_date = _parse_iso_date(row_date_str)
         except (ValueError, TypeError):
             continue
         if target_start <= row_date <= target_end:
@@ -107,6 +116,9 @@ def _compute_brier(results: list[dict[str, Any]]) -> float:
     total = 0.0
     for r in scored:
         prob = safe_float(r.get("win_probability"), 0.5)
+        if prob > 1.0:
+            prob /= 100.0
+        prob = max(0.0, min(1.0, prob))
         actual = 1.0 if r.get("result") == "win" else 0.0
         total += (prob - actual) ** 2
 
@@ -128,7 +140,10 @@ def _compute_log_loss(results: list[dict[str, Any]]) -> float:
     total = 0.0
     eps = 1e-7
     for r in scored:
-        prob = max(eps, min(1 - eps, safe_float(r.get("win_probability"), 0.5)))
+        raw_prob = safe_float(r.get("win_probability"), 0.5)
+        if raw_prob > 1.0:
+            raw_prob /= 100.0
+        prob = max(eps, min(1 - eps, raw_prob))
         actual = 1.0 if r.get("result") == "win" else 0.0
         total += -(actual * math.log(prob) + (1 - actual) * math.log(1 - prob))
 

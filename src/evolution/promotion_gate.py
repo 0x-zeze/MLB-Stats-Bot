@@ -19,14 +19,16 @@ def _metric(metrics: dict[str, Any], *names: str, default: float = 0.0) -> float
 
 def _sample_size(candidate: dict[str, Any], after_metrics: dict[str, Any]) -> int:
     backtest = candidate.get("backtest_result") or {}
-    return safe_int(
-        after_metrics.get("sample_size")
-        or after_metrics.get("bets")
-        or backtest.get("sample_size")
-        or backtest.get("bets")
-        or candidate.get("sample_size"),
-        0,
-    )
+    for value in (
+        after_metrics.get("sample_size"),
+        after_metrics.get("bets"),
+        backtest.get("sample_size"),
+        backtest.get("bets"),
+        candidate.get("sample_size"),
+    ):
+        if value is not None and value != "":
+            return safe_int(value, 0)
+    return 0
 
 
 def _unsafe_change(candidate: dict[str, Any]) -> str | None:
@@ -115,7 +117,9 @@ def run_promotion_gate(
 
     before_drawdown = abs(_metric(before_metrics, "max_drawdown", default=0.0))
     after_drawdown = abs(_metric(after_metrics, "max_drawdown", default=0.0))
-    if before_drawdown and after_drawdown > before_drawdown * 1.1:
+    if (before_drawdown > 0 and after_drawdown > before_drawdown * 1.1) or (
+        before_drawdown == 0 and after_drawdown > 0.5
+    ):
         status = "rejected"
         reason_parts.append("Max drawdown worsened too much.")
 

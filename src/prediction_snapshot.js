@@ -14,6 +14,9 @@ function stableStringify(value) {
   // Normalize numbers so integral floats (119.0) and ints (119) hash identically.
   // JSON round-trips can turn an int Map key / value into a float; without this
   // the same logical input hashes differently after serialization.
+  if (value === undefined) {
+    return 'null';
+  }
   if (typeof value === 'number') {
     return Number.isInteger(value) ? String(value) : JSON.stringify(value);
   }
@@ -21,9 +24,11 @@ function stableStringify(value) {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+    return `[${value.map((item) => (item === undefined ? 'null' : stableStringify(item))).join(',')}]`;
   }
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value)
+    .filter((key) => value[key] !== undefined)
+    .sort();
   return `{${keys
     .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
     .join(',')}}`;

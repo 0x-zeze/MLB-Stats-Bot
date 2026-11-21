@@ -145,12 +145,21 @@ def build_records(
     conn = sqlite3.connect(str(sqlite_path))
     conn.row_factory = sqlite3.Row
     try:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(picks)")}
+        order_col = "prediction_version DESC, rowid DESC" if "prediction_version" in cols else "rowid DESC"
         picks = list(
             conn.execute(
-                """
+                f"""
+                WITH ranked AS (
+                    SELECT game_pk, date_ymd, matchup, home_team_id, away_team_id,
+                           pick_team_id, payload,
+                           ROW_NUMBER() OVER (PARTITION BY game_pk ORDER BY {order_col}) AS rn
+                    FROM picks
+                )
                 SELECT game_pk, date_ymd, matchup, home_team_id, away_team_id,
                        pick_team_id, payload
-                FROM picks
+                FROM ranked
+                WHERE rn = 1
                 """
             )
         )

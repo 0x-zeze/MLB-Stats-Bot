@@ -176,10 +176,18 @@ export function buildFeatureVector(coreInputs) {
     homeRunDiffPerGame: withMissing(runDiffPerGame(homeStanding)),
     // Platoon splits vs opposing starter hand:
     awayVsStarterHandPct: withMissing(
-      homeStarterHand === 'L' ? splitPct(awayStanding, 'left') : splitPct(awayStanding, 'right')
+      homeStarterHand === 'L'
+        ? splitPct(awayStanding, 'left')
+        : homeStarterHand === 'R'
+          ? splitPct(awayStanding, 'right')
+          : null
     ),
     homeVsStarterHandPct: withMissing(
-      awayStarterHand === 'L' ? splitPct(homeStanding, 'left') : splitPct(homeStanding, 'right')
+      awayStarterHand === 'L'
+        ? splitPct(homeStanding, 'left')
+        : awayStarterHand === 'R'
+          ? splitPct(homeStanding, 'right')
+          : null
     ),
 
     // --- Probable starter season ---
@@ -229,9 +237,11 @@ export function buildFeatureVector(coreInputs) {
     homeInjuryCount: withMissing(Array.isArray(homeInjuries) ? homeInjuries.length : null),
 
     // --- Head to head ---
-    h2hGames: withMissing(h2h?.games ? num(h2h.games, null) : null),
+    h2hGames: withMissing(num(h2h?.games, null) > 0 ? num(h2h.games, null) : null),
     h2hHomeWinPct: withMissing(
-      h2h?.games > 0 && h2h.homeProbability != null ? num(h2h.homeProbability, null) / 100 : null
+      num(h2h?.games, null) > 0 && num(h2h?.homeProbability, null) != null
+        ? num(h2h.homeProbability, null) / 100
+        : null
     ),
 
     // --- Weather ---
@@ -254,6 +264,9 @@ export function buildFeatureVector(coreInputs) {
 }
 
 function stableStringify(value) {
+  if (value === undefined) {
+    return 'null';
+  }
   if (typeof value === 'number') {
     return Number.isInteger(value) ? String(value) : JSON.stringify(value);
   }
@@ -261,9 +274,11 @@ function stableStringify(value) {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(',')}]`;
+    return `[${value.map((item) => (item === undefined ? 'null' : stableStringify(item))).join(',')}]`;
   }
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value)
+    .filter((k) => value[k] !== undefined)
+    .sort();
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
 }
 

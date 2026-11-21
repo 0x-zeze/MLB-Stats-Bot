@@ -13,6 +13,7 @@ Pipeline order:
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 
 from .data_collection import collect_game_data
@@ -110,7 +111,7 @@ def _build_game_context(collected: dict[str, Any], features: dict[str, Any]) -> 
     weather_wind_out = False
     if weather and hasattr(weather, "wind_direction"):
         wd = str(getattr(weather, "wind_direction", "") or "").lower()
-        weather_wind_out = "out" in wd
+        weather_wind_out = bool(re.search(r"\bout\b", wd))
 
     # Lineup confirmed
     lineup_home_confirmed = home_lineup is not None and getattr(home_lineup, "confirmed", False)
@@ -152,6 +153,15 @@ def _build_player_score_inputs(
     away_pitcher = collected.get("away_pitcher")
     game = collected.get("game")
 
+    def _rate_to_per_9(value: Any, default: float) -> float:
+        raw = safe_float(value, None)
+        if raw is None:
+            return default
+        # PitcherStats stores PA rates (e.g. 0.22 K%, 0.085 BB%); convert to per-9 (~38 BF/9 IP).
+        if 0.0 < raw <= 1.0:
+            return raw * 38.0
+        return raw
+
     def _sp_dict(p: Any) -> dict[str, Any] | None:
         if p is None:
             return None
@@ -159,8 +169,8 @@ def _build_player_score_inputs(
             "era": safe_float(getattr(p, "era", None), 4.20),
             "fip": safe_float(getattr(p, "fip", None), 4.20),
             "xfip": safe_float(getattr(p, "xfip", None), None),
-            "k_per_9": safe_float(getattr(p, "k_rate", None), 8.0),
-            "bb_per_9": safe_float(getattr(p, "bb_rate", None), 3.2),
+            "k_per_9": _rate_to_per_9(getattr(p, "k_per_9", None) if getattr(p, "k_per_9", None) is not None else getattr(p, "k_rate", None), 8.0),
+            "bb_per_9": _rate_to_per_9(getattr(p, "bb_per_9", None) if getattr(p, "bb_per_9", None) is not None else getattr(p, "bb_rate", None), 3.2),
             "whip": safe_float(getattr(p, "whip", None), 1.30),
             "last_5_era": safe_float(getattr(p, "recent_3_start_era", None), None),
             "innings_pitched_avg": safe_float(getattr(p, "innings_pitched_avg", None), 5.5),

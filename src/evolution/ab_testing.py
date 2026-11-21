@@ -73,10 +73,15 @@ class ABTestingFramework:
         return assigned
 
     def record_outcome(self, game_id: str, outcome: dict[str, Any]) -> None:
-        """Record the outcome of a game for its assigned variant."""
+        """Record the outcome of a game for its assigned variant (idempotent per game_id)."""
         variant_id = self.assignments.get(game_id)
         if variant_id and variant_id in self.outcomes:
-            self.outcomes[variant_id].append({
+            existing = self.outcomes[variant_id]
+            for idx, entry in enumerate(existing):
+                if entry.get("game_id") == game_id:
+                    existing[idx] = {"game_id": game_id, **outcome}
+                    return
+            existing.append({
                 "game_id": game_id,
                 **outcome,
             })
@@ -146,6 +151,9 @@ def _compute_brier(outcomes: list[dict[str, Any]]) -> float:
     total = 0.0
     for outcome in outcomes:
         prob = safe_float(outcome.get("predicted_probability", 0.5), 0.5)
+        if prob > 1.0:
+            prob = prob / 100.0
+        prob = max(0.0, min(1.0, prob))
         actual = 1.0 if outcome.get("correct", False) else 0.0
         total += (prob - actual) ** 2
 

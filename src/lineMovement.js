@@ -789,7 +789,15 @@ async function compareSnapshot(snapshot, chatId, { sendAlerts = true } = {}) {
     }
 
     const oldValue = Number(previous.value);
-    const delta = field.value - oldValue;
+    const isMoneylineField = field.unit === 'cents' || String(field.market || '').includes('moneyline');
+    let delta = field.value - oldValue;
+    if (isMoneylineField) {
+      const prevCents = americanToContinuousCents(oldValue);
+      const currCents = americanToContinuousCents(field.value);
+      if (prevCents !== null && currCents !== null) {
+        delta = currCents - prevCents;
+      }
+    }
     if (!Number.isFinite(delta) || Math.abs(delta) < field.threshold) continue;
 
     result.movements.push({
@@ -830,6 +838,21 @@ async function compareSnapshot(snapshot, chatId, { sendAlerts = true } = {}) {
   return result;
 }
 
+function americanToContinuousCents(value) {
+  const odds = Number(value);
+  if (!Number.isFinite(odds) || odds === 0) return null;
+  if (odds >= 100) return odds - 100;
+  if (odds <= -100) return -(Math.abs(odds) - 100);
+  return odds;
+}
+
+function gameHasStarted(game, nowMs = Date.now()) {
+  const raw = game?.startTime || game?.start || game?.gameDate || game?.gameTime;
+  if (!raw) return false;
+  const startMs = Date.parse(raw);
+  return Number.isFinite(startMs) && startMs <= nowMs;
+}
+
 function stopMonitor(key) {
   const monitor = activeMonitors.get(key);
   if (!monitor) return;
@@ -846,7 +869,8 @@ async function pollMonitor(key) {
     return;
   }
 
-  const games = monitor.games.filter((game) => !isFinalStatus(game.status));
+  const nowMs = Date.now();
+  const games = monitor.games.filter((game) => !isFinalStatus(game.status) && !gameHasStarted(game, nowMs));
   if (games.length === 0) {
     stopMonitor(key);
     return;
@@ -856,6 +880,10 @@ async function pollMonitor(key) {
   if (!oddsEvents.length) return;
 
   for (const game of games) {
+    // Hard pre-first-pitch guard: never overwrite closing lines or send
+    // movement alerts using live in-play odds once a game has started.
+    if (gameHasStarted(game, Date.now())) continue;
+
     const event = findEventForGame(game, oddsEvents);
     if (!event) continue;
 
@@ -965,7 +993,7 @@ export function startLineMonitor(games, chatId) {
     return null;
   }
 
-  const activeGames = games.filter((game) => game?.gamePk && !isFinalStatus(game.status));
+  const activeGames = games.filter((game) => game?.gamePk && !isFinalStatus(game.status) && !gameHasStarted(game));
   if (activeGames.length === 0) return null;
 
   const key = monitorKey(activeGames, chatId);
@@ -976,6 +1004,8 @@ export function startLineMonitor(games, chatId) {
     existing.expiresAt = expiresAt;
     return existing;
   }
+  // Prevent overlapping duplicate monitors for the same chat when active game list changes.
+  stopLineMonitorForChat(chatId);
 
   const intervalMs = Math.max(1, intervalMinutes()) * 60 * 1000;
   const monitor = {

@@ -1,6 +1,7 @@
 import { Clock, MapPin } from 'lucide-react';
 import { Badge } from './ui/badge.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
+import { isFiniteNum } from '../utils.js';
 
 function decisionBadge(decision) {
   if (decision === 'BET') return <Badge variant="value">VALUE</Badge>;
@@ -21,10 +22,14 @@ function ConfidenceColor({ confidence }) {
 }
 
 function fmtStake(game) {
-  const kelly = Number(game.kelly_stake_percent);
-  if (game.decision === 'BET' && Number.isFinite(kelly)) return `${kelly.toFixed(2)}u`;
-  const edge = Number(game.value?.edge ?? game.moneyline?.edge);
-  if (Number.isFinite(edge)) return `${edge >= 0 ? '+' : ''}${edge.toFixed(1)}%`;
+  if (game.decision === 'BET' && isFiniteNum(game.kelly_stake_percent)) {
+    return `${Number(game.kelly_stake_percent).toFixed(2)}u`;
+  }
+  const rawEdge = game.value?.edge ?? game.moneyline?.edge;
+  if (isFiniteNum(rawEdge)) {
+    const edge = Number(rawEdge);
+    return `${edge >= 0 ? '+' : ''}${edge.toFixed(1)}%`;
+  }
   return '-';
 }
 
@@ -45,9 +50,10 @@ function formatTime(gameTime) {
   if (!gameTime) return '-';
   try {
     const d = new Date(gameTime);
+    if (Number.isNaN(d.getTime())) return String(gameTime);
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
   } catch {
-    return gameTime;
+    return String(gameTime);
   }
 }
 

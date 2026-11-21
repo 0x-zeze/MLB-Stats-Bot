@@ -51,14 +51,16 @@ class CLVSummary:
 
 
 def american_to_cents(odds: float) -> float:
-    """Normalize American odds to a cents scale for CLV comparison.
+    """Normalize American odds to a continuous cents scale for CLV comparison.
 
-    -150 favorite = 150 cents favorite
-    +150 underdog = -150 cents (i.e. 150 cents underdog)
+    Eliminates the 200-cent discontinuity across +100/-100:
+      -150 -> +50, -100 -> 0, +100 -> 0, +150 -> -50.
     """
     if odds > 0:
-        return -odds
-    return abs(odds)
+        return 100.0 - odds
+    if odds < 0:
+        return abs(odds) - 100.0
+    return 0.0
 
 
 def clv_cents(recommended_odds: float, closing_odds: float) -> float:

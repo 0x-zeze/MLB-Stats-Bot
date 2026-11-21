@@ -2,8 +2,9 @@
 """Edge analysis: daily winrate, edge/confidence bins, variance drivers."""
 import sqlite3, json, statistics as st
 from collections import defaultdict, Counter
+from pathlib import Path
 
-DB = "/root/MLB-Stats-Bot/data/state.sqlite"
+DB = str(Path(__file__).resolve().parents[1] / "data" / "state.sqlite")
 con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
 cur = con.cursor()
@@ -25,6 +26,7 @@ LEFT JOIN game_outcomes go ON go.game_pk = pd.game_pk
 LEFT JOIN settlements s ON s.decision_id = pd.decision_id
 WHERE pd.status = 'committed' OR s.result IS NOT NULL
 """
+cur.execute(q)
 rows = cur.fetchall()
 print(f"TOTAL decision rows (committed/settled): {len(rows)}")
 
@@ -40,7 +42,8 @@ overall_w = sum(1 for r in settled if r["result"]=="win")
 overall_l = sum(1 for r in settled if r["result"]=="loss")
 overall_p = sum(1 for r in settled if r["result"]=="push")
 print(f"\n=== OVERALL ===")
-print(f"W:{overall_w} L:{overall_l} P:{overall_p}  winrate={overall_w/(overall_w+overall_l)*100:.1f}%")
+wr_str = f"{overall_w/(overall_w+overall_l)*100:.1f}%" if (overall_w + overall_l) else "n/a"
+print(f"W:{overall_w} L:{overall_l} P:{overall_p}  winrate={wr_str}")
 
 # ---- Daily winrate ----
 by_day = defaultdict(lambda: [0,0,0])
@@ -114,9 +117,10 @@ if clv_loss: print(f"  avg CLV on LOSSES: {st.mean(clv_loss):+.3f} (n={len(clv_l
 
 # ---- Profit ----
 tot_pl = sum((r["units_pl"] or 0) for r in settled)
+tot_stake = sum((r["units_staked"] or 0) for r in settled)
 print(f"\n=== PROFIT ===")
 print(f"  Total units P/L: {tot_pl:+.2f}")
-print(f"  ROI vs stakes:   {tot_pl/sum((r['units_staked'] or 0) for r in settled)*100:+.2f}%")
+print(f"  ROI vs stakes:   {f'{tot_pl/tot_stake*100:+.2f}%' if tot_stake else 'n/a'}")
 
 # ---- Reason codes frequency on losses ----
 print(f"\n=== TOP reason_codes ON LOSSES ===")

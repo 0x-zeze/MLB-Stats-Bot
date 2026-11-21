@@ -68,9 +68,20 @@ def _pct(part: int, whole: int) -> float:
 
 
 def feature_fallback_rates(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Percentage of instrumented picks that hit a fallback per feature."""
+    """Percentage of instrumented picks (latest version per game) that hit a fallback per feature."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(picks)")}
+    order_col = "prediction_version DESC, rowid DESC" if "prediction_version" in cols else "rowid DESC"
     rows = conn.execute(
-        "SELECT feature_fallback_count, fallback_features_used FROM picks"
+        f"""
+        WITH ranked AS (
+            SELECT feature_fallback_count, fallback_features_used,
+                   ROW_NUMBER() OVER (PARTITION BY game_pk ORDER BY {order_col}) AS rn
+            FROM picks
+        )
+        SELECT feature_fallback_count, fallback_features_used
+        FROM ranked
+        WHERE rn = 1
+        """
     ).fetchall()
 
     total = len(rows)
