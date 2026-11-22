@@ -115,11 +115,77 @@ const BASE_WEIGHTS = {
 };
 const MAX_WEIGHT_SHIFT = 0.15;
 
-// Edge dampening: the model is systematically overconfident at higher edges.
-// (Analysis of 773 moneyline outcomes + 59 staked bets; see mlb.js history.)
-const DAMPEN_LOW = 0.65;
-const DAMPEN_MID = 0.50;
-const DAMPEN_HIGH = 0.38;
+// Smooth concave edge dampening: fights systematic overconfidence at larger
+// raw edges while staying strictly monotonic everywhere (unlike the legacy
+// piecewise step multipliers that created downward cliffs at 0.25 and 0.50).
+// Effective factor: ~0.62 at |e|=0.10, ~0.51 at |e|=0.40, ~0.40 at |e|=0.90.
+const DAMPEN_SLOPE = 0.66;
+const DAMPEN_CURVATURE = 0.72;
+const BASELINE_MLB_RUNS = 8.8;
+
+export function dampenRawEdge(edge) {
+  const e = toNumber(edge, 0);
+  const absE = Math.abs(e);
+  if (absE === 0) {
+    return { dampenedEdge: 0, dampeningFactor: DAMPEN_SLOPE };
+  }
+  const dampeningFactor = DAMPEN_SLOPE / (1 + DAMPEN_CURVATURE * absE);
+  return {
+    dampenedEdge: e * dampeningFactor,
+    dampeningFactor
+  };
+}
+
+export function runEnvironmentEdgeScale(weatherAdj, parkRunFactor = 1.0) {
+  const wAdj = toNumber(weatherAdj, 0);
+  const rawPark =
+    isFiniteNumber(parkRunFactor) && Number(parkRunFactor) > 0
+      ? Number(parkRunFactor)
+      : 1.0;
+  // Normalize 100-scale park factors (e.g. 105 -> 1.05) defensively.
+  const pFactor = rawPark > 10 ? rawPark / 100 : rawPark;
+  // In Skellam / Pythagorean scoring, run-margin std scales with sqrt(R),
+  // so win-probability logit leverage scales with sqrt(R0 / R). High-scoring
+  // environments (wind out / warm / Coors) pull BOTH home and away favorites
+  // symmetrically toward 50%; pitcher-friendly environments sharpen edges.
+  const expectedRuns = Math.max(4.5, BASELINE_MLB_RUNS * pFactor + wAdj);
+  return clamp(Math.sqrt(BASELINE_MLB_RUNS / expectedRuns), 0.85, 1.12);
+}
+
+function lookupParkInfo(parkFactorBaselines, venueId, homeTeamId = 0) {
+  if (!parkFactorBaselines) return null;
+  if (typeof parkFactorBaselines.get === 'function') {
+    return (
+      parkFactorBaselines.get(venueId) ??
+      parkFactorBaselines.get(String(venueId)) ??
+      parkFactorBaselines.get(homeTeamId) ??
+      parkFactorBaselines.get(String(homeTeamId)) ??
+      null
+    );
+  }
+  if (Array.isArray(parkFactorBaselines)) {
+    const findKey = (key) => {
+      if (key == null || key === 0) return null;
+      const match = parkFactorBaselines.find((entry) => {
+        const id = Array.isArray(entry) ? entry[0] : entry?.id;
+        return id === key || String(id) === String(key);
+      });
+      if (!match) return null;
+      return Array.isArray(match) ? match[1] : match.value;
+    };
+    return findKey(venueId) ?? findKey(homeTeamId) ?? null;
+  }
+  if (typeof parkFactorBaselines === 'object') {
+    return (
+      parkFactorBaselines[venueId] ??
+      parkFactorBaselines[String(venueId)] ??
+      parkFactorBaselines[homeTeamId] ??
+      parkFactorBaselines[String(homeTeamId)] ??
+      null
+    );
+  }
+  return null;
+}
 
 const OPENER_KEYWORD_RE = /\b(opener|bulk|piggyback)\b|opener\s*\/\s*bulk/i;
 const OPENER_NOTE_KEYS = new Set([
@@ -401,27 +467,49 @@ export function pitcherRestProfile(pitcher, recentStarts, dateYmd) {
   const lastStartDate = recentStarts?.lastStartDate || '';
   const rawRestDays = lastStartDate ? Math.max(0, ymdDiff(dateYmd, lastStartDate) - 1) : null;
   const restDays = rawRestDays !== null && rawRestDays <= 30 ? rawRestDays : null;
-  const multiplier = restDays === null ? 1 : restDays <= 3 ? 0.85 : restDays >= 6 ? 0.93 : 1;
+  // Realistic MLB rest curve:
+  //   <= 3d: short rest fatigue penalty (0.85)
+  //   4d:    normal rotation rest (1.00)
+  //   5-7d:  extra rest recovery bonus (1.02)
+  //   8-9d:  extended rest neutral transition (1.00)
+  //   >=10d: layoff / IL-return rust & pitch-limit penalty (0.93)
+  const multiplier =
+    restDays === null
+      ? 1
+      : restDays <= 3
+        ? 0.85
+        : restDays === 4
+          ? 1
+          : restDays <= 7
+            ? 1.02
+            : restDays <= 9
+              ? 1
+              : 0.93;
   const label =
     restDays === null
       ? 'SP rest unavailable'
       : restDays <= 3
         ? `${pitcher.fullName} short rest ${restDays}d`
-        : restDays >= 6
-          ? `${pitcher.fullName} long rest ${restDays}d`
-          : `${pitcher.fullName} normal rest ${restDays}d`;
+        : restDays === 4
+          ? `${pitcher.fullName} normal rest ${restDays}d`
+          : restDays <= 7
+            ? `${pitcher.fullName} extra rest ${restDays}d`
+            : restDays <= 9
+              ? `${pitcher.fullName} extended rest ${restDays}d`
+              : `${pitcher.fullName} long layoff ${restDays}d`;
   return { pitcher: pitcher.fullName, restDays, multiplier, flag: label };
 }
 
 function scheduleFatigueEdge(homeFatigue, awayFatigue, homeRest, awayRest) {
+  const restPenalty = (rest) => (1 - toNumber(rest?.multiplier, 1)) * 0.25;
   const homePenalty =
     Math.abs(toNumber(homeFatigue.offenseAdjustment, 0)) +
     Math.abs(toNumber(homeFatigue.teamAdjustment, 0)) +
-    (toNumber(homeRest.multiplier, 1) < 1 ? (1 - toNumber(homeRest.multiplier, 1)) * 0.25 : 0);
+    restPenalty(homeRest);
   const awayPenalty =
     Math.abs(toNumber(awayFatigue.offenseAdjustment, 0)) +
     Math.abs(toNumber(awayFatigue.teamAdjustment, 0)) +
-    (toNumber(awayRest.multiplier, 1) < 1 ? (1 - toNumber(awayRest.multiplier, 1)) * 0.25 : 0);
+    restPenalty(awayRest);
   return clamp(awayPenalty - homePenalty, -0.08, 0.08);
 }
 
@@ -791,9 +879,9 @@ export function weatherRunAdjustment(weather) {
   const windText = String(weather.wind || weather.windDirection || '').toLowerCase();
   const windSpeed = parseWeatherNumber(windText) || 0;
   const tempAdj = temp === null ? 0 : clamp((temp - 70) * 0.015, -0.35, 0.35);
-  const windAdj = windText.includes('out')
+  const windAdj = /\bout\b/i.test(windText)
     ? clamp(windSpeed * 0.025, 0, 0.4)
-    : windText.includes('in')
+    : /\bin\b/i.test(windText)
       ? -clamp(windSpeed * 0.025, 0, 0.4)
       : 0;
   const roofMultiplier =
@@ -886,10 +974,9 @@ export function buildMatchupMemoryContext(modelMemory, awayTeam, homeTeam) {
 // ---------------------------------------------------------------------------
 
 function situationalWeightAdjustment(parkFactorBaselines, venueId, openerDetected, gameDateYmd, homeTeamId = 0) {
-  const parkInfo = parkFactorBaselines?.get
-    ? (parkFactorBaselines.get(venueId) || parkFactorBaselines.get(homeTeamId))
-    : null;
-  const runFactor = parkInfo ? parkInfo.runFactor : 1.0;
+  const parkInfo = lookupParkInfo(parkFactorBaselines, venueId, homeTeamId);
+  const rawRunFactor = parkInfo ? toNumber(parkInfo.runFactor, 1.0) : 1.0;
+  const runFactor = rawRunFactor > 10 ? rawRunFactor / 100 : rawRunFactor;
   const parkType = runFactor >= 1.05 ? 'hitter_park' : runFactor <= 0.95 ? 'pitcher_park' : 'neutral';
   const month = gameDateYmd ? parseInt(String(gameDateYmd).slice(5, 7), 10) : 6;
   const phase = month <= 4 ? 'early' : month >= 8 ? 'late' : 'mid';
@@ -1167,8 +1254,10 @@ export function predictGameMoneylineCore(input) {
   const formComponent = clamp(formEdge, -0.3, 0.3) * 0.32 * recentFormWeightMultiplier * sitWeights.recent_form;
   const homeFieldComponent = 0.1 * homeAdvantageWeightMultiplier * sitWeights.home_advantage;
 
+  const parkInfo = lookupParkInfo(parkFactorBaselines, venueId, homeTeam.id || 0);
+  const parkRunFactor = toNumber(parkInfo?.runFactor, 1.0);
   const weatherAdj = weatherRunAdjustment(game.weather);
-  const weatherComponent = clamp(weatherAdj * -0.08, -0.06, 0.06);
+  const runEnvScale = runEnvironmentEdgeScale(weatherAdj, parkRunFactor);
 
   const matchupEdge =
     offenseComponent +
@@ -1199,16 +1288,18 @@ export function predictGameMoneylineCore(input) {
       )
     : 0;
 
-  const edge =
+  const preWeatherEdge =
     matchupEdge +
     (recordDominated ? recordContextEdge * 0.45 : recordContextEdge) +
     homeFieldComponent +
-    weatherComponent +
     confirmationEdge;
 
-  const absEdge = Math.abs(edge);
-  const dampeningFactor = absEdge < 0.25 ? DAMPEN_LOW : absEdge < 0.50 ? DAMPEN_MID : DAMPEN_HIGH;
-  const dampenedEdge = edge * dampeningFactor;
+  // Express run-environment variance scaling as an additive delta so
+  // sum(HEURISTIC_COMPONENTS) === rawEdge holds to machine precision.
+  const weatherComponent = preWeatherEdge * (runEnvScale - 1);
+  const edge = preWeatherEdge + weatherComponent;
+
+  const { dampenedEdge, dampeningFactor } = dampenRawEdge(edge);
 
   const rawHomeProbability = clamp(sigmoid(dampenedEdge) * 100, 35, 65);
   const rawAwayProbability = 100 - rawHomeProbability;
@@ -1266,6 +1357,7 @@ export function predictGameMoneylineCore(input) {
     platoonEdge,
     homeFieldEdge: homeFieldComponent,
     weatherEdge: weatherComponent,
+    runEnvScale,
     rollingOffenseWeight: offenseBlend.rollingWeight,
     rollingPreventionWeight: preventionBlend.rollingWeight,
     rollingOffenseEdge: offenseBlend.rollingEdge,

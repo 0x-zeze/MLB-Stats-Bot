@@ -1562,15 +1562,30 @@ function pitcherRestProfile(pitcher, recentStarts, dateYmd) {
   const lastStartDate = recentStarts?.lastStartDate || '';
   const rawRestDays = lastStartDate ? Math.max(0, ymdDiff(dateYmd, lastStartDate) - 1) : null;
   const restDays = rawRestDays !== null && rawRestDays <= 30 ? rawRestDays : null;
-  const multiplier = restDays === null ? 1 : restDays <= 3 ? 0.85 : restDays >= 6 ? 0.93 : 1;
+  const multiplier =
+    restDays === null
+      ? 1
+      : restDays <= 3
+        ? 0.85
+        : restDays === 4
+          ? 1
+          : restDays <= 7
+            ? 1.02
+            : restDays <= 9
+              ? 1
+              : 0.93;
   const label =
     restDays === null
       ? 'SP rest unavailable'
       : restDays <= 3
         ? `${pitcher.fullName} short rest ${restDays}d`
-        : restDays >= 6
-          ? `${pitcher.fullName} long rest ${restDays}d`
-          : `${pitcher.fullName} normal rest ${restDays}d`;
+        : restDays === 4
+          ? `${pitcher.fullName} normal rest ${restDays}d`
+          : restDays <= 7
+            ? `${pitcher.fullName} extra rest ${restDays}d`
+            : restDays <= 9
+              ? `${pitcher.fullName} extended rest ${restDays}d`
+              : `${pitcher.fullName} long layoff ${restDays}d`;
 
   return {
     pitcher: pitcher.fullName,
@@ -1581,14 +1596,15 @@ function pitcherRestProfile(pitcher, recentStarts, dateYmd) {
 }
 
 function scheduleFatigueEdge(homeFatigue, awayFatigue, homeRest, awayRest) {
+  const restPenalty = (rest) => (1 - toNumber(rest?.multiplier, 1)) * 0.25;
   const homePenalty =
     Math.abs(toNumber(homeFatigue.offenseAdjustment, 0)) +
     Math.abs(toNumber(homeFatigue.teamAdjustment, 0)) +
-    (toNumber(homeRest.multiplier, 1) < 1 ? (1 - toNumber(homeRest.multiplier, 1)) * 0.25 : 0);
+    restPenalty(homeRest);
   const awayPenalty =
     Math.abs(toNumber(awayFatigue.offenseAdjustment, 0)) +
     Math.abs(toNumber(awayFatigue.teamAdjustment, 0)) +
-    (toNumber(awayRest.multiplier, 1) < 1 ? (1 - toNumber(awayRest.multiplier, 1)) * 0.25 : 0);
+    restPenalty(awayRest);
   return clamp(awayPenalty - homePenalty, -0.08, 0.08);
 }
 
@@ -3348,9 +3364,9 @@ function weatherRunAdjustment(weather) {
   const windText = String(weather.wind || weather.windDirection || '').toLowerCase();
   const windSpeed = parseWeatherNumber(windText) || 0;
   const tempAdj = temp === null ? 0 : clamp((temp - 70) * 0.015, -0.35, 0.35);
-  const windAdj = windText.includes('out')
+  const windAdj = /\bout\b/i.test(windText)
     ? clamp(windSpeed * 0.025, 0, 0.4)
-    : windText.includes('in')
+    : /\bin\b/i.test(windText)
       ? -clamp(windSpeed * 0.025, 0, 0.4)
       : 0;
   const roofMultiplier =

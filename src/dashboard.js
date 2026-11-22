@@ -7,7 +7,11 @@ import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from './config.js';
 import { applyMoneylineValueMarket, confidenceBand, getMlbPredictions } from './mlb.js';
-import { applyClvGateToPrediction, summarizeClv } from './clv_gate.js';
+import {
+  applyClvGateToPrediction,
+  summarizeClv,
+  summarizeShadowRecoveryClv
+} from './clv_gate.js';
 import { attachCurrentOdds } from './lineMovement.js';
 import { attachNewsContext, persistNewsFeatureSnapshots } from './news.js';
 import { Storage } from './storage.js';
@@ -509,12 +513,22 @@ async function livePredictions(dateYmd) {
     const gateConfig = config.clvGate || {};
     if (gateConfig.enabled !== false) {
       const rows = storage.readLedger({ includeArchived: true }) || [];
-      const summary = summarizeClv(rows, {
+      let shadowRows = [];
+      try {
+        shadowRows = storage.readShadowLedger({ status: 'settled' }) || [];
+      } catch {
+        shadowRows = [];
+      }
+      const summaryOpts = {
         market: 'moneyline',
-        lookback: gateConfig.lookback
-      });
+        lookback: gateConfig.lookback,
+        referenceClv: gateConfig.minAvgClv ?? 0,
+        recoveryMinSample: gateConfig.recoveryMinSample
+      };
+      const summary = summarizeClv(rows, summaryOpts);
+      const shadowSummary = summarizeShadowRecoveryClv(rows, shadowRows, summaryOpts);
       for (const prediction of predictions) {
-        applyClvGateToPrediction(prediction, summary, gateConfig);
+        applyClvGateToPrediction(prediction, summary, gateConfig, shadowSummary);
       }
     }
   } catch (error) {

@@ -1,5 +1,10 @@
 import { uiBullet, uiKV, uiSection, uiTitle, UI_LINE } from './telegramFormat.js';
-import { summarizeClv, clvGateReason, DEFAULT_CLV_GATE } from './clv_gate.js';
+import {
+  summarizeClv,
+  summarizeShadowRecoveryClv,
+  evaluateClvGate,
+  DEFAULT_CLV_GATE
+} from './clv_gate.js';
 
 function num(value, fallback = 0) {
   const parsed = Number(value);
@@ -25,7 +30,7 @@ function fmtClv(value) {
 // Render the bet ledger for /ledger. Fixed-notional bankroll (default 100u):
 // units_staked is already a % of bankroll, so it doubles as units. ROI is
 // stake-weighted: total P/L over total staked. Also reports rolling avg CLV.
-export function formatLedgerReport(rows, { bankrollUnits = 100, clvGate = null } = {}) {
+export function formatLedgerReport(rows, { bankrollUnits = 100, clvGate = null, shadowRows = null } = {}) {
   const all = Array.isArray(rows) ? rows : [];
   if (all.length === 0) {
     return [
@@ -38,8 +43,18 @@ export function formatLedgerReport(rows, { bankrollUnits = 100, clvGate = null }
   const open = all.filter((r) => r.status === 'open');
   const settled = all.filter((r) => r.status === 'settled');
   const gateConfig = { ...DEFAULT_CLV_GATE, ...(clvGate || {}) };
-  const clvSummary = summarizeClv(all, { market: 'moneyline', lookback: gateConfig.lookback });
-  const gateBlocked = Boolean(clvGateReason(clvSummary, gateConfig));
+  const summaryOpts = {
+    market: 'moneyline',
+    lookback: gateConfig.lookback,
+    referenceClv: gateConfig.minAvgClv ?? 0,
+    recoveryMinSample: gateConfig.recoveryMinSample
+  };
+  const clvSummary = summarizeClv(all, summaryOpts);
+  const shadowSummary = Array.isArray(shadowRows)
+    ? summarizeShadowRecoveryClv(all, shadowRows, summaryOpts)
+    : null;
+  const gateEval = evaluateClvGate(clvSummary, gateConfig, shadowSummary);
+  const gateBlocked = gateEval.blocked;
 
   const lines = [uiTitle('📒', 'Bet Ledger'), uiKV('🏦', 'Bankroll', `${bankrollUnits}u notional (¼-Kelly)`), ''];
 
@@ -95,9 +110,13 @@ export function formatLedgerReport(rows, { bankrollUnits = 100, clvGate = null }
         'VALUE gate',
         gateBlocked
           ? `BLOCK (avg ${fmtClv(clvSummary.avgClv)} < ${fmtClv(gateConfig.minAvgClv)}, n≥${gateConfig.minSample})`
-          : clvSummary.sample < gateConfig.minSample
-            ? `open (sample ${clvSummary.sample}<${gateConfig.minSample})`
-            : 'open'
+          : gateEval.status === 'probation_recovery'
+            ? `PROBATION ${gateEval.stakeMultiplier}x (shadow CLV ${fmtClv(shadowSummary?.avgClv)}, n=${shadowSummary?.sample ?? 0})`
+            : gateEval.status === 'throttled'
+              ? `THROTTLE ${gateEval.stakeMultiplier}x (avg ${fmtClv(clvSummary.avgClv)}, t=${Number.isFinite(gateEval.tStat) ? gateEval.tStat.toFixed(2) : 'n/a'})`
+              : clvSummary.sample < gateConfig.minSample
+                ? `open (sample ${clvSummary.sample}<${gateConfig.minSample})`
+                : 'open'
       )
     );
   }

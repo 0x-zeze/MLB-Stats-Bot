@@ -22,7 +22,11 @@ import {
 } from './mlb.js';
 import { Storage } from './storage.js';
 import { resolveClvSide as resolveClvSideCore } from './clv_side.js';
-import { applyClvGateToPrediction, summarizeClv } from './clv_gate.js';
+import {
+  applyClvGateToPrediction,
+  summarizeClv,
+  summarizeShadowRecoveryClv
+} from './clv_gate.js';
 import { attachNewsContext, persistNewsFeatureSnapshots } from './news.js';
 import { setupWebhook, TelegramBot } from './telegram.js';
 import { UI_LINE, UI_THIN_LINE, uiBullet, uiCommand, uiKV, uiSection, uiTitle } from './telegramFormat.js';
@@ -199,17 +203,27 @@ function applyRollingClvGate(predictions) {
   const gateConfig = config.clvGate || {};
   if (gateConfig.enabled === false) return predictions;
   let rows = [];
+  let shadowRows = [];
   try {
     rows = storage.readLedger({ includeArchived: true }) || [];
   } catch {
     rows = [];
   }
-  const summary = summarizeClv(rows, {
+  try {
+    shadowRows = storage.readShadowLedger({ status: 'settled' }) || [];
+  } catch {
+    shadowRows = [];
+  }
+  const summaryOpts = {
     market: 'moneyline',
-    lookback: gateConfig.lookback
-  });
+    lookback: gateConfig.lookback,
+    referenceClv: gateConfig.minAvgClv ?? 0,
+    recoveryMinSample: gateConfig.recoveryMinSample
+  };
+  const summary = summarizeClv(rows, summaryOpts);
+  const shadowSummary = summarizeShadowRecoveryClv(rows, shadowRows, summaryOpts);
   for (const prediction of predictions || []) {
-    applyClvGateToPrediction(prediction, summary, gateConfig);
+    applyClvGateToPrediction(prediction, summary, gateConfig, shadowSummary);
   }
   return predictions;
 }
@@ -1953,7 +1967,16 @@ async function handleMessage(bot, message) {
     if (!acquireCommandLock(chatId, 'ledger')) return;
     try {
       const rows = storage.readLedger({ includeArchived: true });
-      await bot.sendMessage(chatId, formatLedgerReport(rows, { clvGate: config.clvGate }));
+      let shadowRows = [];
+      try {
+        shadowRows = storage.readShadowLedger({ status: 'settled' }) || [];
+      } catch {
+        shadowRows = [];
+      }
+      await bot.sendMessage(
+        chatId,
+        formatLedgerReport(rows, { clvGate: config.clvGate, shadowRows })
+      );
     } finally {
       releaseCommandLock(chatId, 'ledger');
     }

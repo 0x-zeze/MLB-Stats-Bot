@@ -93,7 +93,13 @@ export function loadConfig() {
       enabled: boolFromEnv(process.env.CLV_GATE_ENABLED, true),
       minSample: intFromEnv(process.env.CLV_GATE_MIN_SAMPLE, 20),
       minAvgClv: numberFromEnv(process.env.CLV_GATE_MIN_AVG, 0),
-      lookback: intFromEnv(process.env.CLV_GATE_LOOKBACK, 50)
+      lookback: intFromEnv(process.env.CLV_GATE_LOOKBACK, 50),
+      throttleHalfTStat: numberFromEnv(process.env.CLV_GATE_THROTTLE_HALF_T, -0.75),
+      throttleQuarterTStat: numberFromEnv(process.env.CLV_GATE_THROTTLE_QUARTER_T, -1.25),
+      blockTStat: numberFromEnv(process.env.CLV_GATE_BLOCK_T, -1.65),
+      recoveryMinSample: intFromEnv(process.env.CLV_GATE_RECOVERY_MIN_SAMPLE, 10),
+      recoveryMinAvgClv: numberFromEnv(process.env.CLV_GATE_RECOVERY_MIN_AVG, 0),
+      recoveryThrottleMultiplier: numberFromEnv(process.env.CLV_GATE_RECOVERY_MULTIPLIER, 0.5)
     },
     // Market-anchored residual probability for VALUE grading only. 0 disables
     // blending; positive values borrow a small amount of no-vig market signal
