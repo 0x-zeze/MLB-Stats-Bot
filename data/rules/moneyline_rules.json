@@ -30,6 +30,17 @@
       "notes": "option.edge < edgeThreshold. edgeThreshold = moneylineValueEdgeThreshold() (configurable), passed in via ctx.edgeThreshold."
     },
     {
+      "id": "js.ev_floor",
+      "engines": ["js"],
+      "tier": 1,
+      "order": 32,
+      "action": "NO_BET",
+      "handler": "evFloor",
+      "params": { "source": "config", "default_pct": 2.0 },
+      "message": "net executable EV hanya {sign}{ev}% < {threshold}%",
+      "notes": "option.expectedValuePct < evThreshold (net executable EV% = (p * decimalOdds - 1) * 100 on offered odds, accounting for vig and payout slope). Under disagreementAwayBypass still blocks non-positive executable EV (<= 0%)."
+    },
+    {
       "id": "js.cross_book_synthetic",
       "engines": ["js"],
       "tier": 1,

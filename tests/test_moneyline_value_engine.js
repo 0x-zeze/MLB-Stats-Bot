@@ -72,7 +72,8 @@ test('low-conviction underdog is downgraded to a lean, not a graded VALUE bet', 
   assert.equal(game.valuePick.fairProbability, 38.5);
   assert.equal(game.valuePick.fairSource, 'raw_implied_executable');
   assert.equal(game.valuePick.edge, 6.5);
-  assert.equal(game.valuePick.kellyStakePercent, 2.7);
+  // Raw quarter-Kelly (2.7%) is bounded by the 2.5% max single-bet risk cap.
+  assert.equal(game.valuePick.kellyStakePercent, 2.5);
   // ...but it is NOT graded as a bet: 45% conviction is below the 52% floor,
   // and the away underdog +160 exceeds the +115 limit.
   assert.equal(game.betDecision.status, 'NO BET');

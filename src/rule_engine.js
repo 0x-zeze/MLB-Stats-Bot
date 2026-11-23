@@ -69,6 +69,33 @@ export const JS_HANDLERS = {
     return { fired: false };
   },
 
+  // Net executable EV% floor on the actual offered decimal odds:
+  //   EV% = (p * decimalOdds - 1) * 100
+  // Prevents betting negative-EV / vig-trapped heavy favorites even when
+  // probability-point edge vs no-vig fair looks positive. Under
+  // disagreementAwayBypass still refuses non-positive executable EV (<= 0%).
+  evFloor(ctx, params) {
+    const { option } = ctx;
+    const rawEv = option?.expectedValuePct;
+    if (rawEv == null || !Number.isFinite(Number(rawEv))) return { fired: false };
+    const ev = Number(rawEv);
+    const threshold = ctx.disagreementAwayBypass
+      ? 0.0
+      : toNumber(ctx.evThreshold, toNumber(params.default_pct, 2.0));
+    const failed = ctx.disagreementAwayBypass ? ev <= 0 : ev < threshold;
+    if (failed) {
+      return {
+        fired: true,
+        tokens: {
+          sign: ev >= 0 ? '+' : '',
+          ev: ev.toFixed(1),
+          threshold: threshold.toFixed(1)
+        }
+      };
+    }
+    return { fired: false };
+  },
+
   // Cross-book synthetic de-vig guard: when side prices come from explicitly
   // different books AND no coherent same-book fair de-vig reference exists,
   // block synthetic VALUE (prevents phantom edge from cross-book overround).

@@ -1,4 +1,5 @@
 import { uiBullet, uiKV, uiTitle } from './telegramFormat.js';
+import { powerDevigProbabilities } from './market_residual.js';
 
 const ODDS_API_URL = 'https://api.the-odds-api.com/v4/sports/baseball_mlb/odds';
 const DEFAULT_INTERVAL_MINUTES = 10;
@@ -280,7 +281,7 @@ function firstMarket(bookmakers, key) {
 // (+160 beats +150; -110 beats -120). Used to line-shop the best moneyline.
 function americanToDecimal(value) {
   const odds = Number(value);
-  if (!Number.isFinite(odds) || odds === 0) return null;
+  if (!Number.isFinite(odds) || Math.abs(odds) < 100) return null;
   return odds > 0 ? odds / 100 + 1 : 100 / Math.abs(odds) + 1;
 }
 
@@ -308,8 +309,63 @@ function bestMoneylineForTeam(bookmakers, teamName) {
 // Sharp reference: Pinnacle/Circa lines are the most efficient (sharpest) books.
 // Comparing the model pick's odds at a sharp book vs the retail book (The Odds API
 // aggregate) detects steam moves and sharp money more reliably than retail-only.
-const SHARP_BOOK_KEYS = new Set(['pinnacle', 'pinnacle_es', 'circa', 'circa_sports']);
-const SHARP_BOOK_TITLES = new Set(['pinnacle', 'circa']);
+const SHARP_BOOK_KEYS = new Set(['pinnacle', 'pinnacle_es', 'circa', 'circa_sports', 'bookmaker', 'cris']);
+const SHARP_BOOK_TITLES = new Set(['pinnacle', 'circa', 'circa sports', 'bookmaker']);
+const SEMI_SHARP_BOOK_KEYS = new Set(['fanduel', 'draftkings', 'lowvig', 'betonlineag', 'bovada']);
+const SEMI_SHARP_BOOK_TITLES = new Set(['fanduel', 'draftkings', 'lowvig.ag', 'betonline.ag', 'bovada']);
+
+export function bookmakerSharpWeight(bookmaker) {
+  const raw = typeof bookmaker === 'string'
+    ? bookmaker
+    : (bookmaker?.key || bookmaker?.bookmaker || bookmaker?.title || '');
+  const normalized = String(raw || '').trim().toLowerCase();
+  if (!normalized) return 1.0;
+  if (SHARP_BOOK_KEYS.has(normalized) || SHARP_BOOK_TITLES.has(normalized)) return 4.0;
+  if (SEMI_SHARP_BOOK_KEYS.has(normalized) || SEMI_SHARP_BOOK_TITLES.has(normalized)) return 1.5;
+  return 1.0;
+}
+
+/**
+ * Compute sharp-weighted consensus fair no-vig probabilities from valid
+ * same-book moneyline quote pairs. Sharp market makers (Pinnacle/Circa/BookMaker)
+ * carry 4.0x weight, major US/low-vig books 1.5x, and retail books 1.0x.
+ */
+export function computeSharpWeightedSameBookFair(pairs = []) {
+  const validPairs = (Array.isArray(pairs) ? pairs : []).filter(
+    (p) =>
+      Number.isFinite(p?.homeNoVigProb) &&
+      Number.isFinite(p?.awayNoVigProb) &&
+      Number.isFinite(p?.overround) &&
+      p.overround >= 0.995 &&
+      p.overround <= 1.12
+  );
+  if (validPairs.length === 0) return null;
+
+  let weightSum = 0;
+  let weightedHome = 0;
+  let weightedOverround = 0;
+  let sharpBooksCount = 0;
+  for (const pair of validPairs) {
+    const w = bookmakerSharpWeight(pair.bookmaker);
+    if (w >= 4.0) sharpBooksCount += 1;
+    weightSum += w;
+    weightedHome += pair.homeNoVigProb * w;
+    weightedOverround += pair.overround * w;
+  }
+  if (!(weightSum > 0)) return null;
+
+  const fairHomePct = (weightedHome / weightSum) * 100;
+  const fairAwayPct = 100 - fairHomePct;
+  const avgOverroundPct = (weightedOverround / weightSum - 1) * 100;
+  return {
+    home: Math.round(fairHomePct * 100) / 100,
+    away: Math.round(fairAwayPct * 100) / 100,
+    overround: Math.round(avgOverroundPct * 10) / 10,
+    booksCount: validPairs.length,
+    sharpBooksCount,
+    weighting: sharpBooksCount > 0 ? 'sharp_weighted_power' : 'weighted_power'
+  };
+}
 
 function sharpBookMoneyline(bookmakers, teamName) {
   let sharp = null;
@@ -546,27 +602,7 @@ export async function attachCurrentOdds(games = []) {
 
     const snapshot = buildSnapshot(game, event);
     const pairs = extractSameBookQuotePairs(game, event);
-    let sameBookFair = null;
-    const validPairs = pairs.filter(
-      (p) =>
-        Number.isFinite(p.homeNoVigProb) &&
-        Number.isFinite(p.awayNoVigProb) &&
-        p.overround >= 0.995 &&
-        p.overround <= 1.12
-    );
-    if (validPairs.length > 0) {
-      const meanHome =
-        (validPairs.reduce((sum, p) => sum + p.homeNoVigProb, 0) / validPairs.length) * 100;
-      const meanAway = 100 - meanHome;
-      const meanOverround =
-        (validPairs.reduce((sum, p) => sum + p.overround, 0) / validPairs.length - 1) * 100;
-      sameBookFair = {
-        home: Math.round(meanHome * 100) / 100,
-        away: Math.round(meanAway * 100) / 100,
-        overround: Math.round(meanOverround * 10) / 10,
-        booksCount: validPairs.length
-      };
-    }
+    const sameBookFair = computeSharpWeightedSameBookFair(pairs);
 
     game.currentOdds = {
       moneylineBook: snapshot.moneylineBook,
@@ -626,7 +662,7 @@ function formatSigned(value, decimals = 0) {
 
 export function americanImpliedProbability(value) {
   const odds = Number(value);
-  if (!Number.isFinite(odds) || odds === 0) return null;
+  if (!Number.isFinite(odds) || Math.abs(odds) < 100) return null;
   return odds > 0 ? 100 / (odds + 100) : Math.abs(odds) / (Math.abs(odds) + 100);
 }
 
@@ -662,8 +698,9 @@ export function extractSameBookQuotePairs(game, event) {
     if (homeImplied == null || awayImplied == null) continue;
 
     const overround = homeImplied + awayImplied;
-    const homeNoVig = overround > 0 ? homeImplied / overround : null;
-    const awayNoVig = overround > 0 ? awayImplied / overround : null;
+    const devig = powerDevigProbabilities(homeImplied, awayImplied);
+    const homeNoVig = devig ? devig.probA : overround > 0 ? homeImplied / overround : null;
+    const awayNoVig = devig ? devig.probB : overround > 0 ? awayImplied / overround : null;
 
     pairs.push({
       gamePk: String(game.gamePk || ''),

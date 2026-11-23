@@ -87,6 +87,11 @@ export function loadConfig() {
     // Lowered 0.05 → 0.02 (Aug 18): 251/254 picks were NO BET, gate was too tight.
     // Edge analysis shows kelly 1-2% picks win 63.9% — lowering floor captures these.
     minimumMoneylineEdge: numberFromEnv(process.env.MINIMUM_MONEYLINE_EDGE, 0.02),
+    // Net executable EV% floor on offered decimal odds: (p * decimalOdds - 1).
+    minimumMoneylineEv: numberFromEnv(process.env.MINIMUM_MONEYLINE_EV, 0.02),
+    // Bankroll risk caps: max stake per single bet (%) and total daily slate exposure (%).
+    maxSingleBetPercent: numberFromEnv(process.env.MAX_SINGLE_BET_PERCENT, 2.5),
+    maxDailyExposurePercent: numberFromEnv(process.env.MAX_DAILY_EXPOSURE_PERCENT, 10.0),
     moneylineOddsMaxAgeMinutes: numberFromEnv(process.env.MONEYLINE_ODDS_MAX_AGE_MINUTES, 10),
     // Rolling avg CLV gate for new VALUE bets (ledger selection quality).
     clvGate: {

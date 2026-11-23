@@ -43,7 +43,7 @@ import {
   CONTROL_FEATURE_ROLES,
   CONTROL_FEATURE_ROLE_VERSION
 } from './core/feature_roles.js';
-import { marketAnchoredProbabilities } from './market_residual.js';
+import { marketAnchoredProbabilities, powerDevigProbabilities } from './market_residual.js';
 import { attachPickConfidence, buildPickConfidence } from './confidence_signals.js';
 
 const MLB_BASE_URL = 'https://statsapi.mlb.com/api/v1';
@@ -458,7 +458,7 @@ export function formatMoneylineOdds(value) {
 
 function americanImpliedProbabilityPercent(value) {
   const odds = Number(value);
-  if (!Number.isFinite(odds) || odds === 0) return null;
+  if (!Number.isFinite(odds) || Math.abs(odds) < 100) return null;
   const probabilityValue = odds > 0 ? 100 / (odds + 100) : Math.abs(odds) / (Math.abs(odds) + 100);
   return probabilityValue * 100;
 }
@@ -497,10 +497,15 @@ function devigMoneylinePercent(awayOdds, homeOdds, options = {}) {
       usableAsFair: false
     };
   }
+  const power = powerDevigProbabilities(awayImplied / 100, homeImplied / 100);
+  const fairAway = power ? power.probA * 100 : (awayImplied / total) * 100;
+  const fairHome = power ? power.probB * 100 : (homeImplied / total) * 100;
   return {
-    away: (awayImplied / total) * 100,
-    home: (homeImplied / total) * 100,
+    away: fairAway,
+    home: fairHome,
     overround: round1(overround),
+    method: power ? power.method : 'proportional',
+    exponent: power?.exponent ?? null,
     sameBook: true,
     synthetic: false,
     usableAsFair: true
@@ -530,23 +535,67 @@ function moneylineBooksAreSame(currentOdds) {
 }
 
 function round1(value) {
-  return Math.round(toNumber(value, 0) * 10) / 10;
+  const n = toNumber(value, 0);
+  // Compensate IEEE-754 representation jitter (e.g. 8.749999999999991 -> 8.8) and normalize -0.
+  const rounded = Math.round((n + (n >= 0 ? 1e-12 : -1e-12)) * 10) / 10;
+  return rounded === 0 ? 0 : rounded;
 }
 
 // American odds → net profit multiple per 1 unit staked (b in the Kelly formula).
-// -150 → 0.667 (risk 1 to win 0.667); +130 → 1.30.
+// -150 → 0.667 (risk 1 to win 0.667); +130 → 1.30. Rejects invalid odds in (-100, 100).
 function americanProfitMultiple(value) {
   const odds = Number(value);
-  if (!Number.isFinite(odds) || odds === 0) return null;
+  if (!Number.isFinite(odds) || Math.abs(odds) < 100) return null;
   return odds > 0 ? odds / 100 : 100 / Math.abs(odds);
 }
 
-// Quarter-Kelly stake as a % of bankroll, computed from the pure CALIBRATED
-// model probability (not winProbabilityRaw and not market-informed display odds)
-// and the offered American odds. Calibration deliberately compresses model
-// overconfidence; sizing off raw conviction would re-inflate the edge and
-// oversize bets. Quarter-Kelly (fraction 0.25) matches the bot's
-// risk_management.py default. Returns null when there is no positive-EV stake.
+// Raw unrounded net executable Expected Value (%) on offered American odds.
+function rawExpectedValuePercent(modelProbabilityPercent, odds) {
+  const b = americanProfitMultiple(odds);
+  if (b === null) return null;
+  const p = toNumber(modelProbabilityPercent, Number.NaN) / 100;
+  if (!Number.isFinite(p) || !(p > 0) || p >= 1) return null;
+  return (p * (1 + b) - 1) * 100;
+}
+
+// Net executable Expected Value (%) on the actual offered American odds:
+//   EV% = (p * decimalOdds - 1) * 100
+// Unlike probability-point edge (p - p_fair), executable EV accounts for
+// vig and payout slope consistently across heavy favorites and underdogs.
+export function expectedValuePercent(modelProbabilityPercent, odds) {
+  const raw = rawExpectedValuePercent(modelProbabilityPercent, odds);
+  return raw === null ? null : round1(raw);
+}
+
+// Uncertainty shrinkage multiplier for Kelly sizing in [0.5, 1.0].
+// Penalizes missing/fallback features and unconfirmed lineups so high-uncertainty
+// games automatically take smaller stakes rather than full Quarter-Kelly.
+export function kellyUncertaintyMultiplier(item) {
+  if (!item || typeof item !== 'object') return 1.0;
+  const fallbackCount = Math.max(0, toNumber(item.featureFallbacks?.count, 0));
+  const fallbackScale = 1 - Math.min(fallbackCount, 4) * 0.08; // up to -32%
+  let lineupScale = 1.0;
+  if (item.lineups) {
+    const away = item.lineups.away;
+    const home = item.lineups.home;
+    const bothConfirmed = Boolean(
+      away?.confirmed && home?.confirmed && toNumber(away?.count, 0) >= 9 && toNumber(home?.count, 0) >= 9
+    );
+    if (!bothConfirmed) lineupScale = 0.85;
+  }
+  return clamp(Math.round(fallbackScale * lineupScale * 1000) / 1000, 0.5, 1.0);
+}
+
+function configuredMaxSingleBetPercent() {
+  const configured = toNumber(loadConfig().maxSingleBetPercent, 2.5);
+  return configured > 0 ? configured : 2.5;
+}
+
+function moneylineValueEvThreshold() {
+  const configured = toNumber(loadConfig().minimumMoneylineEv, 0.02);
+  return configured <= 1 ? configured * 100 : configured;
+}
+
 const KELLY_FRACTION = 0.25;
 function quarterKellyPercent(modelProbabilityPercent, odds) {
   const b = americanProfitMultiple(odds);
@@ -617,31 +666,42 @@ function moneylineValueOption(item, side) {
   });
   const gradingProbability = anchored ? (side === 'away' ? anchored.away : anchored.home) : modelProbability;
   const edge = gradingProbability - fairProbability;
+  const rawEvPct = rawExpectedValuePercent(gradingProbability, odds);
+  const expectedValuePct = rawEvPct === null ? null : round1(rawEvPct);
 
-  // Disagreement sizing boost: when model picks away but market favors home
-  // (the validated asymmetric edge), bump the Kelly stake by a validated factor.
-  // fairProbability belongs to `side`, so convert to home-side probability.
+  // Disagreement flag (model away vs market home). Sizing boost neutralized from
+  // 1.5x -> 1.0x in Fase 2: opposing a sharp market carries higher epistemic
+  // uncertainty and should not amplify Kelly stakes.
   const modelHomeProb = pureModelProbabilityForSide(item, 'home');
   const modelAwayProb = 100 - modelHomeProb;
   const sideFair = toNumber(fairProbability, 50);
   const marketHomeProb = side === 'home' ? sideFair : 100 - sideFair;
   const marketAwayProb = 100 - marketHomeProb;
   const isDisagreement = modelAwayProb > modelHomeProb && marketHomeProb > marketAwayProb;
-  const disagreementBoost = isDisagreement && side === 'away' ? 1.5 : 1.0;
+  const disagreementBoost = 1.0;
 
   const sideBook =
     side === 'away'
       ? item.currentOdds?.awayMoneylineBook || item.currentOdds?.moneylineBook
       : item.currentOdds?.homeMoneylineBook || item.currentOdds?.moneylineBook;
 
-  // Multi-factor confidence (SP/form/H2H/injury/lineup) adjusts stake after
-  // disagreement boost. Elite factors up to 1.25x; weak factors down to 0.75x.
+  // Multi-factor confidence (SP/form/H2H/injury/lineup) & estimation uncertainty
+  // shrinkage adjust Quarter-Kelly stake, bounded by maxSingleBetPercent.
   const factorConfidence = buildPickConfidence(item, side);
   const confidenceMultiplier = factorConfidence?.stakeMultiplier ?? 1.0;
+  const uncertaintyMultiplier = kellyUncertaintyMultiplier(item);
+  const maxSingleBet = configuredMaxSingleBetPercent();
 
-  const baseKelly = edge > 0 ? quarterKellyPercent(gradingProbability, odds) : null;
+  const hasPositiveEv = rawEvPct !== null && rawEvPct > 0;
+  const baseKelly = edge > 0 && hasPositiveEv ? quarterKellyPercent(gradingProbability, odds) : null;
+  const rawAdjustedKelly =
+    baseKelly !== null
+      ? round1(baseKelly * disagreementBoost * confidenceMultiplier * uncertaintyMultiplier)
+      : null;
   const kellyStakePercent =
-    baseKelly !== null ? round1(baseKelly * disagreementBoost * confidenceMultiplier) : null;
+    rawAdjustedKelly !== null && rawAdjustedKelly > 0
+      ? Math.min(maxSingleBet, rawAdjustedKelly)
+      : null;
 
   return {
     side,
@@ -656,17 +716,21 @@ function moneylineValueOption(item, side) {
     impliedProbability: round1(impliedProbability),
     fairProbability: round1(fairProbability),
     fairSource,
+    devigMethod: devig?.usableAsFair ? (devig.method || 'power') : (consensusSideFair != null ? 'sharp_weighted_power' : 'raw_implied'),
     sameBookDevig: Boolean(fairFromDevig != null),
     overround: devig ? round1(devig.overround) : null,
     edge: round1(edge),
+    expectedValuePct,
     disagreementBoost,
     isDisagreement: isDisagreement && side === 'away',
     confidenceLevel: factorConfidence?.level ?? null,
     confidenceScore: factorConfidence?.score ?? null,
     confidenceSummary: factorConfidence?.summary ?? null,
     confidenceMultiplier,
-    // Quarter-Kelly stake (% of bankroll) off the calibrated model probability
-    // and offered odds. null when there is no positive-EV stake.
+    uncertaintyMultiplier,
+    maxSingleBetPercent: maxSingleBet,
+    // Uncertainty-adjusted Quarter-Kelly stake (% of bankroll), capped per bet.
+    // null when there is no positive executable-EV stake.
     kellyStakePercent
   };
 }
@@ -721,6 +785,7 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
     option,
     evolutionControls,
     edgeThreshold: moneylineValueEdgeThreshold(),
+    evThreshold: moneylineValueEvThreshold(),
     oddsFreshnessReason: moneylineOddsFreshnessReason(item),
     modelFavoredSide: pureModelProbabilityForSide(item, 'home') >= pureModelProbabilityForSide(item, 'away') ? 'home' : 'away',
     pickedTeamWinPct: leagueRecordPct(pickedTeamRecord),
@@ -791,7 +856,12 @@ export function applyMoneylineValueMarket(item) {
   const options = ['away', 'home']
     .map((side) => moneylineValueOption(item, side))
     .filter(Boolean)
-    .sort((left, right) => right.edge - left.edge);
+    .sort((left, right) => {
+      const leftEv = left.expectedValuePct ?? -Infinity;
+      const rightEv = right.expectedValuePct ?? -Infinity;
+      if (rightEv !== leftEv) return rightEv - leftEv;
+      return right.edge - left.edge;
+    });
   const best = options[0] || null;
   const reasons = valueSafetyReasons(item, best, evolutionControls);
   const auditAdjustments = reasons.filter((reason) => String(reason).toLowerCase().includes('audit guardrail'));
@@ -825,6 +895,7 @@ export function applyMoneylineValueMarket(item) {
         marketResidualWeight: best.marketResidualWeight ?? 0,
         impliedProbability: best.impliedProbability,
         edge: best.edge,
+        expectedValuePct: best.expectedValuePct,
         kellyStakePercent: best.kellyStakePercent,
         disagreementBoost: best.disagreementBoost ?? 1,
         isDisagreement: best.isDisagreement ?? false,
@@ -832,6 +903,8 @@ export function applyMoneylineValueMarket(item) {
         confidenceScore: best.confidenceScore ?? null,
         confidenceSummary: best.confidenceSummary ?? null,
         confidenceMultiplier: best.confidenceMultiplier ?? 1,
+        uncertaintyMultiplier: best.uncertaintyMultiplier ?? 1,
+        maxSingleBetPercent: best.maxSingleBetPercent ?? configuredMaxSingleBetPercent(),
         reason: reasons[0] || `model ${best.modelProbability.toFixed(1)}% vs implied ${best.impliedProbability.toFixed(1)}%`,
         reasons,
         auditAdjustments,
@@ -850,6 +923,283 @@ export function applyMoneylineValueMarket(item) {
   attachPickConfidence(item);
 
   return item;
+}
+
+/**
+ * Enforce a daily slate exposure cap across all qualifying VALUE bets on the
+ * same date, taking into account bets already committed in `bet_ledger` for
+ * that date (`options.committedLedgerBets`).
+ *
+ * - Already-committed ledger bets keep their immutable committed stake and
+ *   deduct from that date's remaining daily budget.
+ * - Uncommitted (new) VALUE bets share `remainingBudget = max(0, cap - committed)`
+ *   proportionally via largest-remainder 0.1% tick allocation so total exposure
+ *   (committed + new) never exceeds `maxDailyExposurePercent`.
+ * - If `remainingBudget < 0.1%`, new uncommitted VALUE bets are downgraded to
+ *   NO BET so `storage.recordBet()` cannot breach the daily cap.
+ *
+ * Strictly idempotent & composable with CLV gate throttling: tracks
+ * `inputClvMultiplier` so any CLV throttle update refreshes the baseline stake.
+ */
+export function applyDailySlateExposureCap(predictions = [], options = {}) {
+  if (!Array.isArray(predictions) || predictions.length === 0) return predictions;
+  const configuredCap = toNumber(
+    options.maxDailyExposurePercent ?? loadConfig().maxDailyExposurePercent,
+    10.0
+  );
+  if (!(configuredCap > 0)) return predictions;
+  const capTicks = Math.floor(configuredCap * 10 + 1e-9);
+  const maxDailyExposurePercent = capTicks / 10;
+
+  // Index already-committed real moneyline bets by date_ymd -> Map<game_pk, units_staked>.
+  const committedByDate = new Map();
+  const committedRows = Array.isArray(options.committedLedgerBets) ? options.committedLedgerBets : [];
+  for (const row of committedRows) {
+    if (!row) continue;
+    const market = String(row.market || 'moneyline').toLowerCase();
+    if (market !== 'moneyline') continue;
+    const status = String(row.status || '').toLowerCase();
+    if (status === 'void' || status === 'cancelled' || status === 'canceled') continue;
+    const dateKey = String(row.date_ymd || '').trim();
+    const gamePk = String(row.game_pk || '').trim();
+    const staked = toNumber(row.units_staked, Number.NaN);
+    if (!dateKey || !gamePk || !Number.isFinite(staked) || !(staked > 0)) continue;
+    if (!committedByDate.has(dateKey)) committedByDate.set(dateKey, new Map());
+    const dateMap = committedByDate.get(dateKey);
+    if (!dateMap.has(gamePk)) dateMap.set(gamePk, staked);
+  }
+
+  // Group qualifying VALUE bets by slate date so multi-day arrays stay isolated.
+  const byDate = new Map();
+  for (const item of predictions) {
+    if (item?.betDecision?.status !== 'VALUE') continue;
+    const priorCap = item.betDecision?.slateExposureCap;
+    const currentClvMult = isFiniteNumber(item.betDecision?.clvGate?.stakeMultiplier)
+      ? Number(item.betDecision.clvGate.stakeMultiplier)
+      : 1.0;
+    const reusePriorBase =
+      priorCap &&
+      isFiniteNumber(priorCap.originalStakePercent) &&
+      (priorCap.inputClvMultiplier == null ||
+        Math.abs(Number(priorCap.inputClvMultiplier) - currentClvMult) < 1e-9);
+
+    const baseStake = reusePriorBase
+      ? Number(priorCap.originalStakePercent)
+      : isFiniteNumber(item.valuePick?.kellyStakePercent)
+        ? Number(item.valuePick.kellyStakePercent)
+        : isFiniteNumber(item.betDecision?.kellyStakePercent)
+          ? Number(item.betDecision.kellyStakePercent)
+          : null;
+    if (baseStake == null || !(baseStake > 0)) continue;
+    const dateKey = String(item.dateYmd || item.officialDate || '__slate__');
+    if (!byDate.has(dateKey)) byDate.set(dateKey, []);
+    byDate.get(dateKey).push({ item, baseStake, currentClvMult });
+  }
+
+  for (const [dateKey, entries] of byDate.entries()) {
+    const committedMap = committedByDate.get(dateKey) || new Map();
+    const committedTotal = [...committedMap.values()].reduce((sum, s) => sum + s, 0);
+    const committedRounded = round1(committedTotal);
+
+    const uncommitted = [];
+    for (const entry of entries) {
+      const gamePk = String(entry.item?.gamePk || '').trim();
+      if (gamePk && committedMap.has(gamePk)) {
+        const lockedStake = round1(committedMap.get(gamePk));
+        if (entry.item.valuePick) {
+          entry.item.valuePick = { ...entry.item.valuePick, kellyStakePercent: lockedStake };
+        }
+        entry.item.betDecision = {
+          ...entry.item.betDecision,
+          kellyStakePercent: lockedStake,
+          slateExposureCap: {
+            applied: false,
+            alreadyCommitted: true,
+            maxDailyExposurePercent,
+            committedStakePercent: committedRounded,
+            remainingBudgetPercent: round1(Math.max(0, maxDailyExposurePercent - committedTotal)),
+            scaleFactor: 1.0,
+            originalStakePercent: lockedStake,
+            adjustedStakePercent: lockedStake,
+            inputClvMultiplier: entry.currentClvMult,
+            slateBetCount: entries.length
+          }
+        };
+      } else {
+        uncommitted.push(entry);
+      }
+    }
+
+    if (uncommitted.length === 0) continue;
+
+    const remainingTicks = Math.max(0, capTicks - Math.round(committedTotal * 10));
+    const remainingBudget = remainingTicks / 10;
+    const totalNew = uncommitted.reduce((sum, entry) => sum + entry.baseStake, 0);
+    const totalNewRounded = round1(totalNew);
+
+    // Budget completely exhausted by earlier committed ledger bets -> block new bets.
+    if (remainingTicks < 1) {
+      const reason = `daily slate exposure cap ${maxDailyExposurePercent.toFixed(1)}% sudah penuh (committed ${committedRounded.toFixed(1)}%)`;
+      for (const { item, baseStake, currentClvMult } of uncommitted) {
+        const reasons = Array.isArray(item.betDecision.reasons) ? [...item.betDecision.reasons] : [];
+        if (!reasons.includes(reason)) reasons.unshift(reason);
+        if (item.valuePick) {
+          item.valuePick = { ...item.valuePick, kellyStakePercent: 0 };
+        }
+        item.betDecision = {
+          ...item.betDecision,
+          status: 'NO BET',
+          reason,
+          reasons,
+          kellyStakePercent: 0,
+          slateExposureCap: {
+            applied: true,
+            exhausted: true,
+            maxDailyExposurePercent,
+            committedStakePercent: committedRounded,
+            remainingBudgetPercent: 0,
+            totalUncappedStakePercent: totalNewRounded,
+            totalAdjustedStakePercent: 0,
+            scaleFactor: 0,
+            originalStakePercent: baseStake,
+            adjustedStakePercent: 0,
+            inputClvMultiplier: currentClvMult,
+            slateBetCount: uncommitted.length
+          }
+        };
+      }
+      continue;
+    }
+
+    if (totalNew <= remainingBudget + 1e-9) {
+      // Fits inside remaining daily budget: restore any previously capped stakes cleanly.
+      for (const { item, baseStake, currentClvMult } of uncommitted) {
+        if (item.betDecision?.slateExposureCap?.applied) {
+          if (item.valuePick) {
+            item.valuePick = { ...item.valuePick, kellyStakePercent: baseStake };
+          }
+          item.betDecision = {
+            ...item.betDecision,
+            kellyStakePercent: baseStake,
+            slateExposureCap: {
+              applied: false,
+              maxDailyExposurePercent,
+              committedStakePercent: committedRounded,
+              remainingBudgetPercent: remainingBudget,
+              totalUncappedStakePercent: totalNewRounded,
+              totalAdjustedStakePercent: totalNewRounded,
+              scaleFactor: 1.0,
+              originalStakePercent: baseStake,
+              adjustedStakePercent: baseStake,
+              inputClvMultiplier: currentClvMult,
+              slateBetCount: uncommitted.length
+            }
+          };
+        }
+      }
+      continue;
+    }
+
+    const scale = remainingBudget / totalNew;
+    const allocated = uncommitted.map((entry, idx) => {
+      const exactTicks = entry.baseStake * scale * 10;
+      const floorTicks = Math.floor(exactTicks + 1e-9);
+      return {
+        ...entry,
+        idx,
+        ticks: floorTicks,
+        remainder: exactTicks - floorTicks
+      };
+    });
+
+    // Enforce >= 0.1% per bet when remaining budget allows at least 0.1% per bet.
+    if (remainingTicks >= allocated.length) {
+      for (const a of allocated) {
+        if (a.ticks < 1) a.ticks = 1;
+      }
+    }
+
+    let usedTicks = allocated.reduce((sum, a) => sum + a.ticks, 0);
+    // If enforcing 0.1% floor pushed usedTicks above remainingTicks, trim from largest stakes.
+    while (usedTicks > remainingTicks) {
+      const donor = allocated
+        .filter((a) => a.ticks > 1)
+        .sort((x, y) => y.ticks - x.ticks || x.remainder - y.remainder)[0];
+      if (!donor) break;
+      donor.ticks -= 1;
+      usedTicks -= 1;
+    }
+
+    // Distribute remaining ticks via largest remainder so total === remainingBudget exactly.
+    let leftoverTicks = remainingTicks - usedTicks;
+    if (leftoverTicks > 0) {
+      const byRemainder = [...allocated].sort(
+        (x, y) => y.remainder - x.remainder || y.baseStake - x.baseStake || x.idx - y.idx
+      );
+      for (let i = 0; i < leftoverTicks && i < byRemainder.length; i += 1) {
+        byRemainder[i].ticks += 1;
+      }
+    }
+
+    const totalAdjusted = allocated.reduce((sum, a) => sum + a.ticks, 0) / 10;
+    const scaleRounded = Math.round(scale * 1000) / 1000;
+
+    for (const a of allocated) {
+      const adjustedStake = a.ticks / 10;
+      if (a.item.valuePick) {
+        a.item.valuePick = { ...a.item.valuePick, kellyStakePercent: adjustedStake };
+      }
+      if (a.ticks < 1) {
+        const reason = `daily slate exposure cap ${maxDailyExposurePercent.toFixed(1)}% tersisa ${remainingBudget.toFixed(1)}% (tidak cukup untuk stake minimum 0.1%)`;
+        const reasons = Array.isArray(a.item.betDecision.reasons)
+          ? [...a.item.betDecision.reasons]
+          : [];
+        if (!reasons.includes(reason)) reasons.unshift(reason);
+        a.item.betDecision = {
+          ...a.item.betDecision,
+          status: 'NO BET',
+          reason,
+          reasons,
+          kellyStakePercent: 0,
+          slateExposureCap: {
+            applied: true,
+            exhausted: true,
+            maxDailyExposurePercent,
+            committedStakePercent: committedRounded,
+            remainingBudgetPercent: remainingBudget,
+            totalUncappedStakePercent: totalNewRounded,
+            totalAdjustedStakePercent: totalAdjusted,
+            scaleFactor: scaleRounded,
+            originalStakePercent: a.baseStake,
+            adjustedStakePercent: 0,
+            inputClvMultiplier: a.currentClvMult,
+            slateBetCount: uncommitted.length
+          }
+        };
+        continue;
+      }
+      a.item.betDecision = {
+        ...a.item.betDecision,
+        kellyStakePercent: adjustedStake,
+        slateExposureCap: {
+          applied: true,
+          exhausted: false,
+          maxDailyExposurePercent,
+          committedStakePercent: committedRounded,
+          remainingBudgetPercent: remainingBudget,
+          totalUncappedStakePercent: totalNewRounded,
+          totalAdjustedStakePercent: totalAdjusted,
+          scaleFactor: scaleRounded,
+          originalStakePercent: a.baseStake,
+          adjustedStakePercent: adjustedStake,
+          inputClvMultiplier: a.currentClvMult,
+          slateBetCount: uncommitted.length
+        }
+      };
+    }
+  }
+
+  return predictions;
 }
 
 // Confidence band for the picked side, derived purely from the calibrated win

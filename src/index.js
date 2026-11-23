@@ -12,6 +12,7 @@ import {
   answerInteractiveQuestion
 } from './llm.js';
 import {
+  applyDailySlateExposureCap,
   applyMoneylineValueMarket,
   detectSharpMoneySignal,
   formatPredictions,
@@ -198,33 +199,38 @@ function applyNewsRiskVeto(predictions) {
   return predictions;
 }
 
-/** Selection-only CLV gate after value engine. Never mutates model probs/edge math. */
+/** Selection-only CLV gate + daily slate exposure cap after value engine. */
 function applyRollingClvGate(predictions) {
   const gateConfig = config.clvGate || {};
-  if (gateConfig.enabled === false) return predictions;
   let rows = [];
-  let shadowRows = [];
   try {
     rows = storage.readLedger({ includeArchived: true }) || [];
   } catch {
     rows = [];
   }
-  try {
-    shadowRows = storage.readShadowLedger({ status: 'settled' }) || [];
-  } catch {
-    shadowRows = [];
+  if (gateConfig.enabled !== false) {
+    let shadowRows = [];
+    try {
+      shadowRows = storage.readShadowLedger({ status: 'settled' }) || [];
+    } catch {
+      shadowRows = [];
+    }
+    const summaryOpts = {
+      market: 'moneyline',
+      lookback: gateConfig.lookback,
+      referenceClv: gateConfig.minAvgClv ?? 0,
+      recoveryMinSample: gateConfig.recoveryMinSample
+    };
+    const summary = summarizeClv(rows, summaryOpts);
+    const shadowSummary = summarizeShadowRecoveryClv(rows, shadowRows, summaryOpts);
+    for (const prediction of predictions || []) {
+      applyClvGateToPrediction(prediction, summary, gateConfig, shadowSummary);
+    }
   }
-  const summaryOpts = {
-    market: 'moneyline',
-    lookback: gateConfig.lookback,
-    referenceClv: gateConfig.minAvgClv ?? 0,
-    recoveryMinSample: gateConfig.recoveryMinSample
-  };
-  const summary = summarizeClv(rows, summaryOpts);
-  const shadowSummary = summarizeShadowRecoveryClv(rows, shadowRows, summaryOpts);
-  for (const prediction of predictions || []) {
-    applyClvGateToPrediction(prediction, summary, gateConfig, shadowSummary);
-  }
+  applyDailySlateExposureCap(predictions, {
+    maxDailyExposurePercent: config.maxDailyExposurePercent,
+    committedLedgerBets: rows
+  });
   return predictions;
 }
 

@@ -377,8 +377,10 @@ export function applyClvGateToPrediction(prediction, summary, config = {}, shado
   if (prediction.betDecision.status !== 'VALUE') return prediction;
 
   const priorGate = prediction.betDecision.clvGate;
+  const priorSlateCap = prediction.betDecision.slateExposureCap;
   const baseStake =
     num(priorGate?.originalStakePercent, null) ??
+    num(priorSlateCap?.originalStakePercent, null) ??
     num(prediction.valuePick?.kellyStakePercent, null) ??
     num(prediction.betDecision?.kellyStakePercent, null);
 
@@ -399,7 +401,7 @@ export function applyClvGateToPrediction(prediction, summary, config = {}, shado
       };
     }
 
-    prediction.betDecision = {
+    const nextDecision = {
       ...prediction.betDecision,
       ...(prediction.betDecision.kellyStakePercent != null && baseStake != null
         ? { kellyStakePercent: baseStake }
@@ -422,6 +424,8 @@ export function applyClvGateToPrediction(prediction, summary, config = {}, shado
         reason
       }
     };
+    delete nextDecision.slateExposureCap;
+    prediction.betDecision = nextDecision;
     return prediction;
   }
 
@@ -437,7 +441,7 @@ export function applyClvGateToPrediction(prediction, summary, config = {}, shado
       };
     }
 
-    prediction.betDecision = {
+    const nextDecision = {
       ...prediction.betDecision,
       ...(prediction.betDecision.kellyStakePercent != null ? { kellyStakePercent: scaledStake } : {}),
       clvGate: {
@@ -455,6 +459,10 @@ export function applyClvGateToPrediction(prediction, summary, config = {}, shado
         note: evaluation.note
       }
     };
+    // Clear stale pre-throttle slate cap so applyDailySlateExposureCap recomputes
+    // against the freshly throttled stake rather than resurrecting the old pre-CLV stake.
+    delete nextDecision.slateExposureCap;
+    prediction.betDecision = nextDecision;
     return prediction;
   }
 
@@ -466,7 +474,7 @@ export function applyClvGateToPrediction(prediction, summary, config = {}, shado
         kellyStakePercent: baseStake
       };
     }
-    prediction.betDecision = {
+    const nextDecision = {
       ...prediction.betDecision,
       ...(prediction.betDecision.kellyStakePercent != null && baseStake != null
         ? { kellyStakePercent: baseStake }
@@ -486,6 +494,8 @@ export function applyClvGateToPrediction(prediction, summary, config = {}, shado
         note: evaluation.note
       }
     };
+    delete nextDecision.slateExposureCap;
+    prediction.betDecision = nextDecision;
   }
 
   return prediction;

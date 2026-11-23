@@ -523,21 +523,72 @@ def _dataset_hash(rows: list[dict[str, Any]]) -> str | None:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def power_devig_pair(prob_a: float, prob_b: float) -> tuple[float, float] | None:
+    """Two-outcome Power De-vig solver (p_a^k + p_b^k = 1) matching JS market_residual.js."""
+    import math
+
+    if not (0.0 < prob_a < 1.0 and 0.0 < prob_b < 1.0):
+        return None
+    total = prob_a + prob_b
+    if abs(total - 1.0) <= 1e-9:
+        return prob_a, prob_b
+
+    def f(k: float) -> float:
+        return (prob_a ** k) + (prob_b ** k) - 1.0
+
+    ln_a = math.log(prob_a)
+    ln_b = math.log(prob_b)
+    if total > 1.0:
+        lo, hi = 1.0, 2.0
+        while f(hi) > 0.0 and hi < 1024.0:
+            hi *= 2.0
+    else:
+        hi, lo = 1.0, 0.5
+        while f(lo) < 0.0 and lo > 1e-6:
+            lo /= 2.0
+
+    if f(lo) < 0.0 or f(hi) > 0.0:
+        return prob_a / total, prob_b / total
+
+    k = 0.5 * (lo + hi)
+    for _ in range(50):
+        a_k = prob_a ** k
+        b_k = prob_b ** k
+        val = a_k + b_k - 1.0
+        if abs(val) < 1e-11:
+            break
+        if val > 0.0:
+            lo = k
+        else:
+            hi = k
+        deriv = a_k * ln_a + b_k * ln_b
+        newton = (k - val / deriv) if deriv != 0.0 else float("nan")
+        k = newton if (lo < newton < hi) else 0.5 * (lo + hi)
+
+    fair_a = prob_a ** k
+    fair_b = prob_b ** k
+    denom = fair_a + fair_b
+    if denom <= 0.0:
+        return prob_a / total, prob_b / total
+    return fair_a / denom, fair_b / denom
+
+
 def _american_no_vig_pair(away_odds: float, home_odds: float) -> tuple[float, float] | None:
-    """Same-book American odds -> (away_no_vig, home_no_vig) probabilities."""
+    """Same-book American odds -> (away_no_vig, home_no_vig) probabilities via Power De-vig."""
 
     def implied(odds: float) -> float:
         return 100.0 / (odds + 100.0) if odds > 0 else abs(odds) / (abs(odds) + 100.0)
 
     try:
-        away_implied = implied(float(away_odds))
-        home_implied = implied(float(home_odds))
+        away_val = float(away_odds)
+        home_val = float(home_odds)
+        if abs(away_val) < 100.0 or abs(home_val) < 100.0:
+            return None
+        away_implied = implied(away_val)
+        home_implied = implied(home_val)
     except (TypeError, ValueError, ZeroDivisionError):
         return None
-    total = away_implied + home_implied
-    if total <= 0:
-        return None
-    return away_implied / total, home_implied / total
+    return power_devig_pair(away_implied, home_implied)
 
 
 def market_baselines(rows: list[dict[str, Any]]) -> dict[str, Any]:

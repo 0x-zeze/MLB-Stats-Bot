@@ -6,7 +6,12 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from './config.js';
-import { applyMoneylineValueMarket, confidenceBand, getMlbPredictions } from './mlb.js';
+import {
+  applyDailySlateExposureCap,
+  applyMoneylineValueMarket,
+  confidenceBand,
+  getMlbPredictions
+} from './mlb.js';
 import {
   applyClvGateToPrediction,
   summarizeClv,
@@ -508,11 +513,26 @@ async function livePredictions(dateYmd) {
       console.warn(`Value engine failed for game ${prediction.gamePk}:`, error.message);
     }
   }
-  // Selection-only CLV gate — same policy as bot path; never mutates model probs.
+  // News risk veto MUST run before CLV gate & daily exposure cap (matches src/index.js).
+  try {
+    await attachNewsContext(config, predictions, storage);
+    persistNewsFeatureSnapshots(predictions, storage, dateYmd);
+    for (const prediction of predictions) {
+      applyNewsRiskVeto(prediction);
+    }
+  } catch (error) {
+    console.warn('Dashboard news context unavailable:', error.message);
+  }
+  // Selection-only CLV gate + daily slate exposure cap — same policy as bot path.
+  let ledgerRows = [];
+  try {
+    ledgerRows = storage.readLedger({ includeArchived: true }) || [];
+  } catch {
+    ledgerRows = [];
+  }
   try {
     const gateConfig = config.clvGate || {};
     if (gateConfig.enabled !== false) {
-      const rows = storage.readLedger({ includeArchived: true }) || [];
       let shadowRows = [];
       try {
         shadowRows = storage.readShadowLedger({ status: 'settled' }) || [];
@@ -525,8 +545,8 @@ async function livePredictions(dateYmd) {
         referenceClv: gateConfig.minAvgClv ?? 0,
         recoveryMinSample: gateConfig.recoveryMinSample
       };
-      const summary = summarizeClv(rows, summaryOpts);
-      const shadowSummary = summarizeShadowRecoveryClv(rows, shadowRows, summaryOpts);
+      const summary = summarizeClv(ledgerRows, summaryOpts);
+      const shadowSummary = summarizeShadowRecoveryClv(ledgerRows, shadowRows, summaryOpts);
       for (const prediction of predictions) {
         applyClvGateToPrediction(prediction, summary, gateConfig, shadowSummary);
       }
@@ -534,15 +554,10 @@ async function livePredictions(dateYmd) {
   } catch (error) {
     console.warn('Dashboard CLV gate unavailable:', error.message);
   }
-  try {
-    await attachNewsContext(config, predictions, storage);
-    persistNewsFeatureSnapshots(predictions, storage, dateYmd);
-    for (const prediction of predictions) {
-      applyNewsRiskVeto(prediction);
-    }
-  } catch (error) {
-    console.warn('Dashboard news context unavailable:', error.message);
-  }
+  applyDailySlateExposureCap(predictions, {
+    maxDailyExposurePercent: config.maxDailyExposurePercent,
+    committedLedgerBets: ledgerRows
+  });
 
   const fetchedAt = new Date().toISOString();
   return {
