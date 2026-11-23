@@ -34,6 +34,11 @@ from typing import Any
 import numpy as np
 from scipy.optimize import minimize
 
+from src.core.feature_vector_py import (
+    FEATURE_VECTOR_SCHEMA_VERSION,
+    FEATURE_VECTOR_V2_FEATURE_NAMES,
+    FEATURE_VECTOR_V2_SCHEMA_VERSION,
+)
 from src.dataset.build_game_dataset import build_game_dataset, build_folds, DatasetRow
 from src.eval.metrics import model_metrics
 from src.models.train_learned_v2_logistic import (
@@ -46,7 +51,8 @@ from src.models.train_learned_v2_logistic import (
 # ---- Identity (must match src/core/model_ids.js) ----
 MARKET_RESIDUAL_V2_MODEL_ID = "market_residual_v2"
 MARKET_RESIDUAL_V2_IMPL_VERSION = "market-residual-v2-v1.0"
-MARKET_RESIDUAL_V2_FEATURE_SCHEMA_VERSION = "mlb-feature-vector-v1.0"
+MARKET_RESIDUAL_V2_FEATURE_SCHEMA_VERSION = FEATURE_VECTOR_SCHEMA_VERSION
+SUPPORTED_FEATURE_SCHEMAS = (FEATURE_VECTOR_SCHEMA_VERSION, FEATURE_VECTOR_V2_SCHEMA_VERSION)
 ARTIFACT_MANIFEST_VERSION = "market-residual-v2-artifact-v1"
 
 # The market logit is a FIXED offset; coefficient is exactly 1 (never fit).
@@ -136,8 +142,52 @@ def _fit_offset_logistic(
     return float(params[0]), params[1:].astype(float)
 
 
+def _extract_row_features(
+    row: DatasetRow, feature_names: list[str]
+) -> tuple[list[float | None], list[int]] | None:
+    if feature_names == FEATURE_NAMES:
+        return _row_features(row)
+    fv = row.feature_vector
+    if not fv:
+        return None
+    values: list[float | None] = []
+    missing: list[int] = []
+    for name in feature_names:
+        v = _safe_float(fv.get(name))
+        values.append(v)
+        missing.append(1 if v is None else 0)
+    return values, missing
+
+
+def _build_feature_matrix(
+    rows: list[DatasetRow], feature_names: list[str]
+) -> tuple[np.ndarray, np.ndarray, list[int]] | None:
+    if feature_names == FEATURE_NAMES:
+        return _build_matrix(rows)
+    n_feat = len(feature_names)
+    X = np.full((len(rows), n_feat), np.nan, dtype=float)
+    y = np.empty(len(rows), dtype=float)
+    valid_mask: list[int] = []
+    any_valid = False
+    for i, row in enumerate(rows):
+        extracted = _extract_row_features(row, feature_names)
+        if extracted is None or row.home_won is None:
+            valid_mask.append(0)
+            y[i] = 0.0
+            continue
+        values, _ = extracted
+        for j, v in enumerate(values):
+            X[i, j] = np.nan if v is None else float(v)
+        y[i] = 1.0 if row.home_won else 0.0
+        valid_mask.append(1)
+        any_valid = True
+    return (X, y, valid_mask) if any_valid else None
+
+
 def _fit_residual_fold(
-    train_rows: list[DatasetRow], fold_index: int
+    train_rows: list[DatasetRow],
+    fold_index: int,
+    feature_names: list[str] | None = None,
 ) -> tuple[ResidualFoldFit | None, str | None]:
     """Fit the residual model on training-fold rows that have market + features.
 
@@ -146,9 +196,10 @@ def _fit_residual_fold(
     Imputation and scaling are fit strictly on inner-train during C selection,
     then refit on the full training fold.
     """
+    active_features = list(feature_names) if feature_names is not None else list(FEATURE_NAMES)
     usable = [
         r for r in train_rows
-        if _market_logit(r) is not None and r.home_won is not None and _row_features(r) is not None
+        if _market_logit(r) is not None and r.home_won is not None and _extract_row_features(r, active_features) is not None
     ]
     if len(usable) < MIN_TRAIN_ROWS_PER_FOLD:
         return None, (
@@ -156,12 +207,12 @@ def _fit_residual_fold(
             f"_below_{MIN_TRAIN_ROWS_PER_FOLD}"
         )
 
-    matrix = _build_matrix(usable)
+    matrix = _build_feature_matrix(usable, active_features)
     if matrix is None:
         return None, f"fold_{fold_index}_no_feature_vectors"
     X_all, y_all, valid_mask = matrix
     valid_idx = [i for i, m in enumerate(valid_mask) if m]
-    n_feat = len(FEATURE_NAMES)
+    n_feat = len(active_features)
     X_raw = X_all[valid_idx, :n_feat].copy()
     y = y_all[valid_idx]
     market_logits = np.array([_market_logit(usable[i]) for i in valid_idx], dtype=float)
@@ -180,7 +231,7 @@ def _fit_residual_fold(
         std_map: dict[str, float] = {}
         tr_out = X_tr.copy()
         te_out = X_te.copy() if X_te is not None else None
-        for j, name in enumerate(FEATURE_NAMES):
+        for j, name in enumerate(active_features):
             col = tr_out[:, j]
             finite = col[np.isfinite(col)]
             med = float(np.median(finite)) if finite.size else 0.0
@@ -229,7 +280,7 @@ def _fit_residual_fold(
     X, _, imputation, feature_mean, feature_std = _fit_transform(X_raw)
     intercept, coefs = _fit_offset_logistic(X, y, market_logits, best_c)
 
-    coefficients = {name: float(coefs[j]) for j, name in enumerate(FEATURE_NAMES)}
+    coefficients = {name: float(coefs[j]) for j, name in enumerate(active_features)}
 
     # Training metrics (offset-adjusted; audit only, never a selection signal).
     z_train = intercept + X @ coefs + market_logits
@@ -256,21 +307,24 @@ def _fit_residual_fold(
 
 
 def _predict_residual_fold(
-    fit: ResidualFoldFit, rows: list[DatasetRow]
+    fit: ResidualFoldFit,
+    rows: list[DatasetRow],
+    feature_names: list[str] | None = None,
 ) -> tuple[list[float], list[int]]:
     """Apply a residual fit. Rows without market OR without features are invalid."""
+    active_features = list(feature_names) if feature_names is not None else list(FEATURE_NAMES)
     probs: list[float] = []
     valid: list[int] = []
     for row in rows:
         market_logit = _market_logit(row)
-        extracted = _row_features(row)
+        extracted = _extract_row_features(row, active_features)
         if market_logit is None or extracted is None:
             probs.append(0.5)
             valid.append(0)
             continue
         values, _missing = extracted
         z = fit.intercept + market_logit  # market offset coefficient = 1.0
-        for j, name in enumerate(FEATURE_NAMES):
+        for j, name in enumerate(active_features):
             v = values[j]
             if v is None:
                 v = fit.imputation.get(name, 0.0)
@@ -308,6 +362,7 @@ def train_market_residual_v2(
     db_path: str,
     cohort: str = "main",
     model_id_for_dataset: str = "heuristic_v1",
+    feature_schema_version: str = MARKET_RESIDUAL_V2_FEATURE_SCHEMA_VERSION,
 ) -> dict[str, Any]:
     """Train market_residual_v2 from all-game feature vectors + market quotes.
 
@@ -315,18 +370,32 @@ def train_market_residual_v2(
     insufficient_data report with no usable coefficients. NEVER mutates
     production tables.
     """
+    if feature_schema_version not in SUPPORTED_FEATURE_SCHEMAS:
+        raise ValueError(f"Unsupported feature_schema_version: {feature_schema_version}")
+    active_features = (
+        list(FEATURE_VECTOR_V2_FEATURE_NAMES)
+        if feature_schema_version == FEATURE_VECTOR_V2_SCHEMA_VERSION
+        else list(FEATURE_NAMES)
+    )
+
     clean, quarantined = build_game_dataset(db_path, model_id=model_id_for_dataset, cohort=cohort)
+    v2_hydration_summary = None
+    if feature_schema_version == FEATURE_VECTOR_V2_SCHEMA_VERSION:
+        from src.models.train_market_residual_gbdt_v2 import hydrate_v2_feature_vectors
+
+        v2_hydration_summary = hydrate_v2_feature_vectors(db_path, clean)
 
     base = {
         "artifact_manifest_version": ARTIFACT_MANIFEST_VERSION,
         "model_id": MARKET_RESIDUAL_V2_MODEL_ID,
         "model_impl_version": MARKET_RESIDUAL_V2_IMPL_VERSION,
-        "feature_schema_version": MARKET_RESIDUAL_V2_FEATURE_SCHEMA_VERSION,
+        "feature_schema_version": feature_schema_version,
         "cohort": cohort,
         "control_model_id": model_id_for_dataset,
         "dataset_row_count": len(clean),
         "quarantine_count": len(quarantined),
-        "feature_names": list(FEATURE_NAMES),
+        "v2_hydration_summary": v2_hydration_summary,
+        "feature_names": list(active_features),
         "market_offset_coefficient": MARKET_OFFSET_COEFFICIENT,
         "regularization_grid": list(REGULARIZATION_GRID),
         "gates": {
@@ -375,14 +444,14 @@ def train_market_residual_v2(
         train_rows = [r for r in clean if train_start <= r.date_ymd <= train_end]
         test_rows = [r for r in clean if test_start <= r.date_ymd < test_end]
 
-        fit, reason = _fit_residual_fold(train_rows, fold["fold_index"])
+        fit, reason = _fit_residual_fold(train_rows, fold["fold_index"], active_features)
         if fit is None:
             insufficient_reasons.append(reason or f"fold_{fold['fold_index']}_unfit")
             fold_fits.append({"fold_index": fold["fold_index"], "status": "insufficient", "reason": reason})
             fold_metrics.append({"fold_index": fold["fold_index"], "status": "insufficient"})
             continue
 
-        probs, valid = _predict_residual_fold(fit, test_rows)
+        probs, valid = _predict_residual_fold(fit, test_rows, active_features)
         fold_probs = [p for p, v in zip(probs, valid) if v]
         fold_labels = [1 if r.home_won else 0 for r, v in zip(test_rows, valid) if v]
         fold_market_probs = [float(r.market_no_vig_home_prob) for r, v in zip(test_rows, valid) if v]
@@ -436,7 +505,7 @@ def train_market_residual_v2(
     holdout_start = holdout_folds[0]["start_date"] if holdout_folds else None
     pre_holdout = [r for r in clean if (r.date_ymd < holdout_start if holdout_start else True)]
 
-    final_fit, final_reason = _fit_residual_fold(pre_holdout, fold_index=-1)
+    final_fit, final_reason = _fit_residual_fold(pre_holdout, fold_index=-1, feature_names=active_features)
     if final_fit is None:
         return _insufficient(base, ["final_refit_failed", final_reason or "final_refit_unknown"])
 
@@ -444,8 +513,8 @@ def train_market_residual_v2(
         "artifact_manifest_version": ARTIFACT_MANIFEST_VERSION,
         "model_id": MARKET_RESIDUAL_V2_MODEL_ID,
         "model_impl_version": MARKET_RESIDUAL_V2_IMPL_VERSION,
-        "feature_schema_version": MARKET_RESIDUAL_V2_FEATURE_SCHEMA_VERSION,
-        "feature_names": list(FEATURE_NAMES),
+        "feature_schema_version": feature_schema_version,
+        "feature_names": list(active_features),
         "coefficients": final_fit.coefficients,
         "intercept": final_fit.intercept,
         "imputation": final_fit.imputation,

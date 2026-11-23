@@ -24,11 +24,18 @@ import {
   LEARNED_V2_LOGISTIC_IMPL_VERSION,
   MARKET_RESIDUAL_V2_MODEL_ID,
   MARKET_RESIDUAL_V2_IMPL_VERSION,
+  MARKET_RESIDUAL_GBDT_V2_MODEL_ID,
+  MARKET_RESIDUAL_GBDT_V2_IMPL_VERSION,
   DEFAULT_MODEL_VERSION,
   DEFAULT_SHADOW_MODE,
   MODEL_ARTIFACTS_DIR
 } from './model_ids.js';
-import { buildFeatureVector, flattenFeatureVector } from './feature_vector.js';
+import {
+  buildFeatureVector,
+  buildFeatureVectorV2,
+  flattenFeatureVector,
+  FEATURE_VECTOR_V2_SCHEMA_VERSION
+} from './feature_vector.js';
 import {
   verifyLearnedV2Artifact,
   scoreLearnedV2Logistic,
@@ -39,6 +46,11 @@ import {
   scoreMarketResidualV2,
   MARKET_RESIDUAL_V2_FEATURE_SCHEMA_VERSION
 } from './market_residual_v2.js';
+import {
+  verifyMarketResidualGbdtV2Artifact,
+  scoreMarketResidualGbdtV2,
+  MARKET_RESIDUAL_GBDT_V2_FEATURE_SCHEMA_VERSION
+} from './market_residual_gbdt_v2.js';
 import { noVigMarketProbabilities } from '../market_residual.js';
 
 /**
@@ -47,8 +59,9 @@ import { noVigMarketProbabilities } from '../market_residual.js';
 export function readModelRegistryConfig() {
   const modelVersion = process.env.MLB_MODEL_VERSION || DEFAULT_MODEL_VERSION;
   const shadowMode = parseBool(process.env.MLB_SHADOW_MODE, DEFAULT_SHADOW_MODE);
+  const shadowGbdt = parseBool(process.env.MLB_SHADOW_GBDT, false);
   const artifactsDir = process.env.MLB_MODEL_ARTIFACTS_DIR || MODEL_ARTIFACTS_DIR;
-  return { modelVersion, shadowMode, artifactsDir };
+  return { modelVersion, shadowMode, shadowGbdt, artifactsDir };
 }
 
 function parseBool(value, fallback) {
@@ -65,6 +78,9 @@ function verifyArtifactForModel(modelId, artifact) {
   }
   if (modelId === MARKET_RESIDUAL_V2_MODEL_ID) {
     return verifyMarketResidualV2Artifact(artifact);
+  }
+  if (modelId === MARKET_RESIDUAL_GBDT_V2_MODEL_ID) {
+    return verifyMarketResidualGbdtV2Artifact(artifact);
   }
   return { ok: false, reasons: ['unknown_challenger_model_id'] };
 }
@@ -128,7 +144,7 @@ function fileMtime(path) {
  *   recordModelPrediction payload or null with a reason string.
  */
 export function scoreShadowChallengers(prediction, options = {}) {
-  const { shadowMode, artifactsDir: configuredDir } = readModelRegistryConfig();
+  const { shadowMode, shadowGbdt, artifactsDir: configuredDir } = readModelRegistryConfig();
   const artifactsDir = options.artifactsDir || configuredDir;
 
   const results = [];
@@ -145,8 +161,9 @@ export function scoreShadowChallengers(prediction, options = {}) {
     }));
   }
 
-  // Build the frozen flattened feature vector ONCE from the same frozen inputs.
+  // Build the frozen flattened feature vectors ONCE from the same frozen inputs.
   let flatVector = null;
+  let flatVectorV2 = null;
   try {
     flatVector = flattenFeatureVector(buildFeatureVector(coreInputs));
   } catch (e) {
@@ -156,12 +173,32 @@ export function scoreShadowChallengers(prediction, options = {}) {
       reason: `feature_vector_build_failed: ${e?.message || e}`
     }));
   }
+  try {
+    flatVectorV2 = flattenFeatureVector(
+      buildFeatureVectorV2(coreInputs, {
+        asOfUtc: prediction.asOfUtc || null,
+        firstPitchUtc: prediction.startTime || null
+      })
+    );
+  } catch {
+    flatVectorV2 = null;
+  }
 
   // --- learned_v2_logistic ---
   results.push(scoreLearnedV2Shadow(prediction, flatVector, artifactsDir));
 
-  // --- market_residual_v2 ---
-  results.push(scoreMarketResidualV2Shadow(prediction, flatVector, artifactsDir));
+  // --- market_residual_v2 (supports v1.0 or v2.0 feature schemas) ---
+  results.push(scoreMarketResidualV2Shadow(prediction, flatVector, flatVectorV2, artifactsDir));
+
+  // --- market_residual_gbdt_v2 (shallow monotone GBDT + market offset) ---
+  // Evaluated whenever a compatible GBDT artifact exists in artifactsDir OR
+  // explicitly opted-in via options.includeGbdt / MLB_SHADOW_GBDT=true.
+  const gbdtLoaded = loadChallengerArtifact(MARKET_RESIDUAL_GBDT_V2_MODEL_ID, artifactsDir);
+  if (gbdtLoaded || options.includeGbdt === true || shadowGbdt) {
+    results.push(
+      scoreMarketResidualGbdtV2Shadow(prediction, flatVector, flatVectorV2, artifactsDir, gbdtLoaded)
+    );
+  }
 
   return results;
 }
@@ -197,10 +234,21 @@ function scoreLearnedV2Shadow(prediction, flatVector, artifactsDir) {
  * market pair available to this run; missing/stale/unpaired market produces no
  * residual prediction (unavailable), never a default probability.
  */
-function scoreMarketResidualV2Shadow(prediction, flatVector, artifactsDir) {
+function scoreMarketResidualV2Shadow(prediction, flatVector, flatVectorV2, artifactsDir) {
   const loaded = loadChallengerArtifact(MARKET_RESIDUAL_V2_MODEL_ID, artifactsDir);
   if (!loaded) {
     return { modelId: MARKET_RESIDUAL_V2_MODEL_ID, entry: null, reason: 'no_compatible_artifact' };
+  }
+  const activeVector =
+    loaded.artifact.feature_schema_version === FEATURE_VECTOR_V2_SCHEMA_VERSION
+      ? flatVectorV2
+      : flatVector;
+  if (!activeVector) {
+    return {
+      modelId: MARKET_RESIDUAL_V2_MODEL_ID,
+      entry: null,
+      reason: 'feature_vector_v2_unavailable'
+    };
   }
   // Resolve the same-book no-vig home probability from the run's frozen odds.
   const marketNoVigHome = resolveSameBookNoVigHomeProb(prediction);
@@ -211,7 +259,7 @@ function scoreMarketResidualV2Shadow(prediction, flatVector, artifactsDir) {
       reason: 'no_same_book_market_pair'
     };
   }
-  const scored = scoreMarketResidualV2(loaded.artifact, flatVector, marketNoVigHome);
+  const scored = scoreMarketResidualV2(loaded.artifact, activeVector, marketNoVigHome);
   if (!scored.available) {
     return {
       modelId: MARKET_RESIDUAL_V2_MODEL_ID,
@@ -222,6 +270,55 @@ function scoreMarketResidualV2Shadow(prediction, flatVector, artifactsDir) {
   return {
     modelId: MARKET_RESIDUAL_V2_MODEL_ID,
     entry: buildMarketResidualV2Entry(prediction, loaded.artifact, scored),
+    reason: null
+  };
+}
+
+function scoreMarketResidualGbdtV2Shadow(
+  prediction,
+  flatVector,
+  flatVectorV2,
+  artifactsDir,
+  preloaded = null
+) {
+  const loaded = preloaded || loadChallengerArtifact(MARKET_RESIDUAL_GBDT_V2_MODEL_ID, artifactsDir);
+  if (!loaded) {
+    return {
+      modelId: MARKET_RESIDUAL_GBDT_V2_MODEL_ID,
+      entry: null,
+      reason: 'no_compatible_artifact'
+    };
+  }
+  const activeVector =
+    loaded.artifact.feature_schema_version === FEATURE_VECTOR_V2_SCHEMA_VERSION
+      ? flatVectorV2
+      : flatVector;
+  if (!activeVector) {
+    return {
+      modelId: MARKET_RESIDUAL_GBDT_V2_MODEL_ID,
+      entry: null,
+      reason: 'feature_vector_v2_unavailable'
+    };
+  }
+  const marketNoVigHome = resolveSameBookNoVigHomeProb(prediction);
+  if (marketNoVigHome == null) {
+    return {
+      modelId: MARKET_RESIDUAL_GBDT_V2_MODEL_ID,
+      entry: null,
+      reason: 'no_same_book_market_pair'
+    };
+  }
+  const scored = scoreMarketResidualGbdtV2(loaded.artifact, activeVector, marketNoVigHome);
+  if (!scored.available) {
+    return {
+      modelId: MARKET_RESIDUAL_GBDT_V2_MODEL_ID,
+      entry: null,
+      reason: `unavailable: ${scored.reasons.join(';')}`
+    };
+  }
+  return {
+    modelId: MARKET_RESIDUAL_GBDT_V2_MODEL_ID,
+    entry: buildMarketResidualGbdtV2Entry(prediction, loaded.artifact, scored),
     reason: null
   };
 }
@@ -283,7 +380,7 @@ function buildMarketResidualV2Entry(prediction, artifact, scored) {
     dateYmd: prediction.dateYmd || null,
     modelId: MARKET_RESIDUAL_V2_MODEL_ID,
     modelImplVersion: MARKET_RESIDUAL_V2_IMPL_VERSION,
-    featureSchemaVersion: MARKET_RESIDUAL_V2_FEATURE_SCHEMA_VERSION,
+    featureSchemaVersion: artifact.feature_schema_version || MARKET_RESIDUAL_V2_FEATURE_SCHEMA_VERSION,
     modelArtifactHash: artifact.artifact_hash || null,
     calibrationArtifactHash: null,
     calibrationStatus: 'identity',
@@ -318,6 +415,66 @@ function buildMarketResidualV2Entry(prediction, artifact, scored) {
       residualLogit: scored.residualLogit,
       marketNoVigHomeProb: scored.marketNoVigProbability,
       marketOffsetCoefficient: 1.0
+    }
+  };
+}
+
+/**
+ * Build a recordModelPrediction entry for the market_residual_gbdt_v2 challenger.
+ */
+function buildMarketResidualGbdtV2Entry(prediction, artifact, scored) {
+  const homeProb = scored.homeProbability;
+  const awayProb = scored.awayProbability;
+  const pickSide = homeProb >= awayProb ? 'home' : 'away';
+  const pickTeamId =
+    pickSide === 'home'
+      ? String(prediction.home?.id ?? '')
+      : String(prediction.away?.id ?? '');
+  return {
+    runId: prediction.runId,
+    gamePk: prediction.gamePk,
+    dateYmd: prediction.dateYmd || null,
+    modelId: MARKET_RESIDUAL_GBDT_V2_MODEL_ID,
+    modelImplVersion: MARKET_RESIDUAL_GBDT_V2_IMPL_VERSION,
+    featureSchemaVersion:
+      artifact.feature_schema_version || MARKET_RESIDUAL_GBDT_V2_FEATURE_SCHEMA_VERSION,
+    modelArtifactHash: artifact.artifact_hash || null,
+    calibrationArtifactHash: null,
+    calibrationStatus: 'identity',
+    rawHomeProbability: homeProb,
+    rawAwayProbability: awayProb,
+    calibratedHomeProbability: null,
+    calibratedAwayProbability: null,
+    finalHomeProbability: homeProb,
+    finalAwayProbability: awayProb,
+    residualLogit: scored.residualLogit,
+    displayHomeProbability: null, // never overwrites control display
+    displayAwayProbability: null,
+    pickSide,
+    pickTeamId,
+    pickProbability: pickSide === 'home' ? homeProb : awayProb,
+    status: 'SHADOW',
+    reasonCodes: JSON.stringify({ source: 'market_residual_gbdt_v2_shadow' }),
+    pairedQuotePairId: null,
+    marketNoVigHomeProb: scored.marketNoVigProbability,
+    marketNoVigAwayProb:
+      scored.marketNoVigProbability != null ? 1 - scored.marketNoVigProbability : null,
+    asOfUtc: prediction.asOfUtc || null,
+    firstPitchUtc: prediction.startTime || null,
+    informationState: prediction.informationState || null,
+    promotionEligible: false, // shadow rows are never promotion-eligible
+    promotionReasons: JSON.stringify({ shadow: true, model: MARKET_RESIDUAL_GBDT_V2_MODEL_ID }),
+    modelVersion: `market-residual-gbdt-v2-${(artifact.artifact_hash || '').slice(0, 12)}`,
+    featureVersion: prediction.featureVersion || null,
+    calibrationVersion: 'identity',
+    snapshotHash: prediction.snapshotHash || null,
+    payload: {
+      marketLogit: scored.marketLogit,
+      residualLogit: scored.residualLogit,
+      marketNoVigHomeProb: scored.marketNoVigProbability,
+      marketOffsetCoefficient: 1.0,
+      treesEvaluated: scored.treesEvaluated,
+      maxDepth: artifact.max_depth
     }
   };
 }

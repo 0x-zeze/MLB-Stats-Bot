@@ -8,6 +8,8 @@ export const LEARNED_V2_LOGISTIC_MODEL_ID = 'learned_v2_logistic';
 export const LEARNED_V2_LOGISTIC_IMPL_VERSION = 'learned-v2-logistic-v1.0';
 export const MARKET_RESIDUAL_V2_MODEL_ID = 'market_residual_v2';
 export const MARKET_RESIDUAL_V2_IMPL_VERSION = 'market-residual-v2-v1.0';
+export const MARKET_RESIDUAL_GBDT_V2_MODEL_ID = 'market_residual_gbdt_v2';
+export const MARKET_RESIDUAL_GBDT_V2_IMPL_VERSION = 'market-residual-gbdt-v2-v1.0';
 
 // Shadow model orchestration. Defaults preserve control behavior.
 export const DEFAULT_MODEL_VERSION = HEURISTIC_V1_MODEL_ID;

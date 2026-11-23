@@ -17,6 +17,10 @@ import { createHash } from 'node:crypto';
 import { MARKET_RESIDUAL_V2_MODEL_ID, MARKET_RESIDUAL_V2_IMPL_VERSION } from './model_ids.js';
 
 export const MARKET_RESIDUAL_V2_FEATURE_SCHEMA_VERSION = 'mlb-feature-vector-v1.0';
+export const MARKET_RESIDUAL_V2_SUPPORTED_SCHEMAS = [
+  'mlb-feature-vector-v1.0',
+  'mlb-feature-vector-v2.0'
+];
 export const MARKET_RESIDUAL_V2_ARTIFACT_MANIFEST_VERSION = 'market-residual-v2-artifact-v1';
 export const MARKET_OFFSET_COEFFICIENT = 1.0;
 
@@ -34,7 +38,7 @@ export function verifyMarketResidualV2Artifact(artifact) {
   if (artifact.model_impl_version !== MARKET_RESIDUAL_V2_IMPL_VERSION) {
     reasons.push(`impl_version_mismatch (got ${artifact.model_impl_version})`);
   }
-  if (artifact.feature_schema_version !== MARKET_RESIDUAL_V2_FEATURE_SCHEMA_VERSION) {
+  if (!MARKET_RESIDUAL_V2_SUPPORTED_SCHEMAS.includes(artifact.feature_schema_version)) {
     reasons.push(`feature_schema_mismatch (got ${artifact.feature_schema_version})`);
   }
   if (artifact.artifact_manifest_version !== MARKET_RESIDUAL_V2_ARTIFACT_MANIFEST_VERSION) {

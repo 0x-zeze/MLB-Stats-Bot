@@ -135,7 +135,7 @@ def recommend(
     # evidence (missing market_holdout or missing brier on either side) is not
     # promotable — absence of evidence is UNKNOWN, not PASS.
     market_incremental = True
-    if challenger_model_id == "market_residual_v2":
+    if challenger_model_id in ("market_residual_v2", "market_residual_gbdt_v2"):
         mkt_brier = market_holdout.get("brier") if market_holdout is not None else None
         if mkt_brier is None or chal_brier is None:
             market_incremental = False
@@ -175,6 +175,8 @@ def recommend(
 
     if challenger_model_id == "market_residual_v2":
         return _result("PROMOTE MARKET RESIDUAL V2", reasons + ["human_approved"])
+    if challenger_model_id == "market_residual_gbdt_v2":
+        return _result("PROMOTE MARKET RESIDUAL GBDT V2", reasons + ["human_approved"])
     return _result("PROMOTE LEARNED V2", reasons + ["human_approved"])
 
 

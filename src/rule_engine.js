@@ -365,20 +365,50 @@ export const JS_HANDLERS = {
   }
 };
 
+// Resolve the active rule profile ('default' unless explicitly set via ctx or
+// MLB_RULE_PROFILE env). Unknown profiles safely fall back to 'default'.
+export function resolveRuleProfile(ctx = {}) {
+  const requested = ctx?.ruleProfile || process.env.MLB_RULE_PROFILE || 'default';
+  const catalog = loadMoneylineRules();
+  const profiles = catalog.profiles || {};
+  return Object.prototype.hasOwnProperty.call(profiles, requested) ? requested : 'default';
+}
+
+// Return the list of rule IDs retired under a given profile.
+export function listRetiredRulesForProfile(profileName = 'default') {
+  const catalog = loadMoneylineRules();
+  const profile = catalog.profiles?.[profileName];
+  return Array.isArray(profile?.retired_rule_ids) ? [...profile.retired_rule_ids] : [];
+}
+
 // Evaluate all JS-scoped rules against ctx and return the deduped, ordered list
 // of fired reason strings. Mirrors the old valueSafetyReasons() return value.
 // Does NOT short-circuit — collects every fired reason (the NO BET/VALUE label
 // is applied by the host in applyMoneylineValueMarket).
 export function evaluateMoneyline(ctx) {
+  const activeProfile = resolveRuleProfile(ctx);
+  const retiredIds = new Set(listRetiredRulesForProfile(activeProfile));
+  // When js.disagreement_away is retired by the active profile (e.g.
+  // simplified_challenger), neutralize disagreementAwayBypass so it cannot
+  // silently bypass structural edge/EV/conviction floors.
+  const effectiveCtx =
+    retiredIds.has('js.disagreement_away') && ctx?.disagreementAwayBypass
+      ? { ...ctx, disagreementAwayBypass: false }
+      : ctx;
   const rules = loadMoneylineRules().rules
-    .filter((rule) => rule.engines.includes('js') && rule.enabled !== false)
+    .filter(
+      (rule) =>
+        rule.engines.includes('js') &&
+        rule.enabled !== false &&
+        !retiredIds.has(rule.id)
+    )
     .sort((a, b) => a.order - b.order);
 
   const reasons = [];
   for (const rule of rules) {
     const handler = JS_HANDLERS[rule.handler];
     if (!handler) throw new Error(`No JS handler registered for rule ${rule.id} (handler: ${rule.handler})`);
-    const result = handler(ctx, rule.params || {});
+    const result = handler(effectiveCtx, rule.params || {});
     if (result?.fired) reasons.push(renderMessage(rule.message, result.tokens, result.override));
   }
   return [...new Set(reasons)];

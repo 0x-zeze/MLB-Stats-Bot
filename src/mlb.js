@@ -16,7 +16,11 @@ import {
   hasCalibrationMap
 } from './calibration.js';
 import { loadConfig } from './config.js';
-import { evaluateMoneyline } from './rule_engine.js';
+import {
+  evaluateMoneyline,
+  listRetiredRulesForProfile,
+  resolveRuleProfile
+} from './rule_engine.js';
 import {
   ageMinutes as temporalAgeMinutes,
   assertPregameEligible,
@@ -785,10 +789,14 @@ function moneylineOddsFreshnessReason(item, now = Date.now()) {
 function valueSafetyReasons(item, option, evolutionControls = loadEvolutionControls()) {
   if (!option) return ['odds moneyline belum tersedia'];
   const pickedTeamRecord = option.side === 'home' ? item.home?.record : item.away?.record;
+  const configuredProfile = loadConfig().ruleProfile;
+  const activeProfile = resolveRuleProfile({ ruleProfile: configuredProfile });
+  const disagreementRetired = listRetiredRulesForProfile(activeProfile).includes('js.disagreement_away');
   const ctx = {
     item,
     option,
     evolutionControls,
+    ruleProfile: activeProfile,
     edgeThreshold: moneylineValueEdgeThreshold(),
     evThreshold: moneylineValueEvThreshold(),
     oddsFreshnessReason: moneylineOddsFreshnessReason(item),
@@ -796,9 +804,10 @@ function valueSafetyReasons(item, option, evolutionControls = loadEvolutionContr
     pickedTeamWinPct: leagueRecordPct(pickedTeamRecord),
     getEvolutionRule,
     // Disagreement bypass: when model picks away but market favors home, this is
-    // the validated asymmetric edge (scripts/model_edge_validation.py). The host
-    // uses this flag to relax edge/conviction floors for this specific case.
+    // the validated asymmetric edge (scripts/model_edge_validation.py). Disabled
+    // automatically when js.disagreement_away is retired by the active rule profile.
     disagreementAwayBypass: (() => {
+      if (disagreementRetired) return false;
       if (option.side !== 'away') return false;
       const modelHomeProb = pureModelProbabilityForSide(item, 'home');
       const modelAwayProb = 100 - modelHomeProb;

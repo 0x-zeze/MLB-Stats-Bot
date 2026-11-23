@@ -30,6 +30,7 @@ from typing import Any
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 
+from src.core.feature_vector_py import _js_number_to_string
 from src.dataset.build_game_dataset import build_game_dataset, build_folds, DatasetRow
 from src.eval.metrics import model_metrics
 
@@ -336,12 +337,8 @@ def _stable_stringify(value: Any) -> str:
     """
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        if value.is_integer():
-            return str(int(value))
-        return json.dumps(value)
+    if isinstance(value, (int, float)):
+        return _js_number_to_string(value)
     if value is None or not isinstance(value, (dict, list)):
         return json.dumps(value)
     if isinstance(value, list):

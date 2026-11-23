@@ -110,6 +110,13 @@ export function loadConfig() {
     // blending; positive values borrow a small amount of no-vig market signal
     // while keeping the model's own pick/winner intact.
     moneylineMarketResidualWeight: numberFromEnv(process.env.MONEYLINE_MARKET_RESIDUAL_WEIGHT, 0),
+    // Shadow model tournament & challenger orchestration (defaults preserve control).
+    modelVersion: process.env.MLB_MODEL_VERSION || 'heuristic_v1',
+    shadowMode: boolFromEnv(process.env.MLB_SHADOW_MODE, false),
+    shadowGbdt: boolFromEnv(process.env.MLB_SHADOW_GBDT, false),
+    modelArtifactsDir: process.env.MLB_MODEL_ARTIFACTS_DIR || 'data/models',
+    // Declarative hard-rule profile ('default' or gated 'simplified_challenger').
+    ruleProfile: process.env.MLB_RULE_PROFILE || 'default',
     news: {
       enabled: boolFromEnv(process.env.NEWS_ENABLED, false),
       feeds: process.env.NEWS_FEEDS_JSON || '',
