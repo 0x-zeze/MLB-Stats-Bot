@@ -1,14 +1,21 @@
-"""Isotonic regression calibrator for model probabilities.
+"""Probability calibrator for model probabilities (Isotonic, Platt, Beta-Logit).
 
 Maps raw model probabilities to calibrated probabilities using historical
-prediction outcomes, per active market (moneyline). Uses
-piecewise-linear interpolation from binned averages (no sklearn dependency).
+prediction outcomes, per active market (moneyline). Supports:
+  - Piecewise-linear PAV isotonic regression (legacy default)
+  - Platt scaling in logit space: sigmoid(a * logit(p) + b), a > 0
+  - Beta-Logit calibration (Kull et al., 2017):
+    sigmoid(a * ln(p) - b * ln(1 - p) + c), a >= 0, b >= 0, a + b > 0
+
+All parametric methods are pure-Python (L2-regularized Newton-Raphson toward
+identity) and share bit-exact formulas with src/calibration.js.
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import math
 import sqlite3
 from bisect import bisect_left
 from pathlib import Path
@@ -44,15 +51,503 @@ _MIN_ISOTONIC_SAMPLES_FOR_TRUST = {
     "moneyline": 150,  # isotonic overfits below this; use shrinkage instead
 }
 
+_MIN_PARAMETRIC_SAMPLES_FOR_TRUST = {
+    "moneyline": 60,  # 2-3 parameter logit calibrators need far fewer samples
+}
+
 _SHRINKAGE_FACTOR = {
     "moneyline": 0.5,  # pull raw probability 50% of the way toward 0.5
 }
 
-_cached_maps: dict[str, list[tuple[float, float]]] | None = None
-_cached_disk_maps: dict[str, list[tuple[float, float]]] | None = None
+_PROB_EPS = 1e-6
+
+_cached_maps: dict[str, Any] | None = None
+_cached_disk_maps: dict[str, Any] | None = None
 _cached_maps_path: Path | None = None
 _cached_meta: dict[str, Any] | None = None
 _cached_meta_path: Path | None = None
+
+
+def _logit(p: float) -> float:
+    c = min(max(float(p), _PROB_EPS), 1.0 - _PROB_EPS)
+    return math.log(c / (1.0 - c))
+
+
+def _sigmoid(z: float) -> float:
+    if z >= 35.0:
+        return 1.0
+    if z <= -35.0:
+        return 0.0
+    return 1.0 / (1.0 + math.exp(-z))
+
+
+def validate_parametric_calibrator(params: Any) -> tuple[bool, str | None]:
+    """Validate a parametric calibration object (platt or beta_logit)."""
+    if not isinstance(params, dict):
+        return False, "not_dict"
+    method = str(params.get("method", "")).strip().lower()
+    if method == "identity":
+        return True, None
+    if method == "platt":
+        a = safe_float(params.get("a"), None)
+        b = safe_float(params.get("b"), None)
+        if a is None or b is None or not (math.isfinite(a) and math.isfinite(b)):
+            return False, "nonfinite_platt_params"
+        if a <= 0.0:
+            return False, "nonpositive_platt_slope"
+        return True, None
+    if method == "beta_logit":
+        a = safe_float(params.get("a"), None)
+        b = safe_float(params.get("b"), None)
+        c = safe_float(params.get("c"), None)
+        if (
+            a is None
+            or b is None
+            or c is None
+            or not (math.isfinite(a) and math.isfinite(b) and math.isfinite(c))
+        ):
+            return False, "nonfinite_beta_logit_params"
+        if a < 0.0 or b < 0.0 or (a + b) <= 0.0:
+            return False, "nonmonotonic_beta_logit_params"
+        return True, None
+    return False, f"unknown_method:{method}"
+
+
+def apply_parametric_calibrator(params: dict[str, Any], raw_probability: float) -> float:
+    """Apply a validated Platt or Beta-Logit calibrator in logit space.
+
+    Mirrors applyParametricCalibration in src/calibration.js bit-for-bit.
+    """
+    valid, _reason = validate_parametric_calibrator(params)
+    if not valid:
+        return clamp(float(raw_probability), 0.05, 0.95)
+    method = str(params.get("method", "")).strip().lower()
+    p = min(max(float(raw_probability), _PROB_EPS), 1.0 - _PROB_EPS)
+    if method == "identity":
+        return clamp(p, 0.05, 0.95)
+    if method == "platt":
+        z = float(params["a"]) * math.log(p / (1.0 - p)) + float(params["b"])
+        return clamp(_sigmoid(z), 0.05, 0.95)
+    if method == "beta_logit":
+        z = float(params["a"]) * math.log(p) - float(params["b"]) * math.log(1.0 - p) + float(params["c"])
+        return clamp(_sigmoid(z), 0.05, 0.95)
+    return clamp(p, 0.05, 0.95)
+
+
+def _solve_linear_3x3(A: list[list[float]], b: list[float]) -> list[float] | None:
+    """Gaussian elimination with partial pivoting for small (2x2 or 3x3) systems."""
+    m = len(b)
+    M = [row[:] + [b[i]] for i, row in enumerate(A)]
+    for col in range(m):
+        pivot = max(range(col, m), key=lambda r: abs(M[r][col]))
+        if abs(M[pivot][col]) < 1e-12:
+            return None
+        M[col], M[pivot] = M[pivot], M[col]
+        piv_val = M[col][col]
+        for j in range(col, m + 1):
+            M[col][j] /= piv_val
+        for r in range(m):
+            if r == col:
+                continue
+            factor = M[r][col]
+            for j in range(col, m + 1):
+                M[r][j] -= factor * M[col][j]
+    return [M[i][m] for i in range(m)]
+
+
+def fit_platt_calibrator(
+    rows: list[tuple[float, float]],
+    *,
+    l2: float = 2.0,
+    min_samples: int = 30,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Fit monotone Platt scaling sigmoid(a * logit(p) + b) with L2 prior toward identity (1, 0)."""
+    clean: list[tuple[float, float]] = []
+    for prob, outcome in rows:
+        p = safe_float(prob, None)
+        y = safe_float(outcome, None)
+        if p is None or y is None or not (math.isfinite(p) and math.isfinite(y)):
+            continue
+        if p > 1.0:
+            p /= 100.0
+        clean.append((min(max(p, _PROB_EPS), 1.0 - _PROB_EPS), 1.0 if y >= 0.5 else 0.0))
+
+    n = len(clean)
+    if n < min_samples:
+        return None, {
+            "status": "skipped",
+            "method": "platt",
+            "reason": f"only {n} samples (need {min_samples})",
+            "samples": n,
+        }
+    pos = sum(1 for _, y in clean if y >= 0.5)
+    neg = n - pos
+    if pos < 5 or neg < 5:
+        return None, {
+            "status": "skipped",
+            "method": "platt",
+            "reason": f"insufficient class balance (pos={pos}, neg={neg})",
+            "samples": n,
+        }
+
+    xs = [math.log(p / (1.0 - p)) for p, _ in clean]
+    ys = [y for _, y in clean]
+    reg = max(1e-4, float(l2)) / float(n)
+
+    def loss(a: float, b: float) -> float:
+        total = 0.0
+        for x, y in zip(xs, ys):
+            z = a * x + b
+            # Numerically stable binary cross-entropy: log(1 + exp(z)) - y*z
+            if z >= 0.0:
+                total += z + math.log1p(math.exp(-z)) - y * z
+            else:
+                total += math.log1p(math.exp(z)) - y * z
+        return total / n + 0.5 * reg * ((a - 1.0) ** 2 + b ** 2)
+
+    a, b = 1.0, 0.0
+    cur_loss = loss(a, b)
+    for _ in range(50):
+        ga = reg * (a - 1.0)
+        gb = reg * b
+        haa = reg
+        hab = 0.0
+        hbb = reg
+        inv_n = 1.0 / n
+        for x, y in zip(xs, ys):
+            phat = _sigmoid(a * x + b)
+            diff = phat - y
+            w = max(1e-9, phat * (1.0 - phat))
+            ga += diff * x * inv_n
+            gb += diff * inv_n
+            haa += w * x * x * inv_n
+            hab += w * x * inv_n
+            hbb += w * inv_n
+        step = _solve_linear_3x3([[haa, hab], [hab, hbb]], [-ga, -gb])
+        if step is None:
+            break
+        da, db = step
+        if max(abs(da), abs(db)) < 1e-9:
+            break
+        alpha = 1.0
+        while alpha >= 1e-4:
+            na, nb = a + alpha * da, b + alpha * db
+            nl = loss(na, nb)
+            if nl <= cur_loss + 1e-12:
+                a, b, cur_loss = na, nb, nl
+                break
+            alpha *= 0.5
+        else:
+            break
+
+    if not (math.isfinite(a) and math.isfinite(b)) or a <= 0.0:
+        return None, {
+            "status": "skipped",
+            "method": "platt",
+            "reason": f"nonpositive_or_nonfinite_slope (a={a})",
+            "samples": n,
+        }
+
+    params = {"method": "platt", "a": round(a, 6), "b": round(b, 6)}
+    return params, {
+        "status": "success",
+        "method": "platt",
+        "samples": n,
+        "params": params,
+    }
+
+
+def _fit_beta_logit_subset(
+    us: list[float],
+    vs: list[float],
+    ys: list[float],
+    reg: float,
+    sym_reg: float,
+    fix_a_zero: bool = False,
+    fix_b_zero: bool = False,
+) -> tuple[float, float, float, float]:
+    """Minimize regularized Beta-Logit NLL with optional zero-clamping on a or b."""
+    n = len(ys)
+    inv_n = 1.0 / n
+
+    def loss(a: float, b: float, c: float) -> float:
+        total = 0.0
+        for u, v, y in zip(us, vs, ys):
+            z = a * u + b * v + c
+            if z >= 0.0:
+                total += z + math.log1p(math.exp(-z)) - y * z
+            else:
+                total += math.log1p(math.exp(z)) - y * z
+        return (
+            total * inv_n
+            + 0.5 * reg * ((a - 1.0) ** 2 + (b - 1.0) ** 2 + c ** 2)
+            + 0.5 * sym_reg * ((a - b) ** 2)
+        )
+
+    a = 0.0 if fix_a_zero else 1.0
+    b = 0.0 if fix_b_zero else 1.0
+    c = 0.0
+    cur_loss = loss(a, b, c)
+
+    free_idx = [i for i, fixed in enumerate((fix_a_zero, fix_b_zero, False)) if not fixed]
+    for _ in range(60):
+        ga = reg * (a - 1.0) + sym_reg * (a - b)
+        gb = reg * (b - 1.0) - sym_reg * (a - b)
+        gc = reg * c
+        H = [
+            [reg + sym_reg, -sym_reg, 0.0],
+            [-sym_reg, reg + sym_reg, 0.0],
+            [0.0, 0.0, reg],
+        ]
+        for u, v, y in zip(us, vs, ys):
+            phat = _sigmoid(a * u + b * v + c)
+            diff = phat - y
+            w = max(1e-9, phat * (1.0 - phat))
+            ga += diff * u * inv_n
+            gb += diff * v * inv_n
+            gc += diff * inv_n
+            H[0][0] += w * u * u * inv_n
+            H[0][1] += w * u * v * inv_n
+            H[0][2] += w * u * inv_n
+            H[1][0] += w * u * v * inv_n
+            H[1][1] += w * v * v * inv_n
+            H[1][2] += w * v * inv_n
+            H[2][0] += w * u * inv_n
+            H[2][1] += w * v * inv_n
+            H[2][2] += w * inv_n
+        grad_full = [ga, gb, gc]
+        sub_H = [[H[r][col] for col in free_idx] for r in free_idx]
+        sub_rhs = [-grad_full[r] for r in free_idx]
+        step = _solve_linear_3x3(sub_H, sub_rhs)
+        if step is None:
+            break
+        delta = [0.0, 0.0, 0.0]
+        for idx_pos, var_idx in enumerate(free_idx):
+            delta[var_idx] = step[idx_pos]
+        if max(abs(d) for d in delta) < 1e-9:
+            break
+        alpha = 1.0
+        while alpha >= 1e-4:
+            na = a + alpha * delta[0]
+            nb = b + alpha * delta[1]
+            nc = c + alpha * delta[2]
+            nl = loss(na, nb, nc)
+            if nl <= cur_loss + 1e-12:
+                a, b, c, cur_loss = na, nb, nc, nl
+                break
+            alpha *= 0.5
+        else:
+            break
+
+    return a, b, c, cur_loss
+
+
+def fit_beta_logit_calibrator(
+    rows: list[tuple[float, float]],
+    *,
+    l2: float = 2.0,
+    symmetry_l2: float = 4.0,
+    min_samples: int = 50,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Fit monotone Kull et al. (2017) Beta calibration in logit space:
+        sigmoid(a * ln(p) - b * ln(1 - p) + c),  a >= 0, b >= 0, a + b > 0.
+    Uses active-set Newton-Raphson with L2 prior toward identity (1, 1, 0).
+    """
+    clean: list[tuple[float, float]] = []
+    for prob, outcome in rows:
+        p = safe_float(prob, None)
+        y = safe_float(outcome, None)
+        if p is None or y is None or not (math.isfinite(p) and math.isfinite(y)):
+            continue
+        if p > 1.0:
+            p /= 100.0
+        clean.append((min(max(p, _PROB_EPS), 1.0 - _PROB_EPS), 1.0 if y >= 0.5 else 0.0))
+
+    n = len(clean)
+    if n < min_samples:
+        return None, {
+            "status": "skipped",
+            "method": "beta_logit",
+            "reason": f"only {n} samples (need {min_samples})",
+            "samples": n,
+        }
+    pos = sum(1 for _, y in clean if y >= 0.5)
+    neg = n - pos
+    if pos < 5 or neg < 5:
+        return None, {
+            "status": "skipped",
+            "method": "beta_logit",
+            "reason": f"insufficient class balance (pos={pos}, neg={neg})",
+            "samples": n,
+        }
+
+    us = [math.log(p) for p, _ in clean]
+    vs = [-math.log(1.0 - p) for p, _ in clean]
+    ys = [y for _, y in clean]
+    reg = max(1e-4, float(l2)) / float(n)
+    sym_reg = max(0.0, float(symmetry_l2)) / float(n)
+
+    a, b, c, best_loss = _fit_beta_logit_subset(us, vs, ys, reg, sym_reg)
+    if a < 0.0 or b < 0.0:
+        candidates: list[tuple[float, float, float, float]] = []
+        ca, cb, cc, cl = _fit_beta_logit_subset(us, vs, ys, reg, sym_reg, fix_a_zero=True)
+        if cb > 0.0:
+            candidates.append((ca, cb, cc, cl))
+        da, db, dc, dl = _fit_beta_logit_subset(us, vs, ys, reg, sym_reg, fix_b_zero=True)
+        if da > 0.0:
+            candidates.append((da, db, dc, dl))
+        if not candidates:
+            return None, {
+                "status": "skipped",
+                "method": "beta_logit",
+                "reason": "no_monotonic_beta_logit_solution",
+                "samples": n,
+            }
+        a, b, c, best_loss = min(candidates, key=lambda item: item[3])
+
+    if not (math.isfinite(a) and math.isfinite(b) and math.isfinite(c)) or a < 0.0 or b < 0.0 or (a + b) <= 1e-4:
+        return None, {
+            "status": "skipped",
+            "method": "beta_logit",
+            "reason": f"nonmonotonic_beta_logit_params (a={a}, b={b})",
+            "samples": n,
+        }
+
+    params = {"method": "beta_logit", "a": round(a, 6), "b": round(b, 6), "c": round(c, 6)}
+    return params, {
+        "status": "success",
+        "method": "beta_logit",
+        "samples": n,
+        "params": params,
+    }
+
+
+def evaluate_calibration_metrics(
+    probs: list[float],
+    outcomes: list[float],
+    *,
+    n_bins: int = 10,
+) -> dict[str, Any]:
+    """Compute Brier score, Log-Loss, and Expected Calibration Error (ECE)."""
+    pairs = [
+        (min(max(float(p), _PROB_EPS), 1.0 - _PROB_EPS), 1.0 if float(y) >= 0.5 else 0.0)
+        for p, y in zip(probs, outcomes)
+        if math.isfinite(float(p)) and math.isfinite(float(y))
+    ]
+    n = len(pairs)
+    if n == 0:
+        return {"n": 0, "brier": None, "log_loss": None, "ece": None}
+
+    brier = sum((p - y) ** 2 for p, y in pairs) / n
+    log_loss = -sum(y * math.log(p) + (1.0 - y) * math.log(1.0 - p) for p, y in pairs) / n
+
+    bins: list[list[tuple[float, float]]] = [[] for _ in range(max(2, n_bins))]
+    for p, y in pairs:
+        idx = min(len(bins) - 1, int(p * len(bins)))
+        bins[idx].append((p, y))
+    ece = 0.0
+    for bucket in bins:
+        if not bucket:
+            continue
+        avg_p = sum(p for p, _ in bucket) / len(bucket)
+        avg_y = sum(y for _, y in bucket) / len(bucket)
+        ece += (len(bucket) / n) * abs(avg_p - avg_y)
+
+    return {
+        "n": n,
+        "brier": round(brier, 6),
+        "log_loss": round(log_loss, 6),
+        "ece": round(ece, 6),
+    }
+
+
+def walk_forward_calibration_benchmark(
+    dated_rows: list[tuple[str, float, float]],
+    *,
+    min_train_samples: int = 100,
+    step_size: int = 50,
+) -> dict[str, Any]:
+    """Chronological prequential walk-forward benchmark of calibration methods.
+
+    Each row is (date_str, raw_prob, outcome). Evaluates strictly out-of-fold:
+    block k is calibrated ONLY using rows strictly preceding block k.
+    Compares identity, isotonic, platt, and beta_logit on Brier, Log-Loss, ECE.
+    """
+    ordered = sorted(
+        [
+            (str(d), min(max(float(p) / 100.0 if float(p) > 1.0 else float(p), _PROB_EPS), 1.0 - _PROB_EPS),
+             1.0 if float(y) >= 0.5 else 0.0)
+            for d, p, y in dated_rows
+        ],
+        key=lambda r: r[0],
+    )
+    if len(ordered) <= min_train_samples:
+        return {"status": "insufficient_data", "n_total": len(ordered), "methods": {}}
+
+    # Group rows by calendar date so every train/test split obeys strict
+    # day boundaries: max(train_dates) < min(test_dates) with zero same-day leakage.
+    date_groups: list[tuple[str, list[tuple[float, float]]]] = []
+    for d, p, y in ordered:
+        if not date_groups or date_groups[-1][0] != d:
+            date_groups.append((d, [(p, y)]))
+        else:
+            date_groups[-1][1].append((p, y))
+
+    preds: dict[str, list[float]] = {
+        "identity": [],
+        "isotonic": [],
+        "platt": [],
+        "beta_logit": [],
+    }
+    labels: list[float] = []
+
+    train_pairs: list[tuple[float, float]] = []
+    group_idx = 0
+    while group_idx < len(date_groups) and len(train_pairs) < min_train_samples:
+        train_pairs.extend(date_groups[group_idx][1])
+        group_idx += 1
+
+    if group_idx >= len(date_groups):
+        return {"status": "insufficient_data", "n_total": len(ordered), "methods": {}}
+
+    while group_idx < len(date_groups):
+        test_block: list[tuple[float, float]] = []
+        while group_idx < len(date_groups) and (len(test_block) < max(1, step_size)):
+            test_block.extend(date_groups[group_idx][1])
+            group_idx += 1
+
+        iso_map, _ = _fit_market_map(train_pairs, min_samples=50)
+        platt_params, _ = fit_platt_calibrator(train_pairs, min_samples=30)
+        beta_params, _ = fit_beta_logit_calibrator(train_pairs, min_samples=50)
+
+        for raw_p, y in test_block:
+            labels.append(y)
+            preds["identity"].append(clamp(raw_p, 0.05, 0.95))
+            preds["isotonic"].append(
+                clamp(_interpolate(iso_map, raw_p), 0.05, 0.95) if iso_map else clamp(raw_p, 0.05, 0.95)
+            )
+            preds["platt"].append(
+                apply_parametric_calibrator(platt_params, raw_p) if platt_params else clamp(raw_p, 0.05, 0.95)
+            )
+            preds["beta_logit"].append(
+                apply_parametric_calibrator(beta_params, raw_p) if beta_params else clamp(raw_p, 0.05, 0.95)
+            )
+        train_pairs.extend(test_block)
+
+    metrics_by_method = {
+        method: evaluate_calibration_metrics(p_list, labels)
+        for method, p_list in preds.items()
+    }
+    best_brier = min(metrics_by_method.items(), key=lambda kv: kv[1]["brier"] or 1e9)[0]
+    best_logloss = min(metrics_by_method.items(), key=lambda kv: kv[1]["log_loss"] or 1e9)[0]
+    return {
+        "status": "ok",
+        "n_total": len(ordered),
+        "n_oof_evaluated": len(labels),
+        "best_by_brier": best_brier,
+        "best_by_log_loss": best_logloss,
+        "methods": metrics_by_method,
+    }
 
 
 def _calibration_meta_path() -> Path:
@@ -79,25 +574,40 @@ def _load_calibration_meta() -> dict[str, Any]:
     return meta
 
 
-def _load_calibration_maps() -> dict[str, list[tuple[float, float]]]:
+def _parse_market_calibrator(raw_entry: Any) -> Any:
+    """Accept either legacy isotonic [[x,y],...] or parametric {method, ...}."""
+    if isinstance(raw_entry, dict):
+        valid, _reason = validate_parametric_calibrator(raw_entry)
+        return dict(raw_entry) if valid else None
+    if isinstance(raw_entry, list):
+        return [(float(p[0]), float(p[1])) for p in raw_entry]
+    return None
+
+
+def _load_calibration_maps() -> dict[str, Any]:
     global _cached_maps, _cached_disk_maps, _cached_maps_path
     if _cached_maps is not None:
         if _cached_maps is not _cached_disk_maps or _cached_maps_path == _CALIBRATION_MAPS_PATH:
             return _cached_maps
 
-    maps: dict[str, list[tuple[float, float]]] = {}
+    maps: dict[str, Any] = {}
     # Prefer the per-market file; fall back to the legacy moneyline-only file.
     if _CALIBRATION_MAPS_PATH.exists():
         try:
             raw = json.loads(_CALIBRATION_MAPS_PATH.read_text())
-            for market, pairs in raw.items():
-                maps[market] = [(float(p[0]), float(p[1])) for p in pairs]
+            if isinstance(raw, dict):
+                for market, entry in raw.items():
+                    parsed = _parse_market_calibrator(entry)
+                    if parsed is not None:
+                        maps[market] = parsed
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             maps = {}
     if "moneyline" not in maps and _CALIBRATION_MAP_PATH.exists():
         try:
             raw = json.loads(_CALIBRATION_MAP_PATH.read_text())
-            maps["moneyline"] = [(float(p[0]), float(p[1])) for p in raw]
+            parsed = _parse_market_calibrator(raw)
+            if parsed is not None:
+                maps["moneyline"] = parsed
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             pass
 
@@ -113,8 +623,9 @@ def _shrink_toward_half(raw_probability: float, market: str) -> float:
     return 0.5 + (raw_probability - 0.5) * (1.0 - factor)
 
 
-def _uses_low_sample_shrinkage(market: str) -> bool:
-    threshold = _MIN_ISOTONIC_SAMPLES_FOR_TRUST.get(market)
+def _uses_low_sample_shrinkage(market: str, is_parametric: bool = False) -> bool:
+    thresholds = _MIN_PARAMETRIC_SAMPLES_FOR_TRUST if is_parametric else _MIN_ISOTONIC_SAMPLES_FOR_TRUST
+    threshold = thresholds.get(market)
     if threshold is None or market not in _SHRINKAGE_FACTOR:
         return False
     if _cached_maps is not None and _cached_maps is not _cached_disk_maps:
@@ -153,19 +664,25 @@ def _interpolate(mapping: list[tuple[float, float]], raw: float) -> float:
 def calibrate(raw_probability: float, market: str = "moneyline") -> float:
     """Map a raw model probability to a calibrated probability for a market.
 
-    Falls back to the raw probability when no calibration map exists for the
-    market (e.g. not enough samples yet), so an uncalibrated market is never
-    worse than the model's own estimate.
+    Supports both legacy isotonic piecewise-linear maps and smooth logit-space
+    parametric calibrators (platt, beta_logit). Falls back to the raw probability
+    when no calibrator exists for the market.
     """
     market_key = str(market).strip().lower()
-    if _uses_low_sample_shrinkage(market_key):
-        calibrated = _shrink_toward_half(raw_probability, market_key)
+    entry = _load_calibration_maps().get(market_key)
+    is_parametric = isinstance(entry, dict)
+    if _uses_low_sample_shrinkage(market_key, is_parametric=is_parametric):
+        # Mirror src/calibration.js parametric_low_sample_shrink parity:
+        # shrink parametric output toward 0.5 when a parametric model exists.
+        base = apply_parametric_calibrator(entry, raw_probability) if is_parametric else raw_probability
+        calibrated = _shrink_toward_half(base, market_key)
         return clamp(calibrated, 0.05, 0.95)
 
-    mapping = _load_calibration_maps().get(market_key)
-    if not mapping:
+    if not entry:
         return raw_probability
-    calibrated = _interpolate(mapping, raw_probability)
+    if is_parametric:
+        return apply_parametric_calibrator(entry, raw_probability)
+    calibrated = _interpolate(entry, raw_probability)
     return clamp(calibrated, 0.05, 0.95)
 
 
@@ -382,13 +899,19 @@ def _fit_market_map(
     }
 
 
+def _serialize_calibrator_entry(entry: Any) -> Any:
+    if isinstance(entry, dict):
+        return dict(entry)
+    return [list(p) for p in entry]
+
+
 def _write_calibration_maps(
-    maps: dict[str, list[tuple[float, float]]],
+    maps: dict[str, Any],
     per_market: dict[str, Any],
     *,
     source: str,
 ) -> dict[str, Any]:
-    """Persist per-market maps and keep legacy moneyline map synced."""
+    """Persist per-market maps (isotonic or parametric) and keep legacy moneyline map synced."""
     global _cached_maps, _cached_disk_maps, _cached_maps_path, _cached_meta, _cached_meta_path
 
     calibrated_markets = sorted(maps.keys())
@@ -400,6 +923,7 @@ def _write_calibration_maps(
         "policies": {
             "moneyline": {
                 "min_samples_for_isotonic": _MIN_ISOTONIC_SAMPLES_FOR_TRUST["moneyline"],
+                "min_samples_for_parametric": _MIN_PARAMETRIC_SAMPLES_FOR_TRUST["moneyline"],
                 "low_sample_strategy": "shrink_toward_50",
                 "shrinkage_factor": _SHRINKAGE_FACTOR["moneyline"],
             },
@@ -413,11 +937,11 @@ def _write_calibration_maps(
     _cached_meta_path = meta_path
 
     _CALIBRATION_MAPS_PATH.write_text(
-        json.dumps({m: [list(p) for p in pts] for m, pts in maps.items()}, indent=2)
+        json.dumps({m: _serialize_calibrator_entry(pts) for m, pts in maps.items()}, indent=2)
     )
     if "moneyline" in maps:
         _CALIBRATION_MAP_PATH.write_text(
-            json.dumps([list(p) for p in maps["moneyline"]], indent=2)
+            json.dumps(_serialize_calibrator_entry(maps["moneyline"]), indent=2)
         )
     elif _CALIBRATION_MAP_PATH.exists():
         _CALIBRATION_MAP_PATH.unlink()
@@ -451,28 +975,41 @@ def _fit_all_markets(
     *,
     min_samples: int | None = None,
     market_params: dict[str, dict[str, float]] | None = None,
-) -> tuple[dict[str, list[tuple[float, float]]], dict[str, Any]]:
-    maps: dict[str, list[tuple[float, float]]] = {}
+    method: str = "isotonic",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    maps: dict[str, Any] = {}
     per_market: dict[str, Any] = {}
+    method_key = str(method or "isotonic").strip().lower()
     for market in _MARKETS:
         params = (market_params or _MARKET_PARAMS).get(market, {})
         if market_params is None and min_samples is not None:
             sample_floor = min_samples
         else:
             sample_floor = params.get("min_samples", min_samples if min_samples is not None else _MIN_SAMPLES)
-        calibration_map, info = _fit_market_map(
-            rows_by_market[market],
-            min_samples=int(sample_floor),
-            bucket_size=float(params.get("bucket_size", _BUCKET_SIZE)),
-            min_bin_count=int(params.get("min_bin_count", _MIN_BIN_COUNT)),
-        )
+        if method_key == "platt":
+            calibration_map, info = fit_platt_calibrator(
+                rows_by_market[market],
+                min_samples=int(sample_floor),
+            )
+        elif method_key == "beta_logit":
+            calibration_map, info = fit_beta_logit_calibrator(
+                rows_by_market[market],
+                min_samples=int(sample_floor),
+            )
+        else:
+            calibration_map, info = _fit_market_map(
+                rows_by_market[market],
+                min_samples=int(sample_floor),
+                bucket_size=float(params.get("bucket_size", _BUCKET_SIZE)),
+                min_bin_count=int(params.get("min_bin_count", _MIN_BIN_COUNT)),
+            )
         per_market[market] = info
         if calibration_map is not None:
             maps[market] = calibration_map
     return maps, per_market
 
 
-def retrain() -> dict[str, Any]:
+def retrain(*, method: str = "isotonic") -> dict[str, Any]:
     """Rebuild per-market calibration maps from prediction outcomes.
 
     Uses a chronological 80/20 split: fit on the oldest 80% of rows, evaluate
@@ -508,8 +1045,13 @@ def retrain() -> dict[str, Any]:
     for _date, market, prob, outcome in train_rows:
         rows_by_market[market].append((prob, outcome))
 
-    maps, per_market = _fit_all_markets(rows_by_market)
-    return _write_calibration_maps(maps, per_market, source=f"CSV prediction_outcomes (chronological 80% train, {cutoff_idx}/{len(dated_rows)} rows)")
+    maps, per_market = _fit_all_markets(rows_by_market, method=method)
+    method_suffix = "" if method == "isotonic" else f", method={method}"
+    return _write_calibration_maps(
+        maps,
+        per_market,
+        source=f"CSV prediction_outcomes (chronological 80% train, {cutoff_idx}/{len(dated_rows)} rows{method_suffix})",
+    )
 
 
 def retrain_from_sqlite(sqlite_path: str | Path | None = None) -> dict[str, Any]:
@@ -564,7 +1106,7 @@ def retrain_from_sqlite(sqlite_path: str | Path | None = None) -> dict[str, Any]
     return result
 
 
-def retrain_all_game(sqlite_path: str | Path | None = None) -> dict[str, Any]:
+def retrain_all_game(sqlite_path: str | Path | None = None, *, method: str = "isotonic") -> dict[str, Any]:
     """P6 PRIMARY calibration training path: all-game model_predictions + outcomes.
 
     Reads the migration-006 ``model_predictions`` table (one row per eligible
@@ -634,13 +1176,36 @@ def retrain_all_game(sqlite_path: str | Path | None = None) -> dict[str, Any]:
     except sqlite3.Error as exc:
         return {"status": "error", "reason": f"SQLite read failed: {exc}", "source": "SQLite model_predictions (all-game)"}
 
-    maps, per_market = _fit_all_markets(rows_by_market, market_params=_SQLITE_MARKET_PARAMS)
+    maps, per_market = _fit_all_markets(rows_by_market, market_params=_SQLITE_MARKET_PARAMS, method=method)
     result = _write_calibration_maps(maps, per_market, source="SQLite model_predictions (all-game, P6 primary)")
     result["population"] = "all_game"
+    result["method"] = method
     return result
 
 
-def retrain_default() -> dict[str, Any]:
+def benchmark_csv_outcomes(outcomes_path: str | Path | None = None) -> dict[str, Any]:
+    """Run chronological walk-forward calibration benchmark on prediction_outcomes.csv."""
+    path = Path(outcomes_path) if outcomes_path is not None else _OUTCOMES_PATH
+    if not path.exists():
+        return {"status": "error", "reason": f"outcomes file not found: {path}"}
+    dated_rows: list[tuple[str, float, float]] = []
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            market = _normalize_market(row.get("market", ""))
+            if market != "moneyline":
+                continue
+            result = row.get("result", "").strip().lower()
+            if result not in ("win", "loss"):
+                continue
+            prob = _extract_predicted_probability(row)
+            if prob is None:
+                continue
+            dated_rows.append((row.get("date", "") or "", prob, 1.0 if result == "win" else 0.0))
+    return walk_forward_calibration_benchmark(dated_rows)
+
+
+def retrain_default(*, method: str = "isotonic") -> dict[str, Any]:
     """P6 default calibration retrain.
 
     PRIMARY path is now all-game ``model_predictions`` + ``game_outcomes``
@@ -652,13 +1217,13 @@ def retrain_default() -> dict[str, Any]:
     but must be invoked explicitly; it is never the default.
     """
     if _SQLITE_PATH.exists():
-        result = retrain_all_game(_SQLITE_PATH)
+        result = retrain_all_game(_SQLITE_PATH) if method == "isotonic" else retrain_all_game(_SQLITE_PATH, method=method)
         if result.get("status") == "error" and "migration_006_tables_absent" in result.get("reason", ""):
             # Production DB not migrated to 006 — fall back to CSV outcomes, NOT
             # the selected-value ledger. Calibration stays selected-bias-free.
-            return retrain()
+            return retrain() if method == "isotonic" else retrain(method=method)
         return result
-    return retrain()
+    return retrain() if method == "isotonic" else retrain(method=method)
 
 
 if __name__ == "__main__":
@@ -669,14 +1234,20 @@ if __name__ == "__main__":
     parser.add_argument("--all-game", action="store_true", help="Force all-game model_predictions path")
     parser.add_argument("--selected-value", action="store_true",
                         help="Diagnostic only: bet_ledger selected-value path (biased)")
+    parser.add_argument("--method", choices=["isotonic", "platt", "beta_logit"], default="isotonic",
+                        help="Calibration method (default: isotonic)")
+    parser.add_argument("--benchmark", action="store_true",
+                        help="Run chronological walk-forward benchmark (identity vs isotonic vs platt vs beta_logit)")
     args = parser.parse_args()
 
-    if args.all_game:
-        result = retrain_all_game()
+    if args.benchmark:
+        result = benchmark_csv_outcomes()
+    elif args.all_game:
+        result = retrain_all_game(method=args.method)
     elif args.selected_value:
         result = retrain_from_sqlite()
     elif args.retrain:
-        result = retrain_default()
+        result = retrain_default(method=args.method)
     else:
         parser.print_help()
         raise SystemExit(0)

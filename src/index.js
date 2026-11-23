@@ -5,6 +5,7 @@ import { loadConfig } from './config.js';
 import { ANALYST_SKILL_VERSION, buildAnalystSkillSummary } from './analystSkill.js';
 import { calibratePercent, hasCalibrationMap, resetCalibrationCache } from './calibration.js';
 import { guardFavoredCalibrationPercent } from './core/prediction_core.js';
+import { powerDevigProbabilities } from './market_residual.js';
 import { buildEvolutionContext } from './evolutionContext.js';
 import { loadEvolutionControls, moneylineWeightMultiplier } from './evolutionControls.js';
 import {
@@ -310,6 +311,9 @@ async function sendBothLineupsPregameAlert(bot, chatId, game, awayLineup, homeLi
     const awayProb = Number(prediction.away?.winProbability ?? 0);
     const pickProb = pick && pick === prediction.home ? homeProb : awayProb;
     const confirmationEdge = Number(prediction.modelBreakdown?.confirmationEdge ?? 0);
+    const confirmationSignal = Number(prediction.modelBreakdown?.confirmationSignal ?? 0);
+    const lineupAgrees = Boolean(prediction.modelBreakdown?.lineupAgreesWithMatchup);
+    const lineupOpposes = Boolean(prediction.modelBreakdown?.lineupOpposesMatchup);
     const bothConfirmed = awayLineup?.confirmed && homeLineup?.confirmed;
 
     lines.push(uiSection('🎯', 'Pick Model (lineup confirmed)'));
@@ -318,6 +322,13 @@ async function sendBothLineupsPregameAlert(bot, chatId, game, awayLineup, homeLi
     if (bothConfirmed && Math.abs(confirmationEdge) >= 0.005) {
       const edgeLabel = confirmationEdge > 0 ? homeLabel : awayLabel;
       lines.push(uiKV('📋', 'Lineup edge', `+${(Math.abs(confirmationEdge) * 100).toFixed(1)}% ke ${edgeLabel} (lineup confirmed menguatkan edge model)`));
+    } else if (bothConfirmed && confirmationSignal > 0) {
+      const statusText = lineupAgrees
+        ? `selaras dengan matchup (confidence ${(confirmationSignal * 100).toFixed(0)}%)`
+        : lineupOpposes
+          ? `berlawanan dengan matchup (uncertainty dinaikkan, confidence ${(confirmationSignal * 100).toFixed(0)}%)`
+          : `confirmed netral (confidence ${(confirmationSignal * 100).toFixed(0)}%)`;
+      lines.push(uiKV('📋', 'Lineup signal', statusText));
     } else if (bothConfirmed) {
       lines.push(uiKV('📋', 'Lineup edge', 'netral (matchup terlalu tipis untuk dikuatkan)'));
     }
@@ -410,10 +421,11 @@ async function attachMarketContext(predictions) {
       const homeImplied = americanImpliedProbability(prediction.currentOdds.homeMoneyline);
       const awayImplied = americanImpliedProbability(prediction.currentOdds.awayMoneyline);
       if (homeImplied != null && awayImplied != null) {
-        // Normalize implied to sum to 100 (removes the vig)
+        // Power De-vig removes vig without favorite-longshot distortion.
+        const devig = powerDevigProbabilities(homeImplied, awayImplied);
         const totalImplied = homeImplied + awayImplied;
-        const homeNorm = (homeImplied / totalImplied) * 100;
-        const awayNorm = (awayImplied / totalImplied) * 100;
+        const homeNorm = devig ? devig.probA * 100 : (homeImplied / totalImplied) * 100;
+        const awayNorm = devig ? devig.probB * 100 : (awayImplied / totalImplied) * 100;
         // Blend weight: market is the strongest single pre-game predictor.
         // Raised base from 0.12 → 0.22 so displayed pick incorporates real odds
         // without fully overwriting pure-model VALUE grading.
@@ -424,23 +436,22 @@ async function attachMarketContext(predictions) {
           const blendedHome = rawHome * (1 - w) + homeNorm * w;
           const blendedAway = rawAway * (1 - w) + awayNorm * w;
           // Re-calibrate the favored side (>= 50%) with guardFavoredCalibrationPercent,
-          // mirroring prediction_core.js so calibration never inverts favorites or
-          // flattens away favorites to the lower knot of the map.
+          // mirroring prediction_core.js (relaxed [15%, 85%] range).
           const calibrated = hasCalibrationMap('moneyline');
           let newHome;
           let newAway;
           if (calibrated) {
             if (blendedHome >= 50) {
               const calRaw = calibratePercent(blendedHome, 'moneyline');
-              newHome = Math.round(Math.max(30, Math.min(70, guardFavoredCalibrationPercent(blendedHome, calRaw))));
+              newHome = Math.round(Math.max(15, Math.min(85, guardFavoredCalibrationPercent(blendedHome, calRaw))));
               newAway = 100 - newHome;
             } else {
               const calRaw = calibratePercent(blendedAway, 'moneyline');
-              newAway = Math.round(Math.max(30, Math.min(70, guardFavoredCalibrationPercent(blendedAway, calRaw))));
+              newAway = Math.round(Math.max(15, Math.min(85, guardFavoredCalibrationPercent(blendedAway, calRaw))));
               newHome = 100 - newAway;
             }
           } else {
-            newHome = Math.round(Math.max(30, Math.min(70, blendedHome)));
+            newHome = Math.round(Math.max(15, Math.min(85, blendedHome)));
             newAway = 100 - newHome;
           }
           prediction.home.marketInformedProbability = newHome;

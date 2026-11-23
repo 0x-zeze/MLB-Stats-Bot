@@ -22,9 +22,15 @@ const MIN_ISOTONIC_SAMPLES_FOR_TRUST = {
   moneyline: 150
 };
 
+const MIN_PARAMETRIC_SAMPLES_FOR_TRUST = {
+  moneyline: 60
+};
+
 const SHRINKAGE_FACTOR = {
   moneyline: 0.5
 };
+
+const PROB_EPS = 1e-6;
 
 export const CALIBRATION_CONTENT_HASH_SCHEMA =
   'calibration-content-v1';
@@ -244,11 +250,80 @@ export function validateCalibrationMapping(value) {
   };
 }
 
+export function validateParametricCalibration(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { valid: false, reason: value == null ? 'missing' : 'not_object', parametric: null };
+  }
+  const method = String(value.method || '').trim().toLowerCase();
+  if (method === 'identity') {
+    return { valid: true, reason: null, parametric: { method: 'identity' } };
+  }
+  if (method === 'platt') {
+    const a = Number(value.a);
+    const b = Number(value.b);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) {
+      return { valid: false, reason: 'nonfinite_platt_params', parametric: null };
+    }
+    if (!(a > 0)) {
+      return { valid: false, reason: 'nonpositive_platt_slope', parametric: null };
+    }
+    return { valid: true, reason: null, parametric: { method: 'platt', a, b } };
+  }
+  if (method === 'beta_logit') {
+    const a = Number(value.a);
+    const b = Number(value.b);
+    const c = Number(value.c);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) {
+      return { valid: false, reason: 'nonfinite_beta_logit_params', parametric: null };
+    }
+    if (a < 0 || b < 0 || a + b <= 0) {
+      return { valid: false, reason: 'nonmonotonic_beta_logit_params', parametric: null };
+    }
+    return { valid: true, reason: null, parametric: { method: 'beta_logit', a, b, c } };
+  }
+  return { valid: false, reason: `unknown_parametric_method:${method || 'empty'}`, parametric: null };
+}
+
+function stableSigmoid(z) {
+  if (z >= 35) return 1;
+  if (z <= -35) return 0;
+  return 1 / (1 + Math.exp(-z));
+}
+
+/**
+ * Apply a validated logit-space parametric calibrator (Platt or Kull et al.
+ * Beta-Logit). Mirrors apply_parametric_calibrator in src/probability_calibrator.py.
+ */
+export function applyParametricCalibration(params, rawProbability) {
+  if (!isFiniteNumber(rawProbability)) return rawProbability;
+  const validation = validateParametricCalibration(params);
+  const p = clamp(Number(rawProbability), PROB_EPS, 1 - PROB_EPS);
+  if (!validation.valid) {
+    return clamp(p, 0.05, 0.95);
+  }
+  const spec = validation.parametric;
+  if (spec.method === 'identity') {
+    return clamp(p, 0.05, 0.95);
+  }
+  if (spec.method === 'platt') {
+    const z = spec.a * Math.log(p / (1 - p)) + spec.b;
+    return clamp(stableSigmoid(z), 0.05, 0.95);
+  }
+  if (spec.method === 'beta_logit') {
+    const z = spec.a * Math.log(p) - spec.b * Math.log(1 - p) + spec.c;
+    return clamp(stableSigmoid(z), 0.05, 0.95);
+  }
+  return clamp(p, 0.05, 0.95);
+}
+
 function normalizedHashInput(value = {}) {
   const validation = validateCalibrationMapping(
     value.mapping
   );
-  return {
+  const paramValidation = validateParametricCalibration(
+    value.parametric
+  );
+  const base = {
     schema: CALIBRATION_CONTENT_HASH_SCHEMA,
     market: value.market || null,
     mapping: validation.valid
@@ -271,6 +346,10 @@ function normalizedHashInput(value = {}) {
       : null,
     datasetHash: value.datasetHash || null
   };
+  if (paramValidation.valid) {
+    base.parametric = paramValidation.parametric;
+  }
+  return base;
 }
 
 export function computeCalibrationContentHash(value) {
@@ -313,10 +392,13 @@ function parseTimestamp(value) {
 
 function usesLowSampleShrinkage(
   market,
-  marketMeta = {}
+  marketMeta = {},
+  isParametric = false
 ) {
-  const threshold =
-    MIN_ISOTONIC_SAMPLES_FOR_TRUST[market];
+  const thresholds = isParametric
+    ? MIN_PARAMETRIC_SAMPLES_FOR_TRUST
+    : MIN_ISOTONIC_SAMPLES_FOR_TRUST;
+  const threshold = thresholds[market];
   if (
     threshold === undefined ||
     SHRINKAGE_FACTOR[market] === undefined
@@ -345,6 +427,7 @@ function calibrationArtifactCacheKey(
 export function buildCalibrationArtifact({
   market = 'moneyline',
   mapping: rawMapping = null,
+  parametric: rawParametric = null,
   meta = {},
   expected = {},
   source = null,
@@ -369,11 +452,25 @@ export function buildCalibrationArtifact({
     marketMeta.bindings ||
     marketMeta.compatibility ||
     {};
-  const validation =
-    validateCalibrationMapping(rawMapping);
+
+  const rawIsParametricObject =
+    rawMapping != null &&
+    typeof rawMapping === 'object' &&
+    !Array.isArray(rawMapping);
+  const parametricCandidate =
+    rawParametric ??
+    (rawIsParametricObject ? rawMapping : marketMeta.parametric ?? null);
+  const paramValidation = validateParametricCalibration(parametricCandidate);
+  const parametric = paramValidation.valid ? paramValidation.parametric : null;
+  const parametricPresent = paramValidation.valid;
+
+  const validation = validateCalibrationMapping(
+    rawIsParametricObject ? null : rawMapping
+  );
   const mapping = validation.mapping;
-  const mapFound = rawMapping != null;
-  const mapPresent = validation.valid;
+  const activeParametric = !validation.valid && parametricPresent ? parametric : null;
+  const mapFound = rawMapping != null || rawParametric != null;
+  const mapPresent = validation.valid || Boolean(activeParametric);
   const metaStatus = String(
     marketMeta.status || ''
   )
@@ -383,7 +480,8 @@ export function buildCalibrationArtifact({
   const samples = Number(marketMeta.samples);
   const lowSample = usesLowSampleShrinkage(
     marketKey,
-    marketMeta
+    marketMeta,
+    Boolean(activeParametric)
   );
   const modelId =
     bindings.modelId || marketMeta.modelId || null;
@@ -406,7 +504,7 @@ export function buildCalibrationArtifact({
   const method =
     bindings.method ||
     marketMeta.method ||
-    'isotonic';
+    (activeParametric ? activeParametric.method : 'isotonic');
   const datasetHash =
     bindings.datasetHash ||
     marketMeta.datasetHash ||
@@ -426,6 +524,7 @@ export function buildCalibrationArtifact({
   const contentHash = computeCalibrationContentHash({
     market: marketKey,
     mapping,
+    parametric: activeParametric,
     shrinkFactor,
     modelId,
     modelImplVersion,
@@ -478,10 +577,13 @@ export function buildCalibrationArtifact({
   );
 
   const warnings = [...sourceWarnings];
-  if (!validation.valid) {
+  if (!mapPresent) {
     if (mapFound) {
+      const reason = rawIsParametricObject || rawParametric != null
+        ? paramValidation.reason
+        : validation.reason;
       warnings.push(
-        `malformed_calibration_map:${validation.reason}`
+        `malformed_calibration_map:${reason}`
       );
     } else {
       warnings.push('missing_calibration_map');
@@ -502,7 +604,26 @@ export function buildCalibrationArtifact({
     !explicitCompatibilityMismatch &&
     !hashMismatch &&
     !stale &&
-    mapPresent &&
+    parametricPresent &&
+    !validation.valid &&
+    !lowSample
+  ) {
+    mode = 'parametric';
+  } else if (
+    !explicitCompatibilityMismatch &&
+    !hashMismatch &&
+    !stale &&
+    parametricPresent &&
+    !validation.valid &&
+    lowSample
+  ) {
+    mode = 'parametric_low_sample_shrink';
+    warnings.push('low_sample_map');
+  } else if (
+    !explicitCompatibilityMismatch &&
+    !hashMismatch &&
+    !stale &&
+    validation.valid &&
     !lowSample
   ) {
     mode = 'map';
@@ -510,7 +631,7 @@ export function buildCalibrationArtifact({
     !explicitCompatibilityMismatch &&
     !hashMismatch &&
     !stale &&
-    mapPresent &&
+    validation.valid &&
     lowSample
   ) {
     mode = 'map_low_sample_shrink';
@@ -547,11 +668,11 @@ export function buildCalibrationArtifact({
     integrityStatus = 'active';
   }
 
-  // Promotion requires a fully-bound active artifact using a pure map — not
-  // identity, not low-sample shrinkage, not shrink-toward-50. Shrinkage modes
-  // are numerically active but their calibration is too weak to trust.
+  // Promotion requires a fully-bound active artifact using a pure map or
+  // smooth parametric calibrator (Platt / Beta-Logit) — never identity or shrinkage.
   const promotionSafe =
-    integrityStatus === 'active' && mode === 'map';
+    integrityStatus === 'active' &&
+    (mode === 'map' || mode === 'parametric');
   const baseArtifact = {
     hashSchema: CALIBRATION_ARTIFACT_HASH_SCHEMA,
     market: marketKey,
@@ -564,10 +685,15 @@ export function buildCalibrationArtifact({
     mapPresent,
     mapPoints: validation.points,
     mapValidation: {
-      valid: validation.valid,
-      reason: validation.reason
+      valid: mapPresent,
+      reason: mapPresent
+        ? null
+        : rawIsParametricObject || rawParametric != null
+          ? paramValidation.reason
+          : validation.reason
     },
     mapping,
+    ...(activeParametric ? { parametric: activeParametric } : {}),
     shrinkFactor,
     metaSuccess,
     samples: Number.isFinite(samples) ? samples : null,
@@ -704,22 +830,38 @@ export function calibrateProbability(
   const artifact = getCalibrationArtifact(marketKey);
 
   if (
+    artifact.mode === 'parametric' &&
+    artifact.parametric
+  ) {
+    return applyParametricCalibration(
+      artifact.parametric,
+      rawProbability
+    );
+  }
+
+  if (
+    artifact.mode === 'parametric_low_sample_shrink' &&
+    artifact.parametric
+  ) {
+    const base = applyParametricCalibration(
+      artifact.parametric,
+      rawProbability
+    );
+    return clamp(shrinkTowardHalf(base, marketKey), 0.05, 0.95);
+  }
+
+  if (
     artifact.mode === 'shrink_toward_50' ||
     artifact.mode === 'map_low_sample_shrink'
   ) {
     let base = rawProbability;
-    if (artifact.mapPresent) {
+    if (artifact.mapPresent && artifact.mapping) {
       base = interpolate(
         artifact.mapping,
         rawProbability
       );
     }
-    if (
-      artifact.mode === 'shrink_toward_50' ||
-      artifact.mode === 'map_low_sample_shrink'
-    ) {
-      base = shrinkTowardHalf(base, marketKey);
-    }
+    base = shrinkTowardHalf(base, marketKey);
     return clamp(base, 0.05, 0.95);
   }
 
@@ -774,12 +916,28 @@ export function calibrateProbabilityWithArtifact(
   const mapping = validation.valid
     ? validation.mapping
     : null;
+  const paramValidation = validateParametricCalibration(
+    artifact?.parametric
+  );
+  const parametric = paramValidation.valid
+    ? paramValidation.parametric
+    : null;
   const shrinkFactor = isFiniteNumber(artifact?.shrinkFactor)
     ? Number(artifact.shrinkFactor)
     : 0.5;
   const shrink = (p) =>
     0.5 + (p - 0.5) * (1 - shrinkFactor);
 
+  if (mode === 'parametric' && parametric) {
+    return applyParametricCalibration(parametric, raw);
+  }
+  if (mode === 'parametric_low_sample_shrink' && parametric) {
+    return clamp(
+      shrink(applyParametricCalibration(parametric, raw)),
+      0.05,
+      0.95
+    );
+  }
   if (mode === 'map' && mapping) {
     return clamp(interpolate(mapping, raw), 0.05, 0.95);
   }
@@ -840,17 +998,29 @@ export function verifyCalibrationArtifact(artifact) {
   const validation = validateCalibrationMapping(
     artifact.mapping
   );
+  const paramValidation = validateParametricCalibration(
+    artifact.parametric
+  );
   if (
     ['map', 'map_low_sample_shrink'].includes(mode) &&
     !validation.valid
   ) {
     reasons.push('invalid_calibration_mapping');
   }
+  if (
+    ['parametric', 'parametric_low_sample_shrink'].includes(mode) &&
+    !paramValidation.valid
+  ) {
+    reasons.push('invalid_parametric_calibration');
+  }
 
   const contentHash = computeCalibrationContentHash({
     ...artifact,
     mapping: validation.valid
       ? validation.mapping
+      : null,
+    parametric: paramValidation.valid
+      ? paramValidation.parametric
       : null
   });
   if (!artifact.contentHash) {

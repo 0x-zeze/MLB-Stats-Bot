@@ -124,6 +124,10 @@ export function applyOofCalibration(artifact, rawProbability) {
   if (method === 'platt') {
     return clamp(sigmoid(params.a * logit(raw) + params.b));
   }
+  if (method === 'beta_logit') {
+    const p = Math.min(Math.max(raw, EPS), 1 - EPS);
+    return clamp(sigmoid(params.a * Math.log(p) - params.b * Math.log(1 - p) + params.c));
+  }
   if (method === 'isotonic_guarded') {
     return clamp(interpolateIsotonic(params, raw));
   }

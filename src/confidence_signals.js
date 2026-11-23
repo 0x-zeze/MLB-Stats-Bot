@@ -112,8 +112,21 @@ function lineupFactor(mb, item, side) {
   let score = Math.max(-1, Math.min(1, edge / 0.12));
   // Incomplete lineup reduces confidence in the pick side; when pick's own
   // starting 9 is confirmed with positive quality, soften penalty.
+  // Phase 3.3: confirmationSignal (separated from mean prob shift) refines
+  // confidence strictly respecting pick-side direction!
+  const confirmSignal = toNumber(mb.confirmationSignal, 0);
+  const matchupDirForSide = signed(mb.matchupEdge, side);
   if (!confirmed) {
     score = pickConfirmed && edge > 0.02 ? Math.min(score, 0.2) - 0.05 : Math.min(score, 0) - 0.15;
+  } else if (mb.lineupAgreesWithMatchup && confirmSignal >= 0.7) {
+    if (matchupDirForSide > 0) {
+      score = Math.min(1, score + 0.12);
+    } else if (matchupDirForSide < 0) {
+      // Confirmed lineup reinforces the OPPONENT's matchup edge -> lower pick confidence!
+      score = Math.max(-1, score - 0.12);
+    }
+  } else if (mb.lineupOpposesMatchup) {
+    score = Math.max(-1, score - 0.1);
   }
   const hasNewBats = toNumber(pickLineup?.acquisitionsInLineup, 0) > 0;
   let label = confirmed

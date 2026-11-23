@@ -568,8 +568,9 @@ export function expectedValuePercent(modelProbabilityPercent, odds) {
 }
 
 // Uncertainty shrinkage multiplier for Kelly sizing in [0.5, 1.0].
-// Penalizes missing/fallback features and unconfirmed lineups so high-uncertainty
-// games automatically take smaller stakes rather than full Quarter-Kelly.
+// Penalizes missing/fallback features, unconfirmed lineups, and confirmed
+// lineups that contradict the macro matchup (confirmationSignal separated from
+// mean probability shift in Phase 3.3).
 export function kellyUncertaintyMultiplier(item) {
   if (!item || typeof item !== 'object') return 1.0;
   const fallbackCount = Math.max(0, toNumber(item.featureFallbacks?.count, 0));
@@ -581,7 +582,11 @@ export function kellyUncertaintyMultiplier(item) {
     const bothConfirmed = Boolean(
       away?.confirmed && home?.confirmed && toNumber(away?.count, 0) >= 9 && toNumber(home?.count, 0) >= 9
     );
-    if (!bothConfirmed) lineupScale = 0.85;
+    if (!bothConfirmed) {
+      lineupScale = 0.85;
+    } else if (item.modelBreakdown?.lineupOpposesMatchup === true) {
+      lineupScale = 0.92;
+    }
   }
   return clamp(Math.round(fallbackScale * lineupScale * 1000) / 1000, 0.5, 1.0);
 }
@@ -2109,7 +2114,7 @@ function hitterLineupScore(player, slot, fallbackLookup = null) {
   const curStats = fallbackLookup?.current || boxStats;
   const priorStats = fallbackLookup?.prior || player?.priorSeasonStats || null;
   const blended = blendHitterSeasonStats(curStats, priorStats);
-  if (!blended) return { value: 0, known: false, ops: null, obp: null };
+  if (!blended) return { value: 0, known: false, ops: null, obp: null, slg: null };
 
   const { ops, obp, slg, powerPerPa } = blended;
   const slotWeight = slot <= 2 ? 1.2 : slot <= 4 ? 1.12 : slot === 5 ? 1.04 : slot <= 7 ? 0.92 : 0.78;
@@ -2123,12 +2128,35 @@ function hitterLineupScore(player, slot, fallbackLookup = null) {
     value: clamp(score * slotWeight, -0.16, 0.18),
     known: true,
     ops,
-    obp
+    obp,
+    slg
   };
 }
 
+function estimateWobaFromSlash(obp, slg, fallbackOps = DEFAULTS.ops) {
+  if (isFiniteNumber(obp) && isFiniteNumber(slg)) {
+    // Linear wOBA proxy: 0.62 * OBP + 0.30 * SLG (league avg .320/.400 -> .318).
+    return 0.62 * Number(obp) + 0.3 * Number(slg);
+  }
+  // Fallback from OPS alone when OBP/SLG aren't both populated.
+  return 0.442 * toNumber(fallbackOps, DEFAULTS.ops);
+}
+
+function batterHandPlatoonDeltaOps(player, oppPitchHand) {
+  const opp = String(oppPitchHand || '').toUpperCase();
+  if (opp !== 'L' && opp !== 'R') return 0;
+  const batSide = String(player?.person?.batSide?.code || player?.batSide?.code || '').toUpperCase();
+  if (!batSide || batSide === 'S') return 0; // switch-hitter neutral prior
+  return batSide !== opp ? 0.022 : -0.022;
+}
+
 function extractLineupProfile(boxTeam, options = {}) {
-  const { hitterLookups = null, platoonSplits = null, rosterContext = null } = options;
+  const {
+    hitterLookups = null,
+    platoonSplits = null,
+    rosterContext = null,
+    oppPitchHand = null
+  } = options;
   const players = Object.values(boxTeam?.players || {});
   const hitters = players
     .filter((player) => player?.battingOrder)
@@ -2186,22 +2214,82 @@ function extractLineupProfile(boxTeam, options = {}) {
       ? Math.round((topFourKnown.reduce((sum, s) => sum + s.ops, 0) / topFourKnown.length) * 1000) / 1000
       : null;
 
-  // Slot-weighted per-hitter handedness platoon OPS (shrunk toward hitter's blended OPS).
+  // Slot-weighted per-hitter handedness platoon OPS, wOBA, and pure DELTA
+  // (split minus each hitter's own overall baseline — eliminates triple-counting
+  // overall hitter talent into platoonEdge). Require genuine platoon evidence
+  // (observed splits or known batter handedness vs oppPitchHand); never fabricate
+  // platoon splits from overall OPS alone!
   let platoonWeightedSum = 0;
+  let platoonWobaWeightedSum = 0;
+  let platoonOpsDeltaSum = 0;
+  let platoonWobaDeltaSum = 0;
   let platoonWeightTotal = 0;
+  let observedSplitCount = 0;
+  let knownHandCount = 0;
+  let totalSlotWeight = 0;
   orderedHitters.forEach((hitter, index) => {
-    const split = getPlatoon(hitter);
-    const baseOps = hitterScores[index]?.ops ?? DEFAULTS.ops;
-    if (!split || !isFiniteNumber(split.ops)) return;
-    const ab = Math.max(0, toNumber(split.atBats, 0));
-    const wSplit = clamp(ab / (ab + 45), 0, 0.85);
-    const shrunkSplitOps = wSplit * Number(split.ops) + (1 - wSplit) * baseOps;
     const slotW = index < 4 ? 1.15 : index < 7 ? 0.95 : 0.8;
-    platoonWeightedSum += shrunkSplitOps * slotW;
-    platoonWeightTotal += slotW;
+    totalSlotWeight += slotW;
+    const split = getPlatoon(hitter);
+    const scoreObj = hitterScores[index];
+    const baseOps = scoreObj?.ops ?? DEFAULTS.ops;
+    const baseWoba = estimateWobaFromSlash(scoreObj?.obp, scoreObj?.slg, baseOps);
+    const batSideCode = String(hitter?.person?.batSide?.code || hitter?.batSide?.code || '').toUpperCase();
+    const hasKnownHand = Boolean(
+      oppPitchHand &&
+        (String(oppPitchHand).toUpperCase() === 'L' || String(oppPitchHand).toUpperCase() === 'R') &&
+        (batSideCode === 'L' || batSideCode === 'R' || batSideCode === 'S')
+    );
+    const handDeltaOps = batterHandPlatoonDeltaOps(hitter, oppPitchHand);
+    const priorOps = baseOps + handDeltaOps;
+    const priorWoba = baseWoba + handDeltaOps * 0.44;
+
+    if (split && isFiniteNumber(split.ops)) {
+      const ab = Math.max(0, toNumber(split.atBats, 0));
+      const wSplit = clamp(ab / (ab + 55), 0, 0.85);
+      const shrunkSplitOps = wSplit * Number(split.ops) + (1 - wSplit) * priorOps;
+      const splitWoba = estimateWobaFromSlash(split.obp, split.slg, split.ops);
+      const shrunkSplitWoba = wSplit * splitWoba + (1 - wSplit) * priorWoba;
+      platoonWeightedSum += shrunkSplitOps * slotW;
+      platoonWobaWeightedSum += shrunkSplitWoba * slotW;
+      platoonOpsDeltaSum += (shrunkSplitOps - baseOps) * slotW;
+      platoonWobaDeltaSum += (shrunkSplitWoba - baseWoba) * slotW;
+      platoonWeightTotal += slotW;
+      observedSplitCount += 1;
+    } else if (hasKnownHand) {
+      // Bayesian handedness prior ONLY when batter's actual batSide (L/R/S) is known.
+      platoonWeightedSum += priorOps * slotW;
+      platoonWobaWeightedSum += priorWoba * slotW;
+      platoonOpsDeltaSum += handDeltaOps * slotW;
+      platoonWobaDeltaSum += handDeltaOps * 0.44 * slotW;
+      platoonWeightTotal += slotW;
+      knownHandCount += 1;
+    }
   });
-  const platoonOps =
-    platoonWeightTotal >= 4 ? Math.round((platoonWeightedSum / platoonWeightTotal) * 1000) / 1000 : null;
+  const hasRealPlatoonEvidence = observedSplitCount + knownHandCount >= 4 && platoonWeightTotal >= 4;
+  const platoonOps = hasRealPlatoonEvidence
+    ? Math.round((platoonWeightedSum / platoonWeightTotal) * 1000) / 1000
+    : null;
+  const platoonWoba = hasRealPlatoonEvidence
+    ? Math.round((platoonWobaWeightedSum / platoonWeightTotal) * 1000) / 1000
+    : null;
+  const platoonOpsDelta = hasRealPlatoonEvidence
+    ? Math.round((platoonOpsDeltaSum / platoonWeightTotal) * 1000) / 1000
+    : null;
+  const platoonWobaDelta = hasRealPlatoonEvidence
+    ? Math.round((platoonWobaDeltaSum / platoonWeightTotal) * 1000) / 1000
+    : null;
+  const platoonCoverage =
+    hasRealPlatoonEvidence && totalSlotWeight > 0
+      ? Math.round(
+          clamp(
+            (observedSplitCount / Math.max(1, orderedHitters.length)) * 0.6 +
+              (platoonWeightTotal / totalSlotWeight) * 0.4,
+            0,
+            1
+          ) * 1000
+        ) / 1000
+      : 0;
 
   // Track newly traded/signed players who are actually starting in today's 1-9 lineup!
   const acqIds = new Set(
@@ -2219,6 +2307,10 @@ function extractLineupProfile(boxTeam, options = {}) {
     leadoffObp: Number.isFinite(leadoffObpValue) ? Math.round(leadoffObpValue * 1000) / 1000 : null,
     topOrderOps,
     platoonOps,
+    platoonWoba,
+    platoonOpsDelta,
+    platoonWobaDelta,
+    platoonCoverage,
     acquisitionsInLineup: newStarters.length,
     newAdditionsNames: newStarters.slice(0, 3),
     rosterTurnover: rosterContext ? toNumber(rosterContext.turnoverScore, 0) : 0,
@@ -2437,12 +2529,14 @@ async function fetchGameLineupProfile(
     away: extractLineupProfile(boxscore.teams?.away, {
       hitterLookups: awayEnriched.hitterLookups,
       platoonSplits: awayEnriched.platoonSplits,
-      rosterContext: context.rosterProfiles?.get?.(awayTeamId) || null
+      rosterContext: context.rosterProfiles?.get?.(awayTeamId) || null,
+      oppPitchHand: homeStarterHand
     }),
     home: extractLineupProfile(boxscore.teams?.home, {
       hitterLookups: homeEnriched.hitterLookups,
       platoonSplits: homeEnriched.platoonSplits,
-      rosterContext: context.rosterProfiles?.get?.(homeTeamId) || null
+      rosterContext: context.rosterProfiles?.get?.(homeTeamId) || null,
+      oppPitchHand: awayStarterHand
     }),
     requestedAtUtc,
     fetchedAtUtc,
@@ -4105,6 +4199,8 @@ function predictGame(
     spRecentEdgeRaw,
     bothConfirmed,
     confirmationEdge,
+    confirmationSignal,
+    expectedRuns,
     modelBreakdown
   } = core;
   const homeProbability = core.calibrated.homeProbability;
@@ -4257,10 +4353,17 @@ function predictGame(
         : null,
       edgeComponentText('lineup', modelBreakdown.lineupEdge, away, home),
       edgeComponentText('bullpen', modelBreakdown.bullpenEdge, away, home),
-      bothConfirmed && Math.abs(confirmationEdge) >= 0.005
-        ? edgeComponentText('lineup✓', confirmationEdge, away, home)
-        : null
+      expectedRuns
+        ? `xR ${away.abbreviation || away.name} ${expectedRuns.awayLambda.toFixed(2)} - ${home.abbreviation || home.name} ${expectedRuns.homeLambda.toFixed(2)} (Skellam ${expectedRuns.skellamHomeProbability.toFixed(1)}%)`
+        : null,
+      bothConfirmed && confirmationSignal > 0
+        ? `lineup✓ ${Math.round(confirmationSignal * 100)}%`
+        : bothConfirmed && Math.abs(confirmationEdge) >= 0.005
+          ? edgeComponentText('lineup✓', confirmationEdge, away, home)
+          : null
     ].filter(Boolean).join(' | '),
+    expectedRuns,
+    confirmationSignal,
     modelBreakdown,
     modelReference: {
       awayPythagoreanPct: Math.round(awayPythagoreanPct * 100),
