@@ -5,6 +5,7 @@ const NAV_ITEMS = [
   { id: 'games', label: 'Games' },
   { id: 'moneyline', label: 'Moneyline' },
   { id: 'ledger', label: 'Ledger' },
+  { id: 'tournament', label: 'Shadow' },
   { id: 'backtest', label: 'Backtest' },
   { id: 'history', label: 'History' },
   { id: 'audit', label: 'Audit' },

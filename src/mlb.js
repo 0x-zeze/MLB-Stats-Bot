@@ -21,6 +21,7 @@ import {
   listRetiredRulesForProfile,
   resolveRuleProfile
 } from './rule_engine.js';
+import { computeTravelFatigueContext } from './mlb_stadiums.js';
 import {
   ageMinutes as temporalAgeMinutes,
   assertPregameEligible,
@@ -1857,8 +1858,26 @@ async function fetchRecentTeamGames(teamIds, dateYmd, daysBack = 3) {
     .filter((game) => idSet.has(game.teams.away.team.id) || idSet.has(game.teams.home.team.id));
 }
 
-async function fetchScheduleFatigueProfiles(teamIds, dateYmd) {
-  const profiles = new Map(teamIds.map((teamId) => [teamId, finalizeScheduleFatigueProfile(teamId, [], dateYmd)]));
+async function fetchScheduleFatigueProfiles(teamIds, dateYmd, todaysGames = []) {
+  const todayByTeam = new Map();
+  for (const game of todaysGames || []) {
+    const homeTeamId = game?.teams?.home?.team?.id ?? null;
+    const awayTeamId = game?.teams?.away?.team?.id ?? null;
+    const info = {
+      homeTeamId,
+      venueId: game?.venue?.id ?? null,
+      gameDate: game?.gameDate || null
+    };
+    if (homeTeamId != null && !todayByTeam.has(homeTeamId)) todayByTeam.set(homeTeamId, info);
+    if (awayTeamId != null && !todayByTeam.has(awayTeamId)) todayByTeam.set(awayTeamId, info);
+  }
+
+  const profiles = new Map(
+    teamIds.map((teamId) => [
+      teamId,
+      finalizeScheduleFatigueProfile(teamId, [], dateYmd, todayByTeam.get(teamId) || null)
+    ])
+  );
   const games = await fetchRecentTeamGames(teamIds, dateYmd, 10);
 
   for (const teamId of teamIds) {
@@ -1866,17 +1885,27 @@ async function fetchScheduleFatigueProfiles(teamIds, dateYmd) {
       .filter((game) => game.teams.away.team.id === teamId || game.teams.home.team.id === teamId)
       .map((game) => ({
         date: game.officialDate || String(game.gameDate || '').slice(0, 10),
-        side: game.teams.away.team.id === teamId ? 'away' : 'home'
+        side: game.teams.away.team.id === teamId ? 'away' : 'home',
+        homeTeamId: game.teams?.home?.team?.id ?? null,
+        venueId: game.venue?.id ?? null,
+        gameDate: game.gameDate || null
       }))
       .filter((game) => game.date);
-    profiles.set(teamId, finalizeScheduleFatigueProfile(teamId, teamGames, dateYmd));
+    profiles.set(
+      teamId,
+      finalizeScheduleFatigueProfile(teamId, teamGames, dateYmd, todayByTeam.get(teamId) || null)
+    );
   }
 
   return profiles;
 }
 
-function finalizeScheduleFatigueProfile(teamId, games, dateYmd) {
-  const sorted = [...games].sort((left, right) => String(right.date).localeCompare(String(left.date)));
+function finalizeScheduleFatigueProfile(teamId, games, dateYmd, todayGameInfo = null) {
+  const sorted = [...games].sort((left, right) => {
+    const byDate = String(right.date).localeCompare(String(left.date));
+    if (byDate !== 0) return byDate;
+    return String(right.gameDate || '').localeCompare(String(left.gameDate || ''));
+  });
   const lastGame = sorted[0] || null;
   const restDays = lastGame ? Math.max(0, ymdDiff(dateYmd, lastGame.date) - 1) : 10;
   const dateCounts = new Map();
@@ -1891,6 +1920,8 @@ function finalizeScheduleFatigueProfile(teamId, games, dateYmd) {
     roadStreak += 1;
   }
 
+  const travel = computeTravelFatigueContext(sorted, todayGameInfo, dateYmd);
+
   let fatiguePoints = 0;
   if (sorted.length >= 9) fatiguePoints += 2;
   else if (sorted.length >= 7) fatiguePoints += 1;
@@ -1900,6 +1931,11 @@ function finalizeScheduleFatigueProfile(teamId, games, dateYmd) {
   if (restDays === 0) fatiguePoints += 1;
   const fatigueLevel = fatiguePoints >= 3 ? 'high' : fatiguePoints >= 1 ? 'medium' : 'low';
 
+  const travelSuffix =
+    travel.travelMiles != null && travel.travelMiles > 0
+      ? `, travel ${Math.round(travel.travelMiles)}mi (TZ ${travel.timezoneShiftHours >= 0 ? '+' : ''}${travel.timezoneShiftHours}h${travel.dayAfterNight ? ', day-after-night' : ''})`
+      : '';
+
   return {
     teamId,
     restDays,
@@ -1907,9 +1943,15 @@ function finalizeScheduleFatigueProfile(teamId, games, dateYmd) {
     recentGameCount: sorted.length,
     doubleheaderLast3Days,
     fatigueLevel,
+    travelMiles: travel.travelMiles,
+    legTravelMiles: travel.legTravelMiles,
+    timezoneShiftHours: travel.timezoneShiftHours,
+    travelDirection: travel.travelDirection,
+    dayAfterNight: travel.dayAfterNight,
+    travelFatigueScore: travel.travelFatigueScore,
     offenseAdjustment: doubleheaderLast3Days ? -0.05 : 0,
     teamAdjustment: roadStreak >= 7 ? -0.03 : 0,
-    line: `${sorted.length}G last 10d, rest ${restDays}d, road streak ${roadStreak}, fatigue ${fatigueLevel}${doubleheaderLast3Days ? ', doubleheader flag' : ''}`
+    line: `${sorted.length}G last 10d, rest ${restDays}d, road streak ${roadStreak}, fatigue ${fatigueLevel}${doubleheaderLast3Days ? ', doubleheader flag' : ''}${travelSuffix}`
   };
 }
 
@@ -4427,6 +4469,7 @@ export const __mlbTestInternals = {
   hitterLineupScore,
   extractLineupProfile,
   finalizeBullpenProfile,
+  finalizeScheduleFatigueProfile,
   parseRosterAndTransactions,
   blendTeamStatsWithPrior,
   blendStandingsWithPrior,
@@ -4518,7 +4561,7 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       fetchBullpenProfiles(teamIds, dateYmd)
     ),
     profileFetch('scheduleFatigueProfiles', 'MLB StatsAPI schedule', () =>
-      fetchScheduleFatigueProfiles(teamIds, dateYmd)
+      fetchScheduleFatigueProfiles(teamIds, dateYmd, games)
     ),
     profileFetch(
       'injuryProfiles',

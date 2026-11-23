@@ -12,6 +12,7 @@ import EvolutionView from './components/EvolutionView.jsx';
 import HistorySection from './components/HistorySection.jsx';
 import AuditSection from './components/AuditSection.jsx';
 import LedgerSection from './components/LedgerSection.jsx';
+import ShadowTournamentSection from './components/ShadowTournamentSection.jsx';
 import BacktestSection from './components/BacktestSection.jsx';
 import TelegramSection from './components/TelegramSection.jsx';
 import SettingsSection from './components/SettingsSection.jsx';
@@ -204,6 +205,13 @@ export default function App() {
         <div className="space-y-6 animate-fade-in">
           <h2 className="text-xl font-black uppercase tracking-tight text-ink">Bet Ledger</h2>
           <LedgerSection />
+        </div>
+      )}
+
+      {activeTab === 'tournament' && (
+        <div className="space-y-6 animate-fade-in">
+          <h2 className="text-xl font-black uppercase tracking-tight text-ink">Shadow Tournament</h2>
+          <ShadowTournamentSection />
         </div>
       )}
 

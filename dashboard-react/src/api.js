@@ -73,6 +73,7 @@ export const api = {
   history: () => request('/api/history'),
   performance: () => request('/api/performance'),
   ledger: () => request('/api/ledger'),
+  shadowTournament: (params) => request(`/api/shadow-tournament${queryString(params)}`),
   evolution: () => request('/api/evolution'),
   evolve: () => request('/api/evolve', { method: 'POST' }),
   // Backwards-compatible alias; the backend runs the same full pipeline.

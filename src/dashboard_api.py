@@ -24,6 +24,7 @@ from .dashboard_service import (
     get_health_status,
     get_model_performance,
     get_prediction_history,
+    get_shadow_tournament_dashboard,
     get_today_dashboard,
     load_dashboard_settings,
     rows_to_csv,
@@ -260,6 +261,13 @@ def api_performance() -> dict[str, Any]:
 def api_ledger() -> dict[str, Any]:
     """Return the bet ledger: open + settled VALUE bets at quarter-Kelly stakes."""
     return get_bet_ledger()
+
+
+@app.get("/api/shadow-tournament", dependencies=API_DEPENDENCIES)
+def api_shadow_tournament(min_games: int = 200) -> dict[str, Any]:
+    """Return read-only Phase 4 Shadow Tournament leaderboard and promotion gates."""
+    bounded = max(1, min(int(min_games), 5000))
+    return get_shadow_tournament_dashboard(min_common_games=bounded)
 
 
 @app.get("/api/evolution", dependencies=API_DEPENDENCIES)

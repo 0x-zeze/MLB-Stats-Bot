@@ -1397,3 +1397,99 @@ def rows_to_csv(rows: list[dict[str, Any]]) -> str:
     for row in rows:
         writer.writerow({key: _sanitize_csv_cell(val) for key, val in row.items()})
     return output.getvalue()
+
+
+def _discover_shadow_artifacts(artifacts_dir: Path) -> dict[str, dict[str, Any]]:
+    """Read-only scan of data/models/ to report available challenger artifacts."""
+    known = ("learned_v2_logistic", "market_residual_v2", "market_residual_gbdt_v2")
+    status: dict[str, dict[str, Any]] = {
+        mid: {"present": False, "file": None, "feature_schema_version": None, "artifact_hash": None}
+        for mid in known
+    }
+    if not artifacts_dir.exists() or not artifacts_dir.is_dir():
+        return status
+    candidates = sorted(
+        artifacts_dir.glob("*.json"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+        reverse=True,
+    )
+    for path in candidates:
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        if "artifact" in parsed:
+            if parsed.get("status") == "insufficient_data" or not isinstance(parsed.get("artifact"), dict):
+                continue
+            inner = parsed["artifact"]
+        else:
+            inner = parsed
+        mid = inner.get("model_id")
+        if mid in status and not status[mid]["present"]:
+            status[mid] = {
+                "present": True,
+                "file": path.name,
+                "feature_schema_version": inner.get("feature_schema_version"),
+                "artifact_hash": inner.get("artifact_hash"),
+            }
+    return status
+
+
+def get_shadow_tournament_dashboard(
+    db_path: Path | str | None = None,
+    *,
+    min_common_games: int = 200,
+    artifacts_dir: Path | str | None = None,
+) -> dict[str, Any]:
+    """Read-only Shadow Tournament payload for the React dashboard."""
+    from .eval.shadow_tournament import evaluate_shadow_tournament_db
+
+    target_db = Path(db_path) if db_path else data_path("state.sqlite")
+    art_dir = Path(artifacts_dir) if artifacts_dir else Path(
+        os.environ.get("MLB_MODEL_ARTIFACTS_DIR") or (_ROOT_DIR / "data" / "models")
+    )
+    runtime_config = {
+        "active_model_version": os.environ.get("MLB_MODEL_VERSION", "heuristic_v1"),
+        "shadow_mode": os.environ.get("MLB_SHADOW_MODE", "false").lower().strip() in ("1", "true", "yes", "on"),
+        "shadow_gbdt": os.environ.get("MLB_SHADOW_GBDT", "false").lower().strip() in ("1", "true", "yes", "on"),
+        "active_rule_profile": os.environ.get("MLB_RULE_PROFILE", "default"),
+        "artifacts_dir": str(art_dir),
+    }
+    artifacts_present = _discover_shadow_artifacts(art_dir)
+
+    fallback = {
+        "verdict": "INSUFFICIENT_DATA",
+        "winner_model_id": None,
+        "rule_simplification_eligible": False,
+        "recommended_rule_profile": "default",
+        "common_games": 0,
+        "all_models_common_games": 0,
+        "min_common_games": min_common_games,
+        "leaderboard": [],
+        "comparisons": {},
+        "reasons": ["database_missing_or_empty"],
+    }
+
+    if not target_db.exists():
+        report = fallback
+    else:
+        try:
+            report = evaluate_shadow_tournament_db(
+                str(target_db),
+                min_common_games=min_common_games,
+            )
+        except sqlite3.Error as exc:
+            report = {**fallback, "reasons": [f"sqlite_unavailable: {exc}"]}
+
+    common_games = int(report.get("common_games") or 0)
+    min_req = max(1, int(report.get("min_common_games") or min_common_games))
+    progress_pct = round(min(100.0, (common_games / min_req) * 100.0), 1)
+
+    return {
+        **report,
+        "progress_pct": progress_pct,
+        "runtime_config": runtime_config,
+        "artifacts_present": artifacts_present,
+    }
