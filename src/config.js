@@ -115,6 +115,12 @@ export function loadConfig() {
     shadowMode: boolFromEnv(process.env.MLB_SHADOW_MODE, false),
     shadowGbdt: boolFromEnv(process.env.MLB_SHADOW_GBDT, false),
     modelArtifactsDir: process.env.MLB_MODEL_ARTIFACTS_DIR || 'data/models',
+    // Live Baseball Savant (Statcast) collector (free CSV, graceful fallback).
+    statcast: {
+      enabled: boolFromEnv(process.env.STATCAST_ENABLED, true),
+      timeoutMs: positiveIntFromEnv(process.env.STATCAST_TIMEOUT_MS, 6000),
+      cacheTtlMs: positiveIntFromEnv(process.env.STATCAST_CACHE_TTL_MINUTES, 180) * 60 * 1000
+    },
     // Declarative hard-rule profile ('default' or gated 'simplified_challenger').
     ruleProfile: process.env.MLB_RULE_PROFILE || 'default',
     news: {

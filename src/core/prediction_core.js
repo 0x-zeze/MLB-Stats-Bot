@@ -54,7 +54,8 @@ export function buildCoreInputsSnapshot({
   modelMemory,
   rollingTeamStats,
   evolutionControls,
-  parkFactorBaselines
+  parkFactorBaselines,
+  statcast
 } = {}) {
   const mapToObject = (value) => {
     if (value == null) return null;
@@ -86,6 +87,9 @@ export function buildCoreInputsSnapshot({
   };
   if (rosterProfiles != null) {
     snapshot.rosterProfiles = mapToObject(rosterProfiles);
+  }
+  if (statcast != null) {
+    snapshot.statcast = statcast;
   }
   return snapshot;
 }
@@ -1131,10 +1135,19 @@ export function bullpenAvailabilityEdge(homeBullpen, awayBullpen, options = {}) 
     ? clamp(Number(options.awayBullpenShare) / BASELINE_BULLPEN_SHARE, 0.55, 2.0)
     : 1.0;
 
+  const homeLeverageFatigue = isFiniteNumber(homeBullpen?.leverageFatigueScore)
+    ? Math.max(0, Number(homeBullpen.leverageFatigueScore))
+    : 0;
+  const awayLeverageFatigue = isFiniteNumber(awayBullpen?.leverageFatigueScore)
+    ? Math.max(0, Number(awayBullpen.leverageFatigueScore))
+    : 0;
+
   const homeFatigueDrag =
-    (homeFatigue * 0.07 + homeB2b * 0.024 + homeHighPitch * 0.017) * homeBpMult;
+    (homeFatigue * 0.07 + homeB2b * 0.024 + homeHighPitch * 0.017 + homeLeverageFatigue * 0.042) *
+    homeBpMult;
   const awayFatigueDrag =
-    (awayFatigue * 0.07 + awayB2b * 0.024 + awayHighPitch * 0.017) * awayBpMult;
+    (awayFatigue * 0.07 + awayB2b * 0.024 + awayHighPitch * 0.017 + awayLeverageFatigue * 0.042) *
+    awayBpMult;
   const fatiguePart = awayFatigueDrag - homeFatigueDrag;
 
   // Bullpen run-prevention quality (14d shrunk relief ERA/WHIP/K-BB/HR9).

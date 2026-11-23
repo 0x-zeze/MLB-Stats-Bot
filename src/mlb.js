@@ -22,6 +22,7 @@ import {
   resolveRuleProfile
 } from './rule_engine.js';
 import { computeTravelFatigueContext } from './mlb_stadiums.js';
+import { fetchLiveStatcastBundle, sliceGameStatcast } from './statcast_collector.js';
 import {
   ageMinutes as temporalAgeMinutes,
   assertPregameEligible,
@@ -2606,6 +2607,7 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
         bullpenOuts: 0,
         relieverAppearances: 0,
         relieverDates: new Map(),
+        relieverUsage: new Map(),
         highPitchRelievers: 0,
         qualityOuts14d: 0,
         qualityEarnedRuns14d: 0,
@@ -2616,8 +2618,9 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
       }
     ])
   );
-  // Look back 14 days so bullpen run-prevention quality (ERA/WHIP/K-BB/HR9) has
-  // real sample, while strictly isolating 3-day workload for fatigue metrics!
+  // Look back 14 days so bullpen run-prevention quality (ERA/WHIP/K-BB/HR9) and
+  // high-leverage role identification have real sample, while strictly isolating
+  // 3-day workload for fatigue & reliever availability metrics!
   const games = await fetchRecentTeamGames(teamIds, dateYmd, 14);
 
   const MAX_CONCURRENT = 6;
@@ -2626,13 +2629,25 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
     while (queue.length) {
       const game = queue.shift();
       const gameDate = String(game.officialDate || game.gameDate || '').slice(0, 10);
-      const isLast3Days = gameDate ? ymdDiff(dateYmd, gameDate) <= 3 : false;
+      const dayDiff = gameDate ? ymdDiff(dateYmd, gameDate) : null;
+      const isLast3Days = dayDiff !== null && dayDiff >= 1 && dayDiff <= 3;
       let boxscore;
       try {
         boxscore = await fetchBoxscore(game.gamePk);
       } catch {
         continue;
       }
+
+      const homeRuns = toNumber(
+        boxscore.teams?.home?.teamStats?.batting?.runs ?? game.teams?.home?.score,
+        null
+      );
+      const awayRuns = toNumber(
+        boxscore.teams?.away?.teamStats?.batting?.runs ?? game.teams?.away?.score,
+        null
+      );
+      const isCloseGame =
+        homeRuns !== null && awayRuns !== null && Math.abs(homeRuns - awayRuns) <= 3;
 
       for (const side of ['away', 'home']) {
         const team = game.teams[side].team;
@@ -2641,9 +2656,12 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
 
         if (isLast3Days) profile.games += 1;
         const boxTeam = boxscore.teams?.[side];
-        for (const personId of boxTeam?.pitchers || []) {
+        const pitcherOrder = Array.isArray(boxTeam?.pitchers) ? boxTeam.pitchers : [];
+        for (let idx = 0; idx < pitcherOrder.length; idx += 1) {
+          const personId = pitcherOrder[idx];
           const player = boxTeam.players?.[`ID${personId}`];
           const stats = player?.stats?.pitching || {};
+          const seasonPitch = player?.seasonStats?.pitching || {};
           if (toNumber(stats.gamesStarted, 0) > 0) continue;
 
           const outs = Math.round(parseInnings(stats.inningsPitched) * 3);
@@ -2654,6 +2672,34 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
           profile.qualityStrikeouts14d += toNumber(stats.strikeOuts, 0);
           profile.qualityHomeRuns14d += toNumber(stats.homeRuns, 0);
 
+          const key = String(personId);
+          if (!profile.relieverUsage.has(key)) {
+            profile.relieverUsage.set(key, {
+              dates3d: new Set(),
+              pitches3d: 0,
+              pitchesYesterday: 0,
+              pitchedYesterday: false,
+              pitchedTwoDaysAgo: false,
+              maxSinglePitches: 0,
+              highLeverage: false,
+              closerRole: false
+            });
+          }
+          const usage = profile.relieverUsage.get(key);
+          const isCloser =
+            toNumber(stats.saves, 0) > 0 ||
+            toNumber(stats.blownSaves, 0) > 0 ||
+            toNumber(seasonPitch.saves, 0) >= 3;
+          const isLateInningArm = idx >= Math.max(1, pitcherOrder.length - 2);
+          const isHighLeverage =
+            isCloser ||
+            toNumber(stats.holds, 0) > 0 ||
+            toNumber(stats.saveOpportunities, 0) > 0 ||
+            toNumber(seasonPitch.holds, 0) >= 4 ||
+            (isLateInningArm && isCloseGame);
+          if (isCloser) usage.closerRole = true;
+          if (isHighLeverage) usage.highLeverage = true;
+
           if (isLast3Days) {
             const pitches = toNumber(stats.numberOfPitches, 0);
             profile.bullpenPitches += pitches;
@@ -2661,9 +2707,18 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
             profile.relieverAppearances += 1;
             if (pitches >= 25) profile.highPitchRelievers += 1;
 
-            const key = String(personId);
             if (!profile.relieverDates.has(key)) profile.relieverDates.set(key, new Set());
             profile.relieverDates.get(key).add(gameDate || game.gameDate);
+
+            usage.dates3d.add(gameDate || game.gameDate);
+            usage.pitches3d += pitches;
+            if (pitches > usage.maxSinglePitches) usage.maxSinglePitches = pitches;
+            if (dayDiff === 1) {
+              usage.pitchedYesterday = true;
+              usage.pitchesYesterday += pitches;
+            } else if (dayDiff === 2) {
+              usage.pitchedTwoDaysAgo = true;
+            }
           }
         }
       }
@@ -2679,14 +2734,87 @@ async function fetchBullpenProfiles(teamIds, dateYmd) {
   return profiles;
 }
 
+function summarizeBullpenLeverage(relieverUsage) {
+  if (!relieverUsage) {
+    return {
+      highLeverageRelieversTracked: null,
+      highLeverageUnavailable: null,
+      highLeverageTaxed: null,
+      closerUnavailable: null,
+      leverageFatigueScore: null
+    };
+  }
+  const entries =
+    relieverUsage instanceof Map
+      ? [...relieverUsage.values()]
+      : Array.isArray(relieverUsage)
+        ? relieverUsage
+        : Object.values(relieverUsage);
+
+  let tracked = 0;
+  let unavailable = 0;
+  let taxed = 0;
+  let closerUnavailable = false;
+
+  for (const u of entries) {
+    if (!u || typeof u !== 'object') continue;
+    const isHL = Boolean(u.highLeverage || u.closerRole);
+    if (!isHL) continue;
+    tracked += 1;
+    const daysCount =
+      u.dates3d instanceof Set
+        ? u.dates3d.size
+        : Array.isArray(u.dates3d)
+          ? u.dates3d.length
+          : toNumber(u.daysPitched3d, 0);
+    const pitches3d = toNumber(u.pitches3d, 0);
+    const pitchesYesterday = toNumber(u.pitchesYesterday, 0);
+    const pitchedYesterday = Boolean(u.pitchedYesterday);
+    const pitchedTwoDaysAgo = Boolean(u.pitchedTwoDaysAgo);
+
+    const isUnavailable =
+      daysCount >= 3 ||
+      pitchesYesterday >= 35 ||
+      (pitchedYesterday && pitchedTwoDaysAgo) ||
+      (daysCount >= 2 && pitches3d >= 35);
+    const isTaxed =
+      isUnavailable || daysCount >= 2 || pitchesYesterday >= 25 || pitches3d >= 40;
+
+    if (isUnavailable) {
+      unavailable += 1;
+      if (u.closerRole) closerUnavailable = true;
+    }
+    if (isTaxed) {
+      taxed += 1;
+    }
+  }
+
+  const taxedOnly = Math.max(0, taxed - unavailable);
+  const leverageFatigueScore =
+    Math.round((unavailable * 0.55 + taxedOnly * 0.25 + (closerUnavailable ? 0.25 : 0)) * 1000) /
+    1000;
+
+  return {
+    highLeverageRelieversTracked: tracked,
+    highLeverageUnavailable: unavailable,
+    highLeverageTaxed: taxed,
+    closerUnavailable,
+    leverageFatigueScore
+  };
+}
+
 function finalizeBullpenProfile(profile) {
   const backToBackRelievers = [...(profile.relieverDates?.values?.() || [])].filter((dates) => dates.size >= 2).length;
   const innings = toNumber(profile.bullpenOuts, 0) / 3;
+  const leverage = summarizeBullpenLeverage(profile.relieverUsage || null);
+  const leverageBonus =
+    leverage.leverageFatigueScore !== null ? leverage.leverageFatigueScore * 0.25 : 0;
   const fatigueScore =
     toNumber(profile.bullpenPitches, 0) / 120 +
     backToBackRelievers * 0.2 +
     toNumber(profile.highPitchRelievers, 0) * 0.12 +
-    Math.max(0, toNumber(profile.games, 0) - 2) * 0.15;
+    Math.max(0, toNumber(profile.games, 0) - 2) * 0.15 +
+    leverageBonus;
   const level = fatigueScore >= 1.7 ? 'high' : fatigueScore >= 0.9 ? 'medium' : 'low';
 
   // Bayesian-shrunk 14-day bullpen run-prevention quality (prior = 12 IP).
@@ -2712,6 +2840,10 @@ function finalizeBullpenProfile(profile) {
 
   const qualityText =
     reliefEra !== null ? `, 14d RP ERA ${safeFixed(reliefEra)} WHIP ${safeFixed(reliefWhip)}` : '';
+  const leverageText =
+    leverage.highLeverageUnavailable > 0 || leverage.closerUnavailable
+      ? `, HL unavail ${leverage.highLeverageUnavailable}${leverage.closerUnavailable ? ' (closer)' : ''}`
+      : '';
 
   return {
     teamId: profile.teamId,
@@ -2726,9 +2858,14 @@ function finalizeBullpenProfile(profile) {
     relieverAppearances: toNumber(profile.relieverAppearances, 0),
     backToBackRelievers,
     highPitchRelievers: toNumber(profile.highPitchRelievers, 0),
+    highLeverageRelieversTracked: leverage.highLeverageRelieversTracked,
+    highLeverageUnavailable: leverage.highLeverageUnavailable,
+    highLeverageTaxed: leverage.highLeverageTaxed,
+    closerUnavailable: leverage.closerUnavailable,
+    leverageFatigueScore: leverage.leverageFatigueScore,
     fatigueScore,
     level,
-    line: `${toNumber(profile.games, 0)}G last 3d, ${Math.round(toNumber(profile.bullpenPitches, 0))} pitches, ${safeFixed(innings, 1)} IP, B2B relievers ${backToBackRelievers}, fatigue ${level}${qualityText}`
+    line: `${toNumber(profile.games, 0)}G last 3d, ${Math.round(toNumber(profile.bullpenPitches, 0))} pitches, ${safeFixed(innings, 1)} IP, B2B relievers ${backToBackRelievers}, fatigue ${level}${leverageText}${qualityText}`
   };
 }
 
@@ -4469,6 +4606,7 @@ export const __mlbTestInternals = {
   hitterLineupScore,
   extractLineupProfile,
   finalizeBullpenProfile,
+  summarizeBullpenLeverage,
   finalizeScheduleFatigueProfile,
   parseRosterAndTransactions,
   blendTeamStatsWithPrior,
@@ -4520,9 +4658,11 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
           ? result.size
           : result?.injuries instanceof Map
             ? result.injuries.size
-            : Array.isArray(result)
-              ? result.length
-              : null;
+            : result?.teams && typeof result.teams === 'object'
+              ? Object.keys(result.teams).length
+              : Array.isArray(result)
+                ? result.length
+                : null;
       collectorProvenance[label] = {
         source,
         fetchStart,
@@ -4546,18 +4686,20 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
     }
   };
   const requestedCutoff = aggregateDateRange(season, dateYmd)?.endDate || null;
+  const statcastCfg = loadConfig().statcast || { enabled: true, timeoutMs: 6000, cacheTtlMs: 10800000 };
   const [
     rawTeamStats,
     rollingTeamStats,
     rawStandings,
     bullpenProfiles,
     scheduleFatigueProfiles,
-    rosterAndInjuryBundle
+    rosterAndInjuryBundle,
+    statcastBundle
   ] = await Promise.all([
     profileFetch('teamStats', 'MLB StatsAPI byDateRange+byDateRangeAdvanced', () => fetchTeamStats(season, dateYmd)),
     profileFetch('rollingTeamStats', 'MLB StatsAPI byDateRange', () => fetchRollingTeamStats(season, dateYmd)),
     profileFetch('standings', 'MLB StatsAPI standings', () => fetchStandings(season, dateYmd)),
-    profileFetch('bullpenProfiles', 'MLB StatsAPI schedule+boxscore (14d quality + 3d fatigue)', () =>
+    profileFetch('bullpenProfiles', 'MLB StatsAPI schedule+boxscore (14d quality + 3d fatigue + leverage)', () =>
       fetchBullpenProfiles(teamIds, dateYmd)
     ),
     profileFetch('scheduleFatigueProfiles', 'MLB StatsAPI schedule', () =>
@@ -4568,7 +4710,19 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       'MLB StatsAPI 40Man roster + offseason/in-season transactions',
       () => fetchRosterAndInjuryProfiles(teamIds, dateYmd, season),
       () => ({ injuries: new Map(), rosters: new Map() })
-    )
+    ),
+    statcastCfg.enabled
+      ? profileFetch(
+          'statcast',
+          'Baseball Savant CSV leaderboards (team xwOBA/Barrel% + pitcher xERA)',
+          () =>
+            fetchLiveStatcastBundle(season, {
+              timeoutMs: statcastCfg.timeoutMs,
+              cacheTtlMs: statcastCfg.cacheTtlMs
+            }),
+          () => ({ teams: {}, pitchers: {} })
+        )
+      : Promise.resolve({ teams: {}, pitchers: {} })
   ]);
 
   const injuryProfiles = rosterAndInjuryBundle?.injuries || new Map();
@@ -4769,6 +4923,12 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       away: rosterProfiles.get(awayTeamId) || null,
       home: rosterProfiles.get(homeTeamId) || null
     };
+    const gameStatcast = sliceGameStatcast(statcastBundle, {
+      awayTeamId,
+      homeTeamId,
+      awayPitcherId: game.teams.away.probablePitcher?.id ?? null,
+      homePitcherId: game.teams.home.probablePitcher?.id ?? null
+    });
     // Freeze the raw core inputs so this live prediction can be recomputed by
     // snapshot replay (not just projected). Plain JSON; Maps serialized.
     prediction.coreInputs = buildCoreInputsSnapshot({
@@ -4787,7 +4947,8 @@ export async function getMlbPredictions(dateYmd = dateInTimezone('Asia/Jakarta')
       modelMemory,
       rollingTeamStats,
       evolutionControls: loadEvolutionControls(),
-      parkFactorBaselines: PARK_FACTOR_BASELINES
+      parkFactorBaselines: PARK_FACTOR_BASELINES,
+      statcast: gameStatcast
     });
     prediction.predictionTimestampUtc = predictionTimestampUtc;
     prediction.asOfUtc = predictionTimestampUtc;
